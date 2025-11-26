@@ -140,7 +140,8 @@ with tab1:
         weight = st.slider("Peso (kg)", 45.0, 100.0, 70.0, 0.5)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 15.0, 0.5) / 100.0
         
-        sex_map = {s.label: s for s in Sex}
+        # CORREZIONE QUI: Usiamo s.value invece di s.label per Sex
+        sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
         # --- NUOVA FUNZIONALITÀ DIGIUNO ---
