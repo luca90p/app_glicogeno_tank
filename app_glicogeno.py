@@ -11,11 +11,12 @@ class Sex(Enum):
     FEMALE = "Donna"
 
 class TrainingStatus(Enum):
-    SEDENTARY = (13.0, "Sedentario / Low Carb")
-    RECREATIONAL = (18.0, "Attivo / Amatore")
-    ENDURANCE_TRAINED = (22.0, "Allenato (Endurance)")
-    ELITE_OPTIMIZED = (25.0, "Elite / Pro")
-    CARBO_LOADED = (32.0, "Carico Carboidrati (Supercompensazione)")
+    # Rimosso CARBO_LOADED come richiesto
+    SEDENTARY = (13.0, "Sedentario / Principiante")
+    RECREATIONAL = (16.0, "Attivo / Amatore")
+    TRAINED = (19.0, "Allenato (Intermedio)")
+    ADVANCED = (22.0, "Avanzato / Competitivo")
+    ELITE = (25.0, "Elite / Pro")
 
     def __init__(self, val, label):
         self.val = val
@@ -37,7 +38,7 @@ class Subject:
     weight_kg: float
     body_fat_pct: float
     sex: Sex
-    status: TrainingStatus
+    glycogen_conc_g_kg: float # Ora passiamo il valore calcolato (da Status o VO2max)
     sport: SportType
     liver_glycogen_g: float = 100.0
 
@@ -48,17 +49,37 @@ class Subject:
     @property
     def muscle_fraction(self) -> float:
         base = 0.50 if self.sex == Sex.MALE else 0.42
-        if self.status in [TrainingStatus.ELITE_OPTIMIZED, TrainingStatus.CARBO_LOADED]:
+        # Bonus muscolare per atleti molto ottimizzati (>22 g/kg)
+        if self.glycogen_conc_g_kg >= 22.0:
             base += 0.03
         return base
 
 # --- 2. MOTORE DI CALCOLO ---
 
+def get_concentration_from_vo2max(vo2_max):
+    """
+    Stima la concentrazione di glicogeno (g/kg umido) in base al VO2max.
+    Modello lineare interpolato su dati di biopsia:
+    VO2 30 -> 13 g/kg
+    VO2 80 -> 25 g/kg
+    """
+    # Formula: y = mx + q
+    # Slope (m) = (25 - 13) / (80 - 30) = 12 / 50 = 0.24
+    conc = 13.0 + (vo2_max - 30.0) * 0.24
+    
+    # Limiti fisiologici
+    if conc < 12.0: conc = 12.0
+    if conc > 26.0: conc = 26.0 # Limite fisiologico umano standard
+    
+    return conc
+
 def calculate_tank(subject: Subject):
     lbm = subject.lean_body_mass
     total_muscle = lbm * subject.muscle_fraction
     active_muscle = total_muscle * subject.sport.val
-    muscle_glycogen = active_muscle * subject.status.val
+    
+    # Uso diretto della concentrazione passata nel Subject
+    muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg
     
     total_glycogen = muscle_glycogen + subject.liver_glycogen_g
     
@@ -66,70 +87,76 @@ def calculate_tank(subject: Subject):
         "active_muscle_kg": active_muscle,
         "total_glycogen_g": total_glycogen,
         "muscle_glycogen_g": muscle_glycogen,
-        "liver_glycogen_g": subject.liver_glycogen_g
+        "liver_glycogen_g": subject.liver_glycogen_g,
+        "concentration_used": subject.glycogen_conc_g_kg
     }
 
-def simulate_activity(tank_g, ftp_watts, avg_power, duration_min, carb_intake_g_h):
-    """
-    Simula il consumo di glicogeno minuto per minuto.
-    """
+def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct):
     results = []
     current_glycogen = tank_g
     
-    # Intensità relativa (Intensity Factor)
     intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
+    crossover_if = crossover_pct / 100.0
     
-    # 1. Stima Calorie Totali al minuto (Metodo Gross Efficiency ~22%)
-    # 1 Watt = 1 J/s. 
-    # Kcal/min = (Watts * 60) / 4184 / Efficiency
     kcal_per_min_total = (avg_power * 60) / 4184 / 0.22
     
-    # 2. Stima Mix Energetico (% Carboidrati vs Grassi)
-    if intensity_factor <= 0.3:
+    slope_k = 12.0
+    
+    if intensity_factor <= 0.2:
         cho_ratio = 0.10
-    elif intensity_factor >= 1.1:
-        cho_ratio = 1.0
     else:
-        # Interpolazione quadratica tra 0.3 (10%) e 1.0 (100%)
-        t = (intensity_factor - 0.3) / 0.7 
-        cho_ratio = 0.10 + (0.90 * (t ** 2)) 
+        cho_ratio = 1 / (1 + np.exp(-slope_k * (intensity_factor - crossover_if)))
+        if cho_ratio < 0.10: cho_ratio = 0.10
+        if cho_ratio > 1.0: cho_ratio = 1.0
+        if intensity_factor > 1.05:
+            cho_ratio = 1.0
 
-    kcal_from_cho_per_min = kcal_per_min_total * cho_ratio
+    fat_ratio = 1.0 - cho_ratio
+    kcal_cho = kcal_per_min_total * cho_ratio
+    kcal_fat = kcal_per_min_total * fat_ratio
     
-    # 3. Conversione Kcal -> Grammi Glicogeno (4.1 kcal/g)
-    glycogen_burned_per_min = kcal_from_cho_per_min / 4.1
-    
-    # 4. Reintegro (Carb Intake)
+    glycogen_burned_per_min = kcal_cho / 4.1
+    fat_burned_per_min = kcal_fat / 9.0
     glycogen_intake_per_min = carb_intake_g_h / 60.0
 
-    # SIMULAZIONE LOOP
+    total_fat_burned_g = 0.0
+    
     for t in range(int(duration_min) + 1):
         if t > 0:
             net_change = glycogen_intake_per_min - glycogen_burned_per_min
             current_glycogen += net_change
+            total_fat_burned_g += fat_burned_per_min
         
-        # Clamp a 0
         if current_glycogen < 0:
             current_glycogen = 0
             
         results.append({
             "Time (min)": t,
             "Glycogen (g)": current_glycogen,
-            "Burned (g/h)": glycogen_burned_per_min * 60,
-            "Cho %": cho_ratio * 100
+            "Fat Burned (cumul)": total_fat_burned_g,
+            "Cho %": cho_ratio * 100,
+            "Fat %": fat_ratio * 100
         })
+        
+    stats = {
+        "final_glycogen": current_glycogen,
+        "cho_rate_g_h": glycogen_burned_per_min * 60,
+        "fat_rate_g_h": fat_burned_per_min * 60,
+        "kcal_total_h": kcal_per_min_total * 60,
+        "cho_pct": cho_ratio * 100,
+        "total_fat_g": total_fat_burned_g
+    }
 
-    return pd.DataFrame(results), cho_ratio * 100, kcal_per_min_total * 60
+    return pd.DataFrame(results), stats
 
 # --- 3. INTERFACCIA UTENTE ---
 
 st.set_page_config(page_title="Glycogen Simulator", page_icon="⚡", layout="wide")
 
 st.title("⚡ Glicogeno: Tank & Burn Simulator")
-st.markdown("Stima il serbatoio iniziale e simula quanto dura durante lo sforzo fisico.")
+st.markdown("Stima il serbatoio iniziale e simula il consumo metabolico.")
 
-# Divisione in Tab
-tab1, tab2 = st.tabs(["1️⃣ Il Serbatoio (Tank)", "2️⃣ Simulazione Gara (Burn)"])
+tab1, tab2 = st.tabs(["1️⃣ Il Serbatoio (Tank)", "2️⃣ Simulazione Metabolica (Burn)"])
 
 # --- TAB 1: CALCOLO SERBATOIO ---
 with tab1:
@@ -140,46 +167,71 @@ with tab1:
         weight = st.slider("Peso (kg)", 45.0, 100.0, 70.0, 0.5)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 15.0, 0.5) / 100.0
         
-        # CORREZIONE QUI: Usiamo s.value invece di s.label per Sex
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
-        # --- NUOVA FUNZIONALITÀ DIGIUNO ---
         is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", 
-                                help="Simula l'allenamento al risveglio senza colazione. Le scorte epatiche sono ridotte.")
+                                help="Simula l'allenamento al risveglio senza colazione.")
         
-        status_map = {s.label: s for s in TrainingStatus}
-        s_status = status_map[st.selectbox("Livello Fitness", list(status_map.keys()), index=2)]
+        st.markdown("---")
+        st.write("📊 **Metodo Stima Glicogeno Muscolare**")
         
+        estimation_method = st.radio(
+            "Scegli il metodo:",
+            ["Per Livello (Qualitativo)", "Per VO2max (Quantitativo)"],
+            label_visibility="collapsed"
+        )
+        
+        if estimation_method == "Per Livello (Qualitativo)":
+            status_map = {s.label: s for s in TrainingStatus}
+            s_status = status_map[st.selectbox("Livello Fitness", list(status_map.keys()), index=2)]
+            calculated_conc = s_status.val
+        else:
+            vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1, 
+                                  help="Valore di massimo consumo di ossigeno. Più è alto, maggiori sono le scorte.")
+            calculated_conc = get_concentration_from_vo2max(vo2_input)
+            
+            # Feedback visivo del livello corrispondente
+            if calculated_conc < 15: lvl = "Sedentario"
+            elif calculated_conc < 18: lvl = "Amatore"
+            elif calculated_conc < 22: lvl = "Allenato"
+            elif calculated_conc < 24: lvl = "Avanzato"
+            else: lvl = "Elite"
+            st.caption(f"Densità stimata: **{calculated_conc:.1f} g/kg** ({lvl})")
+
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Sport", list(sport_map.keys()))]
 
-        # Logica Digiuno: Il fegato scende da ~100g a ~40g
         liver_val = 40.0 if is_fasted else 100.0
-
-        # Creazione Oggetto Subject
-        subject = Subject(weight, bf, s_sex, s_status, s_sport, liver_glycogen_g=liver_val)
-        tank_data = calculate_tank(subject)
         
-        # Salva nel session state per passare al Tab 2
+        # Subject ora prende la concentrazione calcolata, non l'Enum
+        subject = Subject(
+            weight_kg=weight, 
+            body_fat_pct=bf, 
+            sex=s_sex, 
+            glycogen_conc_g_kg=calculated_conc, # NUOVO
+            sport=s_sport, 
+            liver_glycogen_g=liver_val
+        )
+        
+        tank_data = calculate_tank(subject)
         st.session_state['tank_g'] = tank_data['total_glycogen_g']
 
     with col_res:
         st.subheader("Capacità di Stoccaggio")
         
-        # Feedback visivo per il digiuno
         if is_fasted:
-            st.warning("⚠️ **Stato: DIGIUNO** - Il fegato è parzialmente scarico (-60g). Hai meno margine contro l'ipoglicemia.")
+            st.warning("⚠️ Stato: DIGIUNO (-60g fegato)")
         else:
-            st.success("✅ **Stato: FED (Nutrito)** - Scorte epatiche piene (100g).")
+            st.success("✅ Stato: FED (Nutrito)")
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Glicogeno Totale", f"{int(tank_data['total_glycogen_g'])} g", 
-                  delta="-60g" if is_fasted else "Pieno", delta_color="inverse" if is_fasted else "normal")
-        c2.metric("Kcal Disponibili", f"{int(tank_data['total_glycogen_g'] * 4.1)} kcal")
+                  delta="-60g" if is_fasted else None, delta_color="inverse")
+        c2.metric("Concentrazione", f"{tank_data['concentration_used']:.1f} g/kg", 
+                  help="Densità di glicogeno nel tessuto muscolare")
         c3.metric("Muscoli Attivi", f"{tank_data['active_muscle_kg']:.1f} kg")
         
-        # Grafico a barre orizzontali
         chart_data = pd.DataFrame({
             "Fonte": ["Fegato", "Muscoli Attivi"],
             "Grammi": [tank_data['liver_glycogen_g'], tank_data['muscle_glycogen_g']]
@@ -195,39 +247,60 @@ with tab2:
     else:
         start_tank = st.session_state['tank_g']
         
-        st.subheader("Parametri Sforzo")
+        col_param, col_meta = st.columns([1, 1])
         
-        sc1, sc2, sc3, sc4 = st.columns(4)
-        ftp = sc1.number_input("Tua FTP (Watt)", 100, 500, 250, step=5, help="La potenza che puoi tenere per 1 ora (Soglia)")
-        avg_w = sc2.number_input("Potenza Media (Watt)", 50, 500, 200, step=5, help="Potenza media prevista per l'attività")
-        duration = sc3.slider("Durata (min)", 30, 300, 120, step=10)
-        carb_intake = sc4.slider("Integrazione CHO (g/h)", 0, 120, 30, step=10, help="Quanti carboidrati mangi all'ora (gel, borracce)")
-        
-        # Esegui simulazione
-        df_sim, final_cho_pct, kcal_h_total = simulate_activity(start_tank, ftp, avg_w, duration, carb_intake)
-        
-        # Calcolo metriche finali
-        final_glycogen = df_sim.iloc[-1]["Glycogen (g)"]
-        
-        # Layout Risultati Simulazione
-        st.markdown("---")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Glicogeno Finale", f"{int(final_glycogen)} g", delta=f"{int(final_glycogen - start_tank)} g")
-        m2.metric("Consumo CHO Stimato", f"{int(df_sim.iloc[-1]['Burned (g/h)'])} g/h")
-        m3.metric("Dispendio Totale", f"{int(kcal_h_total)} kcal/h")
-        m4.metric("Intensità (IF)", f"{(avg_w/ftp)*100:.0f}% ({int(final_cho_pct)}% CHO)")
+        with col_param:
+            st.subheader("🛠️ Parametri Sforzo")
+            ftp = st.number_input("Tua FTP (Watt)", 100, 600, 250, step=5)
+            avg_w = st.number_input("Potenza Media Gara (Watt)", 50, 600, 200, step=5)
+            duration = st.slider("Durata (min)", 30, 420, 120, step=10)
+            carb_intake = st.slider("Integrazione (g/h)", 0, 120, 30, step=10)
+            
+        with col_meta:
+            st.subheader("🧬 Profilo Metabolico")
+            
+            crossover = st.slider(
+                "Soglia Aerobica / Crossover (% FTP)", 
+                min_value=50, max_value=85, value=70, step=5,
+                help="Basso (50-60%): Atleta esplosivo/principiante. Alto (75-80%): Atleta Endurance/Diesel."
+            )
+            
+            if crossover > 75:
+                st.caption("🏃 **Motore Diesel:** Brucia grassi a ritmi alti.")
+            elif crossover < 60:
+                st.caption("🏎️ **Motore Turbo:** Brucia zuccheri presto.")
+            else:
+                st.caption("⚖️ **Bilanciato:** Profilo standard.")
 
-        # Grafico Area
-        st.subheader("Curva di Deplezione")
+        df_sim, stats = simulate_metabolism(start_tank, ftp, avg_w, duration, carb_intake, crossover)
         
-        danger_zone = 150 
+        st.markdown("---")
+        st.subheader("🔥 Analisi Consumi")
         
-        st.area_chart(df_sim.set_index("Time (min)")["Glycogen (g)"], color="#FF4B4B")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Glicogeno Finale", f"{int(stats['final_glycogen'])} g", 
+                  delta=f"{int(stats['final_glycogen'] - start_tank)} g")
         
-        # Analisi finale
-        if final_glycogen <= 0:
-            st.error(f"🚨 **BONK (Crisi di Fame)!** Hai esaurito il glicogeno prima della fine. Riduci la potenza o mangia di più.")
-        elif final_glycogen < danger_zone:
-            st.warning(f"⚠️ **Attenzione:** Hai finito con riserve scarse (<{danger_zone}g). La performance potrebbe calare negli ultimi minuti.")
+        m2.metric("Mix Energetico", f"{int(stats['cho_pct'])}% CHO", 
+                  delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
+        
+        m3.metric("Consumo Zuccheri", f"{int(stats['cho_rate_g_h'])} g/h", help="Rateo ossidazione CHO")
+        m4.metric("Consumo Grassi", f"{int(stats['fat_rate_g_h'])} g/h", help="Rateo ossidazione FAT")
+
+        g1, g2 = st.columns([2, 1])
+        
+        with g1:
+            st.caption("📉 Svuotamento Serbatoio Glicogeno")
+            st.area_chart(df_sim.set_index("Time (min)")["Glycogen (g)"], color="#FF4B4B")
+            
+        with g2:
+            st.caption("🥩 Grassi Totali Bruciati (g)")
+            st.line_chart(df_sim.set_index("Time (min)")["Fat Burned (cumul)"], color="#FFA500")
+
+        final_g = stats['final_glycogen']
+        if final_g <= 0:
+            st.error(f"🚨 **BONK!** Glicogeno esaurito al minuto {df_sim[df_sim['Glycogen (g)'] <= 0].index[0]}.")
+        elif final_g < 150:
+            st.warning("⚠️ **Riserva BASSA.**")
         else:
-            st.success(f"✅ **Ottimo:** Hai gestito bene le energie. Ti rimangono {int(final_glycogen)}g di scorta.")
+            st.success("✅ **Riserva OK.**")
