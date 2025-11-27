@@ -74,7 +74,7 @@ class MenstrualPhase(Enum):
 @dataclass
 class Subject:
     weight_kg: float
-    height_cm: float # Aggiunto per modello Podlogar
+    height_cm: float 
     body_fat_pct: float
     sex: Sex
     glycogen_conc_g_kg: float
@@ -118,14 +118,13 @@ def calculate_tank(subject: Subject):
     creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
     base_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg
     
-    # Max Capacity (Theoretical High)
+    # Max Capacity
     max_total_capacity = (base_muscle_glycogen * 1.25 * creatine_multiplier) + 100.0
     
     # Actual Availability
     final_filling_factor = subject.filling_factor * subject.menstrual_phase.factor
     current_muscle_glycogen = base_muscle_glycogen * creatine_multiplier * final_filling_factor
     
-    # Cap fisiologico
     max_physiological_limit = active_muscle * 35.0
     if current_muscle_glycogen > max_physiological_limit:
         current_muscle_glycogen = max_physiological_limit
@@ -162,91 +161,88 @@ def calculate_tank(subject: Subject):
     }
 
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
-    """
-    Stima il tasso massimo di ossidazione esogena (g/min) basandosi su 
-    evidenze Podlogar et al. (2025) e Ijaz et al. (2024).
-    Correlazione positiva con Dimensioni Corporee (Altezza) e Potenza Assoluta.
-    """
-    # Base rate (sedentario piccolo)
-    base_rate = 0.8 # g/min (~48 g/h)
-    
-    # Fattore Altezza (Proxy per superficie assorbimento intestinale/taglia)
-    # Ref: Podlogar trova correlazione Height -> Ox Rate
+    base_rate = 0.8 
     if height_cm > 170:
         base_rate += (height_cm - 170) * 0.015
-        
-    # Fattore Potenza Assoluta (Richiesta metabolica e flusso ematico splancnico gestibile)
     if ftp_watts > 200:
         base_rate += (ftp_watts - 200) * 0.0015
-        
-    # Cap fisiologico umano (senza training intestinale estremo)
-    # 1.5 g/min = 90 g/h è considerato il limite funzionale standard per mix Gluc/Fruc
-    # Alcuni elite arrivano a 120 g/h (2.0), ma è raro.
     limit = 1.6 
-    
     return min(base_rate, limit)
+
+def calculate_rer_polynomial(intensity_factor):
+    """
+    Calcola il RER (QR) basandosi sulla formula polinomiale di 6° grado fornita.
+    Formula: QR = -0.000000149*IF^6 + 141.538...*IF^5 ...
+    """
+    if_val = intensity_factor
+    
+    # Coefficienti della formula
+    rer = (
+        -0.000000149 * (if_val**6) + 
+        141.538462237 * (if_val**5) - 
+        565.128206259 * (if_val**4) + 
+        890.333333976 * (if_val**3) - 
+        691.67948706 * (if_val**2) + 
+        265.460857558 * if_val - 
+        39.525121144
+    )
+    
+    # Clamp fisiologico per evitare artefatti matematici agli estremi della curva polinomiale
+    # RER a riposo ~0.70-0.75. RER Max sotto sforzo ~1.15 (anaerobico).
+    # Per il calcolo dei substrati (stechiometria Frayn), RER > 1.0 viene trattato come 100% CHO.
+    return max(0.70, min(1.15, rer))
 
 def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct, height_cm):
     tank_g = subject_data['actual_available_g']
     results = []
     current_glycogen = tank_g
     
-    intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
-    crossover_if = crossover_pct / 100.0
+    # Calcolo IF Base
+    base_intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
     
-    # Efficienza meccanica lorda standard (Gross Efficiency) ~22%
+    # Adattamento Individuale (Crossover Slider)
+    # La formula polinomiale è fissa. Per rispettare il profilo metabolico dell'atleta (Diesel vs Turbo),
+    # spostiamo l'IF effettivo percepito dalla formula.
+    # Standard Crossover (RER 0.85~0.90) avviene solitamente intorno a IF 0.75-0.80.
+    # Se l'atleta ha crossover a 60% (Turbo), per lui IF 0.60 è faticoso come 0.75.
+    standard_crossover_ref = 75.0 # % FTP di riferimento medio
+    shift_factor = (standard_crossover_ref - crossover_pct) / 100.0
+    effective_if_for_rer = base_intensity_factor + shift_factor
+    
+    # Limiti di sicurezza per il calcolo
+    if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
+    
     kcal_per_min_total = (avg_power * 60) / 4184 / 0.22
     
-    # --- LOGICA OSSIDAZIONE ESOGENA (AGGIORNATA FASE 3) ---
-    # 1. Calcolo limite fisiologico dell'atleta
-    max_exo_rate_g_min = estimate_max_exogenous_oxidation(height_cm, subject_data['active_muscle_kg']*2.2, ftp_watts) # approx weight uses
-    
-    # 2. Intake vs Absorbed
+    # Ossidazione Esogena
+    max_exo_rate_g_min = estimate_max_exogenous_oxidation(height_cm, subject_data['active_muscle_kg']*2.2, ftp_watts)
     intake_g_min = carb_intake_g_h / 60.0
-    
-    # Efficienza di ossidazione (Podlogar 2025): ~80% dell'ingestione viene ossidata (se sotto il limite)
     oxidation_efficiency = 0.80 
-    
-    # Se l'atleta mangia più del suo limite massimo assorbibile, l'ossidazione non sale
-    # Anzi, "over-dosing" (King 2018) non aiuta a risparmiare glicogeno muscolare.
     useful_exogenous_g_min = min(intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
-    
-    # Accumulo intestinale (per stima distress GI)
     gut_accumulation_g_h = (intake_g_min - useful_exogenous_g_min) * 60
     
-    # --- LOGICA MIX ENERGETICO ---
-    slope_k = 12.0
+    # --- NUOVO CALCOLO BASATO SU FORMULA RER ---
+    rer = calculate_rer_polynomial(effective_if_for_rer)
     
-    if intensity_factor <= 0.2:
-        cho_ratio = 0.10
-    else:
-        # Sigmoide per transizione metabolica
-        cho_ratio = 1 / (1 + np.exp(-slope_k * (intensity_factor - crossover_if)))
-        if cho_ratio < 0.10: cho_ratio = 0.10
-        if cho_ratio > 1.0: cho_ratio = 1.0
-        if intensity_factor > 1.05: # Sopra FTP
-            cho_ratio = 1.0
-
+    # Calcolo %CHO da RER (Tabella Zuntz: RER 0.7=0% CHO, RER 1.0=100% CHO)
+    # Formula inversa lineare approssimata: %CHO = (RER - 0.70) / 0.30
+    cho_ratio = (rer - 0.70) / 0.30
+    
+    # Clamp ratio
+    if cho_ratio < 0: cho_ratio = 0.0
+    if cho_ratio > 1.0: cho_ratio = 1.0
+    
     fat_ratio = 1.0 - cho_ratio
     
-    # Calcolo calorie richieste da CHO
+    # Calcoli consumi
     kcal_cho_demand = kcal_per_min_total * cho_ratio
-    
-    # Soddisfazione richiesta: Esogeno prima, poi Endogeno
-    # 3.75 kcal/g per CHO esogeno (in soluzione, approx), 4.1 per glicogeno
     kcal_from_exo = useful_exogenous_g_min * 3.75
     
-    # Se l'esogeno copre tutto (raro ad alta intensità), non usiamo glicogeno?
-    # No, fisiologicamente c'è sempre un minimo consumo di glicogeno (King 2018)
-    # "Sparing" non è mai 100%. Imponiamo un floor di utilizzo glicogeno se l'intensità è alta.
     min_glycogen_obligatory = 0.0
-    if intensity_factor > 0.6:
-        min_glycogen_obligatory = (kcal_cho_demand * 0.20) / 4.1 # Almeno il 20% della richiesta viene da scorte interne sopra il 60% FTP
+    if base_intensity_factor > 0.6:
+        min_glycogen_obligatory = (kcal_cho_demand * 0.20) / 4.1 
         
     remaining_kcal_demand = kcal_cho_demand - kcal_from_exo
-    
-    # Se l'esogeno copre "troppo", riduciamo l'uso dell'esogeno per rispettare l'obbligatorio endogeno
-    # (Semplificazione modellistica per evitare consumo 0 di glicogeno a 200W mangiando 120g/h)
     
     glycogen_burned_per_min = remaining_kcal_demand / 4.1
     if glycogen_burned_per_min < min_glycogen_obligatory:
@@ -268,18 +264,21 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
             "Time (min)": t,
             "Glicogeno Residuo (g)": current_glycogen,
             "Lipidi Ossidati (g)": total_fat_burned_g,
-            "CHO %": cho_ratio * 100
+            "CHO %": cho_ratio * 100,
+            "RER": rer
         })
         
     stats = {
         "final_glycogen": current_glycogen,
-        "cho_rate_g_h": (glycogen_burned_per_min * 60) + (useful_exogenous_g_min * 60), # Totale ossidato
+        "cho_rate_g_h": (glycogen_burned_per_min * 60) + (useful_exogenous_g_min * 60),
         "endogenous_burn_rate": glycogen_burned_per_min * 60,
         "fat_rate_g_h": fat_burned_per_min * 60,
         "kcal_total_h": kcal_per_min_total * 60,
         "cho_pct": cho_ratio * 100,
         "gut_accumulation": gut_accumulation_g_h,
-        "max_exo_capacity": max_exo_rate_g_min * 60
+        "max_exo_capacity": max_exo_rate_g_min * 60,
+        "intensity_factor": base_intensity_factor,
+        "avg_rer": rer
     }
 
     return pd.DataFrame(results), stats
@@ -300,7 +299,6 @@ with tab1:
     with col_in:
         st.subheader("Parametri Antropometrici")
         weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 70.0, 0.5)
-        # NUOVO INPUT ALTEZZA (per Podlogar model)
         height = st.slider("Altezza (cm)", 150, 210, 175, 1)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 15.0, 0.5) / 100.0
         
@@ -380,7 +378,7 @@ with tab1:
         
         subject = Subject(
             weight_kg=weight, 
-            height_cm=height, # Passiamo altezza
+            height_cm=height,
             body_fat_pct=bf, sex=s_sex, 
             glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
             liver_glycogen_g=liver_val,
@@ -392,7 +390,7 @@ with tab1:
         
         tank_data = calculate_tank(subject)
         st.session_state['tank_g'] = tank_data['actual_available_g']
-        st.session_state['subject_struct'] = subject # Salviamo per usarlo nel tab 2
+        st.session_state['subject_struct'] = subject 
 
     with col_res:
         st.subheader("Bilancio Riserve Energetiche")
@@ -454,12 +452,12 @@ with tab2:
             
         with col_meta:
             st.subheader("Profilo Metabolico")
-            crossover = st.slider("Crossover Point (Soglia Aerobica) [% FTP]", 50, 85, 70, 5)
+            crossover = st.slider("Crossover Point (Soglia Aerobica) [% FTP]", 50, 85, 70, 5,
+                                  help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
             if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
             elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
             else: st.caption("Profilo: Bilanciato / Misto")
 
-        # Recupero dati altezza dal session state se disponibile, altrimenti default
         subj = st.session_state.get('subject_struct', None)
         h_cm = subj.height_cm if subj else 175
         
@@ -468,30 +466,47 @@ with tab2:
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
         
-        # METRICHE PRINCIPALI
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Glicogeno Residuo", f"{int(stats['final_glycogen'])} g", 
+        # NUOVI INDICATORI FISIOLOGICI
+        c_if, c_rer, c_mix, c_res = st.columns(4)
+        
+        # IF (Intensity Factor)
+        if_val = stats['intensity_factor']
+        if_color = "normal"
+        if if_val > 1.0: if_color = "inverse" # Sopra soglia
+        c_if.metric("Intensity Factor (IF)", f"{if_val:.2f}", delta="Sopra FTP" if if_val > 1.0 else None, delta_color=if_color,
+                    help="Rapporto tra Potenza Media e FTP. >1.0 indica sforzo anaerobico prevalente.")
+        
+        # RER (Respiratory Exchange Ratio)
+        rer_val = stats['avg_rer']
+        c_rer.metric("RER Stimato (RQ)", f"{rer_val:.2f}", 
+                     help="Quoziente Respiratorio Metabolico. 0.7=Grassi puri, 1.0=Carboidrati puri.")
+        
+        # Mix
+        c_mix.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO",
+                     delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
+        
+        # Residuo
+        c_res.metric("Glicogeno Residuo", f"{int(stats['final_glycogen'])} g", 
                   delta=f"{int(stats['final_glycogen'] - start_tank)} g")
+
+        st.markdown("---")
         
-        # Display del mix energetico
-        m2.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO")
-        
-        # Dettaglio consumi con distinzione Endo/Eso
-        m3.metric("Ossidazione CHO Totale", f"{int(stats['cho_rate_g_h'])} g/h",
+        # DETTAGLIO CONSUMI
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ossidazione CHO Totale", f"{int(stats['cho_rate_g_h'])} g/h",
                   help=f"Endogeno: {int(stats['endogenous_burn_rate'])} g/h | Esogeno utile: {int(stats['cho_rate_g_h'] - stats['endogenous_burn_rate'])} g/h")
         
-        m4.metric("Tasso Ossidazione Lipidi", f"{int(stats['fat_rate_g_h'])} g/h")
-
-        # ALERT GASTROINTESTINALE (Nuova Feature)
+        m2.metric("Tasso Ossidazione Lipidi", f"{int(stats['fat_rate_g_h'])} g/h")
+        
         gut_acc = stats['gut_accumulation']
         max_cap = stats['max_exo_capacity']
         
         if gut_acc > 30:
-            st.error(f"⚠️ **RISCHIO GI ALTO:** Stai ingerendo {carb_intake} g/h ma la tua capacità stimata è ~{int(max_cap)} g/h. Circa {int(gut_acc)} g/h si accumulano nell'intestino.")
+            m3.error(f"⚠️ Rischio GI Alto ({int(gut_acc)} g/h accumulo)")
         elif gut_acc > 10:
-            st.warning(f"⚠️ **Attenzione GI:** Ingestione leggermente superiore alla capacità di ossidazione stimata ({int(max_cap)} g/h).")
+            m3.warning(f"⚠️ Attenzione GI ({int(gut_acc)} g/h accumulo)")
         else:
-            st.success(f"✅ **Tolleranza GI:** L'ingestione è ben tollerata (Capacità stimata: {int(max_cap)} g/h).")
+            m3.success(f"✅ Tolleranza GI Ottimale")
 
         g1, g2 = st.columns([2, 1])
         with g1:
@@ -504,7 +519,7 @@ with tab2:
         final_g = stats['final_glycogen']
         if final_g <= 0:
             st.error(f"**DEPLETIONE TOTALE:** Esaurimento riserve (Bonk) stimato al minuto {df_sim[df_sim['Glicogeno Residuo (g)'] <= 0].index[0]}.")
-        elif final_g < 100: # Soglia critica abbassata leggermente per realismo
+        elif final_g < 100:
             st.warning("**RISERVA CRITICA:** Livelli di glicogeno < 100g. Rischio calo potenza (Fatigue).")
         else:
             st.success("**RISERVA ADEGUATA:** Completamento attività senza deplezione critica.")
