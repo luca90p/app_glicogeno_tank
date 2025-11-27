@@ -172,11 +172,10 @@ def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
 def calculate_rer_polynomial(intensity_factor):
     """
     Calcola il RER (QR) basandosi sulla formula polinomiale di 6° grado fornita.
-    Formula: QR = -0.000000149*IF^6 + 141.538...*IF^5 ...
+    Formula: QR = -0.000000149*IF^6 + ...
     """
     if_val = intensity_factor
     
-    # Coefficienti della formula
     rer = (
         -0.000000149 * (if_val**6) + 
         141.538462237 * (if_val**5) - 
@@ -187,9 +186,7 @@ def calculate_rer_polynomial(intensity_factor):
         39.525121144
     )
     
-    # Clamp fisiologico per evitare artefatti matematici agli estremi della curva polinomiale
-    # RER a riposo ~0.70-0.75. RER Max sotto sforzo ~1.15 (anaerobico).
-    # Per il calcolo dei substrati (stechiometria Frayn), RER > 1.0 viene trattato come 100% CHO.
+    # Clamp fisiologico RER
     return max(0.70, min(1.15, rer))
 
 def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct, height_cm, gross_efficiency):
@@ -208,9 +205,6 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
     
     # --- CALCOLO COSTO ENERGETICO CON EFFICIENZA VARIABILE ---
-    # 1 kcal = 4184 J
-    # Efficiency (es. 22%) significa che solo il 22% dell'energia metabolica diventa meccanica.
-    # Quindi: Kcal Totali = (Watt * 60) / 4184 / Efficiency
     kcal_per_min_total = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
     
     # Ossidazione Esogena
@@ -220,11 +214,13 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
     useful_exogenous_g_min = min(intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
     gut_accumulation_g_h = (intake_g_min - useful_exogenous_g_min) * 60
     
-    # --- NUOVO CALCOLO BASATO SU FORMULA RER ---
+    # --- CALCOLO RER (POLINOMIALE) ---
     rer = calculate_rer_polynomial(effective_if_for_rer)
     
-    # Calcolo %CHO da RER (Tabella Zuntz: RER 0.7=0% CHO, RER 1.0=100% CHO)
-    cho_ratio = (rer - 0.70) / 0.30
+    # --- CALCOLO %CHO (NUOVA FORMULA UTENTE) ---
+    # Formula: x = (QR - 0.7) * 3.45
+    # Se x > 1 -> %CHO = 1, Se x < 1 -> %CHO = x
+    cho_ratio = (rer - 0.70) * 3.45
     
     # Clamp ratio
     if cho_ratio < 0: cho_ratio = 0.0
