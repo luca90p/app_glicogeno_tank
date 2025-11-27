@@ -86,6 +86,9 @@ class Subject:
     # Parametri avanzati
     uses_creatine: bool = False
     menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
+    
+    # Biomarker
+    glucose_mg_dl: float = None # Dato opzionale
 
     @property
     def lean_body_mass(self) -> float:
@@ -119,14 +122,28 @@ def calculate_tank(subject: Subject):
     creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
     max_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg * creatine_multiplier
     
-    # 2. Riempimento Reale
+    # 2. Riempimento Reale (Muscolo)
     final_filling_factor = subject.filling_factor * subject.menstrual_phase.factor
     current_muscle_glycogen = max_muscle_glycogen * final_filling_factor
     
-    # Riserve Epatiche
-    current_liver_glycogen = subject.liver_glycogen_g
+    # 3. Riempimento Reale (Fegato) con Logica Biomarker (Glicemia)
+    liver_fill_factor = 1.0
+    liver_correction_note = None
+    
+    # A. Correzione base da dieta/filling
     if final_filling_factor <= 0.6: 
-        current_liver_glycogen *= 0.6 
+        liver_fill_factor = 0.6
+        
+    # B. Override da Biomarker (Glicemia)
+    if subject.glucose_mg_dl is not None:
+        if subject.glucose_mg_dl < 70:
+            liver_fill_factor = 0.2 # Ipoglicemia a digiuno = fegato vuoto
+            liver_correction_note = "Criticità Epatica (Glicemia < 70)"
+        elif subject.glucose_mg_dl < 85:
+            liver_fill_factor = min(liver_fill_factor, 0.5) # Riserve compromesse
+            liver_correction_note = "Riduzione Epatica (Glicemia 70-85)"
+    
+    current_liver_glycogen = subject.liver_glycogen_g * liver_fill_factor
         
     total_actual_glycogen = current_muscle_glycogen + current_liver_glycogen
     max_total_glycogen = max_muscle_glycogen + 100.0 
@@ -139,7 +156,8 @@ def calculate_tank(subject: Subject):
         "liver_glycogen_g": current_liver_glycogen,
         "concentration_used": subject.glycogen_conc_g_kg,
         "fill_pct": (total_actual_glycogen / max_total_glycogen) * 100 if max_total_glycogen > 0 else 0,
-        "creatine_bonus": subject.uses_creatine
+        "creatine_bonus": subject.uses_creatine,
+        "liver_note": liver_correction_note
     }
 
 def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct):
@@ -248,7 +266,8 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo)"):
+        # PARAMETRI AVANZATI (Include ora anche la Glicemia)
+        with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
             use_creatine = st.checkbox("Supplementazione Creatina", help="Aumento volume cellulare e capacità di stoccaggio stimata (+10%).")
             
             sleep_map = {s.label: s for s in SleepQuality}
@@ -258,6 +277,17 @@ with tab1:
             if s_sex == Sex.FEMALE:
                 menstrual_map = {m.label: m for m in MenstrualPhase}
                 s_menstrual = menstrual_map[st.selectbox("Fase Ciclo Mestruale", list(menstrual_map.keys()), index=0)]
+                
+            st.markdown("---")
+            st.write("**Biomarker (Glicemia)**")
+            has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
+            glucose_val = None
+            if has_glucose:
+                glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
+                if glucose_val < 70:
+                    st.error("Rilevata Ipoglicemia: Riserve epatiche critiche.")
+                elif glucose_val < 85:
+                    st.warning("Glicemia bassa: Riserve epatiche ridotte.")
 
         st.markdown("---")
         st.subheader("Stato Nutrizionale e di Recupero")
@@ -275,11 +305,16 @@ with tab1:
         fatigue_map = {f.label: f for f in FatigueState}
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0)]
         
-        is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
+        # Checkbox Digiuno: visibile SOLO se NON abbiamo la glicemia (che è più precisa)
+        is_fasted = False
+        if not has_glucose:
+            is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
         
         combined_filling = s_diet.factor * s_fatigue.factor * s_sleep.factor
         
-        liver_val = 40.0 if is_fasted else 100.0
+        liver_val = 100.0
+        if is_fasted:
+            liver_val = 40.0 # Valore default se digiuno senza glucometro
         
         subject = Subject(
             weight_kg=weight, body_fat_pct=bf, sex=s_sex, 
@@ -287,7 +322,8 @@ with tab1:
             liver_glycogen_g=liver_val,
             filling_factor=combined_filling,
             uses_creatine=use_creatine,
-            menstrual_phase=s_menstrual
+            menstrual_phase=s_menstrual,
+            glucose_mg_dl=glucose_val
         )
         
         tank_data = calculate_tank(subject)
@@ -328,6 +364,7 @@ with tab1:
         if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
         if use_creatine: factors_text.append("Bonus volume plasmatico/creatina (+10% Cap)")
         if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5% filling)")
+        if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
         
         if factors_text:
             st.caption(f"**Fattori correttivi applicati:** {'; '.join(factors_text)}")
