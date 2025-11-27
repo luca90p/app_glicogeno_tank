@@ -173,7 +173,7 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
-def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, crossover_pct, subject_obj, activity_params):
+def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
     current_glycogen = tank_g
@@ -194,7 +194,6 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
     elif mode == 'running':
         speed_kmh = activity_params['speed_kmh']
         weight = subject_obj.weight_kg
-        # Costo Corsa: 1 kcal/kg/km
         kcal_per_hour = 1.0 * weight * speed_kmh
         kcal_per_min_base = kcal_per_hour / 60.0
         
@@ -246,8 +245,8 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        current_hour_idx = min(int(t // 60), len(hourly_intake_strategy) - 1)
-        current_intake_g_h = hourly_intake_strategy[current_hour_idx]
+        # STRATEGIA UNIFICATA (Costante)
+        current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
         target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
@@ -277,12 +276,8 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
             # --- SHIFT METABOLICO (Rif. Zanella/Watt 2002) ---
-            # Se l'intensità è sub-massimale (<85% soglia), dopo 1h il corpo shifta verso i grassi
-            # per preservare il glicogeno residuo.
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                # Shift del ~5% verso i grassi per ogni ora extra
-                # (Simulation of "decreased glycogen degradation over time")
                 metabolic_shift = (t - 60) * (0.05 / 60.0) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
@@ -326,8 +321,6 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
             "Stato": status_label
         })
         
-    avg_intake = sum(hourly_intake_strategy) / len(hourly_intake_strategy) if hourly_intake_strategy else 0
-    
     total_cho_rate = (glycogen_burned_per_min * 60) + (current_exo_oxidation_g_min * 60)
     total_kcal_final = current_kcal_demand * 60 
     
@@ -343,7 +336,7 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
         "intensity_factor": intensity_factor,
         "avg_rer": rer,
         "gross_efficiency": gross_efficiency,
-        "avg_intake": avg_intake
+        "intake_g_h": constant_carb_intake_g_h
     }
 
     return pd.DataFrame(results), stats
@@ -580,29 +573,20 @@ with tab2:
                 act_params['max_hr'] = max_hr
                 duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
             
-            st.markdown("#### Strategia Nutrizionale (per ora)")
-            num_hours = math.ceil(duration / 60)
-            hourly_intakes = []
-            h_cols = st.columns(min(num_hours, 4)) 
-            for i in range(num_hours):
-                col_idx = i % 4
-                with h_cols[col_idx]:
-                    val = st.slider(f"Ora {i+1} (g)", 0, 150, 60, step=10, key=f"intake_h{i}")
-                    hourly_intakes.append(val)
-                    
-                    if val > 0:
-                        units_per_hour = val / cho_per_unit
-                        if units_per_hour > 0:
-                            interval_min = 60 / units_per_hour
-                            st.caption(f"👉 {units_per_hour:.1f} unità/h (1 ogni **{int(interval_min)} min**)")
-            
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
             # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
-
+            carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
+            
+            if carb_intake > 0 and cho_per_unit > 0:
+                units_per_hour = carb_intake / cho_per_unit
+                if units_per_hour > 0:
+                    interval_min = 60 / units_per_hour
+                    st.caption(f"👉 {units_per_hour:.1f} unità/h (1 ogni **{int(interval_min)} min**)")
+            
             st.markdown("---")
 
             use_lab = st.checkbox("Usa Dati Reali da Metabolimetro (Test)", help="Se hai fatto un test del gas in laboratorio, inserisci i dati reali per la massima precisione.")
@@ -624,11 +608,10 @@ with tab2:
                 
         h_cm = subj.height_cm 
         
-        df_sim, stats = simulate_metabolism(tank_data, duration, hourly_intakes, crossover, subj, act_params)
+        df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, crossover, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
-        zero_intake = [0] * num_hours
-        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, zero_intake, crossover, subj, act_params)
+        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, crossover, subj, act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
         combined_df = pd.concat([df_sim, df_no_cho])
@@ -730,33 +713,30 @@ with tab2:
         # PIANO DI GARA TABELLARE
         st.markdown("### 📋 Cronotabella di Integrazione")
         
-        # Calcola intake medio o max per la tabella
-        # Qui usiamo la lista 'hourly_intakes'
-        
-        schedule = []
-        # Creiamo una schedule unificata. 
-        # Iteriamo su ogni ora
-        current_minute_cursor = 0
-        
-        for hour_idx, intake_g in enumerate(hourly_intakes):
-            if intake_g > 0 and cho_per_unit > 0:
-                units = intake_g / cho_per_unit
-                interval = 60 / units
+        if carb_intake > 0 and cho_per_unit > 0:
+            units_per_hour = carb_intake / cho_per_unit
+            if units_per_hour > 0:
+                interval_min = 60 / units_per_hour
+                interval_int = int(interval_min)
                 
-                # Aggiungi eventi per questa ora
-                # Inizia dal primo slot utile nell'ora
-                next_intake_time = current_minute_cursor + interval
-                while next_intake_time <= (hour_idx + 1) * 60 and next_intake_time <= duration:
+                schedule = []
+                current_time = interval_int
+                total_cho_ingested = 0
+                
+                while current_time <= duration:
+                    total_cho_ingested += cho_per_unit
                     schedule.append({
-                        "Minuto": int(next_intake_time),
+                        "Minuto": current_time,
                         "Azione": f"Assumere 1 unità ({cho_per_unit}g CHO)",
-                        "Dose Oraria Target": f"{intake_g}g"
+                        "Totale Ingerito": f"{total_cho_ingested}g"
                     })
-                    next_intake_time += interval
-            
-            current_minute_cursor += 60
-            
-        if schedule:
-            st.table(pd.DataFrame(schedule))
+                    current_time += interval_int
+                
+                if schedule:
+                    st.table(pd.DataFrame(schedule))
+                else:
+                    st.info("Durata troppo breve per l'intervallo di assunzione calcolato.")
+            else:
+                st.warning("Controlla i parametri di integrazione.")
         else:
-            st.info("Nessuna integrazione pianificata o dosi nulle.")
+            st.info("Nessuna integrazione pianificata.")
