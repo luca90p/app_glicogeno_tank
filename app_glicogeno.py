@@ -85,6 +85,7 @@ class Subject:
     uses_creatine: bool = False
     menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
     glucose_mg_dl: float = None
+    vo2max_absolute_l_min: float = 3.5 # Stimato per fallback
 
     @property
     def lean_body_mass(self) -> float:
@@ -161,6 +162,7 @@ def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
 
 def calculate_rer_polynomial(intensity_factor):
     if_val = intensity_factor
+    # Formula Polinomiale per RER vs IF
     rer = (
         -0.000000149 * (if_val**6) + 
         141.538462237 * (if_val**5) - 
@@ -172,83 +174,157 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
-def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, hourly_intake_strategy, crossover_pct, height_cm, gross_efficiency):
+def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, crossover_pct, subject_obj, activity_params):
+    """
+    Motore di simulazione ibrido: Ciclismo (Watt), Corsa/Altro (HR/Pace) o Lab Data.
+    activity_params: dizionario con i driver dello sforzo.
+    """
     tank_g = subject_data['actual_available_g']
     results = []
     current_glycogen = tank_g
     
-    # Calcolo IF Base
-    base_intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
+    # 1. Determinazione Driver di Intensità e Costo Energetico
+    mode = activity_params.get('mode', 'cycling')
+    gross_efficiency = activity_params.get('efficiency', 22.0)
     
-    # Adattamento Crossover
-    standard_crossover_ref = 75.0 
-    shift_factor = (standard_crossover_ref - crossover_pct) / 100.0
-    effective_if_for_rer = base_intensity_factor + shift_factor
+    # Valori di default
+    avg_power = 0
+    ftp_watts = 250
+    intensity_factor = 0.7 # Default
+    kcal_per_min_total = 10.0 # Default
     
+    # Scenario A: Ciclismo (Power)
+    if mode == 'cycling':
+        avg_power = activity_params['avg_watts']
+        ftp_watts = activity_params['ftp_watts']
+        intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
+        # Costo: Watt -> Kcal (GE)
+        kcal_per_min_total = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
+        
+    # Scenario B: Corsa (Pace + HR)
+    elif mode == 'running':
+        # Costo Corsa: ~1 kcal/kg/km (formula di Arcelli/Margaria) indipendentemente dalla velocità
+        speed_kmh = activity_params['speed_kmh']
+        weight = subject_obj.weight_kg
+        kcal_per_hour = 1.0 * weight * speed_kmh
+        kcal_per_min_total = kcal_per_hour / 60.0
+        
+        # Intensità per RER: Usiamo HR come proxy
+        avg_hr = activity_params['avg_hr']
+        threshold_hr = activity_params['threshold_hr']
+        intensity_factor = avg_hr / threshold_hr if threshold_hr > 0 else 0.7
+        
+        # FTP proxy per calcolo max oxidation (potenza metabolica equivalente)
+        # Stima grezza: Kcal/h / 3.6 (conversione J) * efficiency? No, usiamo VO2max proxy
+        ftp_watts = (subject_obj.vo2max_absolute_l_min * 1000) / 12 # approx 12 ml/W
+        
+    # Scenario C: Altri Sport (HR puro)
+    elif mode == 'other':
+        # Stima Kcal da VO2max e Intensità HR
+        avg_hr = activity_params['avg_hr']
+        max_hr = activity_params['max_hr']
+        hr_pct = avg_hr / max_hr if max_hr > 0 else 0.7
+        
+        # VO2 stimato a questa %HR (ACSM: %VO2max ~= (%HRmax - 37) / 0.63 approx linear above 50%)
+        # Semplificazione: %VO2 = %HR (per range aerobico è accettabile) o uso Subject VO2max
+        vo2_operating = subject_obj.vo2max_absolute_l_min * hr_pct
+        kcal_per_min_total = vo2_operating * 5.0 # 5 kcal/L O2
+        
+        intensity_factor = hr_pct # Proxy per RER
+        # Threshold proxy (diciamo 85% HRmax)
+        threshold_proxy = max_hr * 0.85
+        intensity_factor = avg_hr / threshold_proxy # IF normalizzato su soglia
+        ftp_watts = 200 # Default dummy
+        
+    # Scenario D: Dati Laboratorio (Override Totale)
+    is_lab_data = activity_params.get('use_lab_data', False)
+    lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
+    lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
+    
+    # Parametri Calcolo
+    crossover_if = crossover_pct / 100.0
+    effective_if_for_rer = intensity_factor + ((75.0 - crossover_pct) / 100.0)
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
     
-    # Capacità massima assorbimento atleta
-    max_exo_rate_g_min = estimate_max_exogenous_oxidation(height_cm, subject_data['active_muscle_kg']*2.2, ftp_watts)
+    # Max Exo Oxidation
+    max_exo_rate_g_min = estimate_max_exogenous_oxidation(subject_obj.height_cm, subject_obj.weight_kg, ftp_watts)
     oxidation_efficiency = 0.80 
     
-    # Stato accumulo e ossidazione
+    # Stato accumulo
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
-    
-    # Parametri Cinetica Dinamica
     tau_absorption = 20.0 
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
     for t in range(int(duration_min) + 1):
-        # 1. DRIFT EFFICIENZA
-        current_efficiency = gross_efficiency
-        if t > 30:
-            efficiency_loss = (t - 30) * 0.02 
-            current_efficiency = max(15.0, gross_efficiency - efficiency_loss)
-            
-        kcal_per_min_total = (avg_power * 60) / 4184 / (current_efficiency / 100.0)
+        # 1. DRIFT COSTO ENERGETICO (Non si applica se Dati Lab sono fissi)
+        current_kcal_demand = kcal_per_min_total
+        if not is_lab_data and t > 45:
+             # Aumento costo 0.02% al min dopo 45 min
+             current_kcal_demand *= (1 + (t - 45) * 0.0002)
         
-        # 2. GESTIONE INTAKE ORARIO (STRATEGIA)
+        # 2. GESTIONE INTAKE
         current_hour_idx = min(int(t // 60), len(hourly_intake_strategy) - 1)
         current_intake_g_h = hourly_intake_strategy[current_hour_idx]
         current_intake_g_min = current_intake_g_h / 60.0
         
-        # Target ossidabile a regime
         target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
         
-        # Aggiornamento dinamico ossidazione
         if t > 0:
             current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
         else:
             current_exo_oxidation_g_min = 0.0
             
-        # Accumulo intestinale
         if t > 0:
             delta_gut = (current_intake_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-        # 3. BILANCIO ENERGETICO
-        rer = calculate_rer_polynomial(effective_if_for_rer)
-        cho_ratio = (rer - 0.70) * 3.45
-        cho_ratio = max(0.0, min(1.0, cho_ratio))
-        fat_ratio = 1.0 - cho_ratio
-        
-        kcal_cho_demand = kcal_per_min_total * cho_ratio
-        kcal_from_exo = current_exo_oxidation_g_min * 3.75
-        
-        min_glycogen_obligatory = 0.0
-        if base_intensity_factor > 0.6:
-            min_glycogen_obligatory = (kcal_cho_demand * 0.20) / 4.1 
+        # 3. RIPARTIZIONE SUBSTRATI
+        if is_lab_data:
+            # Override da Test Metabolimetro (consideriamo fissi o con leggero drift)
+            # Aggiungiamo solo il drift della fatica al consumo di glicogeno
+            fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 # Drift leggero
             
-        remaining_kcal_demand = kcal_cho_demand - kcal_from_exo
-        
-        glycogen_burned_per_min = remaining_kcal_demand / 4.1
-        if glycogen_burned_per_min < min_glycogen_obligatory:
-            glycogen_burned_per_min = min_glycogen_obligatory
+            # Esogeno copre parte del CHO lab rate? 
+            # Assumiamo che il Lab Data sia il consumo TOTALE di CHO a quel ritmo.
+            total_cho_demand = lab_cho_rate * fatigue_mult
             
-        fat_burned_per_min = (kcal_per_min_total * fat_ratio) / 9.0
+            # Contributo esogeno
+            kcal_from_exo = current_exo_oxidation_g_min # g, non kcal qui
+            
+            # Endogeno = Totale - Esogeno
+            glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
+            # Minimo fisiologico obbligatorio (King 2018)
+            min_endo = total_cho_demand * 0.2 
+            if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
+            
+            fat_burned_per_min = lab_fat_rate # Fat rimane stabile o cala se drift
+            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
+            rer = 0.7 + (0.3 * cho_ratio) # Stima inversa
+            
+        else:
+            # Modello Standard (RER Polinomiale)
+            rer = calculate_rer_polynomial(effective_if_for_rer)
+            cho_ratio = (rer - 0.70) * 3.45
+            cho_ratio = max(0.0, min(1.0, cho_ratio))
+            fat_ratio = 1.0 - cho_ratio
+            
+            kcal_cho_demand = current_kcal_demand * cho_ratio
+            
+            # Glicogeno vs Esogeno
+            kcal_from_exo = current_exo_oxidation_g_min * 3.75
+            min_glycogen_obligatory = 0.0
+            if intensity_factor > 0.6:
+                min_glycogen_obligatory = (kcal_cho_demand * 0.20) / 4.1 
+            
+            remaining_kcal_demand = kcal_cho_demand - kcal_from_exo
+            glycogen_burned_per_min = remaining_kcal_demand / 4.1
+            if glycogen_burned_per_min < min_glycogen_obligatory:
+                glycogen_burned_per_min = min_glycogen_obligatory
+                
+            fat_burned_per_min = (current_kcal_demand * fat_ratio) / 9.0
         
         if t > 0:
             current_glycogen -= glycogen_burned_per_min
@@ -275,16 +351,18 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, hourly
         
     avg_intake = sum(hourly_intake_strategy) / len(hourly_intake_strategy) if hourly_intake_strategy else 0
     
+    total_cho_rate = (glycogen_burned_per_min * 60) + (current_exo_oxidation_g_min * 60)
+    
     stats = {
         "final_glycogen": current_glycogen,
-        "cho_rate_g_h": (glycogen_burned_per_min * 60) + (current_exo_oxidation_g_min * 60),
+        "cho_rate_g_h": total_cho_rate,
         "endogenous_burn_rate": glycogen_burned_per_min * 60,
         "fat_rate_g_h": fat_burned_per_min * 60,
-        "kcal_total_h": kcal_per_min_total * 60,
+        "kcal_total_h": kcal_per_min_total * 60 if not is_lab_data else (lab_cho_rate*4 + lab_fat_rate*9)*60,
         "cho_pct": cho_ratio * 100,
         "gut_accumulation": (gut_accumulation_total / duration_min) * 60 if duration_min > 0 else 0,
         "max_exo_capacity": max_exo_rate_g_min * 60,
-        "intensity_factor": base_intensity_factor,
+        "intensity_factor": intensity_factor,
         "avg_rer": rer,
         "gross_efficiency": gross_efficiency,
         "avg_intake": avg_intake
@@ -318,10 +396,13 @@ with tab1:
         st.write("**Stima Glicogeno Muscolare**")
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
+        vo2_input = 55.0 # Default
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
             s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2)]
             calculated_conc = s_status.val
+            # Stima inversa VO2 per fallback Tab 2
+            vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
             vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
             calculated_conc = get_concentration_from_vo2max(vo2_input)
@@ -385,6 +466,9 @@ with tab1:
         if is_fasted:
             liver_val = 40.0 
         
+        # Calcolo VO2 assoluto per stime Tab 2 (L/min)
+        vo2_abs = (vo2_input * weight) / 1000
+        
         subject = Subject(
             weight_kg=weight, 
             height_cm=height,
@@ -394,7 +478,8 @@ with tab1:
             filling_factor=combined_filling,
             uses_creatine=use_creatine,
             menstrual_phase=s_menstrual,
-            glucose_mg_dl=glucose_val
+            glucose_mg_dl=glucose_val,
+            vo2max_absolute_l_min=vo2_abs
         )
         
         tank_data = calculate_tank(subject)
@@ -448,21 +533,59 @@ with tab2:
         st.warning("Calcolare prima le riserve nel Tab 'Analisi Riserve'.")
     else:
         start_tank = st.session_state['tank_g']
+        subj = st.session_state.get('subject_struct', None)
         
+        # --- RILEVAMENTO MODALITÀ ---
+        # Determina la modalità in base allo sport scelto nel Tab 1
+        sport_mode = 'cycling'
+        if subj.sport == SportType.RUNNING:
+            sport_mode = 'running'
+        elif subj.sport in [SportType.SWIMMING, SportType.XC_SKIING, SportType.TRIATHLON]:
+            sport_mode = 'other' # Generic endurance
+            
         col_param, col_meta = st.columns([1, 1])
         
+        # Dizionario parametri attività
+        act_params = {'mode': sport_mode}
+        
         with col_param:
-            st.subheader("Protocollo di Carico")
-            ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 250, step=5)
-            avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
+            st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
+            
+            # --- INPUT DINAMICI IN BASE ALLO SPORT ---
+            if sport_mode == 'cycling':
+                ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 250, step=5)
+                avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
+                act_params['ftp_watts'] = ftp
+                act_params['avg_watts'] = avg_w
+                act_params['efficiency'] = st.slider("Efficienza Meccanica [%]", 16.0, 26.0, 22.0, 0.5)
+                
+            elif sport_mode == 'running':
+                # Input Passo
+                c_speed, c_hr = st.columns(2)
+                pace_min = c_speed.number_input("Passo Gara (min/km)", 2.0, 10.0, 5.0, 0.1)
+                speed_kmh = 60 / pace_min
+                st.caption(f"Velocità stimata: {speed_kmh:.1f} km/h")
+                act_params['speed_kmh'] = speed_kmh
+                
+                # Input HR
+                thr_hr = c_hr.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
+                avg_hr = c_hr.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
+                act_params['avg_hr'] = avg_hr
+                act_params['threshold_hr'] = thr_hr
+                
+            else: # Other sports
+                max_hr = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
+                avg_hr = st.number_input("Frequenza Cardiaca Media Gara", 80, 220, 140, 1)
+                act_params['avg_hr'] = avg_hr
+                act_params['max_hr'] = max_hr
+            
+            # Parametri comuni
             duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
             
             st.markdown("#### Strategia Nutrizionale (per ora)")
             num_hours = math.ceil(duration / 60)
             hourly_intakes = []
-            
             h_cols = st.columns(min(num_hours, 4)) 
-            
             for i in range(num_hours):
                 col_idx = i % 4
                 with h_cols[col_idx]:
@@ -472,28 +595,35 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico")
             
-            efficiency = st.slider("Efficienza Meccanica (Gross Efficiency) [%]", 16.0, 26.0, 22.0, 0.5,
-                                   help="Percentuale di energia metabolica convertita in lavoro meccanico. Principianti ~18%, Elite ~24%.")
+            # --- CUSTOM LAB DATA TOGGLE ---
+            use_lab = st.checkbox("Usa Dati Reali da Metabolimetro (Test)", help="Se hai fatto un test del gas in laboratorio, inserisci i dati reali per la massima precisione.")
+            act_params['use_lab_data'] = use_lab
             
-            crossover = st.slider("Crossover Point (Soglia Aerobica) [% FTP]", 50, 85, 70, 5,
-                                  help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
-            if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
-            elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
-            else: st.caption("Profilo: Bilanciato / Misto")
-
-        subj = st.session_state.get('subject_struct', None)
-        h_cm = subj.height_cm if subj else 175
+            if use_lab:
+                st.info("Inserisci i consumi misurati al **Ritmo Gara** previsto.")
+                lab_cho = st.number_input("Consumo CHO (g/h) da Test", 0, 400, 180, 5)
+                lab_fat = st.number_input("Consumo Grassi (g/h) da Test", 0, 150, 30, 5)
+                act_params['lab_cho_g_h'] = lab_cho
+                act_params['lab_fat_g_h'] = lab_fat
+                crossover = 75 # Dummy value, non usato
+            else:
+                crossover = st.slider("Crossover Point (Soglia Aerobica) [% Soglia]", 50, 85, 70, 5,
+                                      help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
+                if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
+                elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
+                else: st.caption("Profilo: Bilanciato / Misto")
+                
+        h_cm = subj.height_cm 
         
-        # Simulazione Principale (Con Integrazione)
-        df_sim, stats = simulate_metabolism(tank_data, ftp, avg_w, duration, hourly_intakes, crossover, h_cm, efficiency)
+        # Simulazione Principale
+        df_sim, stats = simulate_metabolism(tank_data, 0, 0, duration, hourly_intakes, crossover, h_cm, 0, subject_obj=subj, activity_params=act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
         # Simulazione Confronto (Zero Intake)
         zero_intake = [0] * num_hours
-        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, ftp, avg_w, duration, zero_intake, crossover, h_cm, efficiency)
+        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, 0, 0, duration, zero_intake, crossover, h_cm, 0, subject_obj=subj, activity_params=act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
-        # Unione dati per grafico
         combined_df = pd.concat([df_sim, df_no_cho])
         
         st.markdown("---")
@@ -502,14 +632,10 @@ with tab2:
         c_if, c_rer, c_mix, c_res = st.columns(4)
         
         if_val = stats['intensity_factor']
-        if_color = "normal"
-        if if_val > 1.0: if_color = "inverse" 
-        c_if.metric("Intensity Factor (IF)", f"{if_val:.2f}", delta="Sopra FTP" if if_val > 1.0 else None, delta_color=if_color,
-                    help="Rapporto tra Potenza Media e FTP. >1.0 indica sforzo anaerobico prevalente.")
+        c_if.metric("Intensity Factor (IF)", f"{if_val:.2f}", help="Indice di intensità normalizzato sulla soglia.")
         
         rer_val = stats['avg_rer']
-        c_rer.metric("RER Stimato (RQ)", f"{rer_val:.2f}", 
-                     help="Quoziente Respiratorio Metabolico. 0.7=Grassi puri, 1.0=Carboidrati puri.")
+        c_rer.metric("RER Stimato (RQ)", f"{rer_val:.2f}", help="Quoziente Respiratorio Metabolico.")
         
         c_mix.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO",
                      delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
@@ -524,23 +650,12 @@ with tab2:
                   help=f"Endogeno: {int(stats['endogenous_burn_rate'])} g/h | Esogeno utile: {int(stats['cho_rate_g_h'] - stats['endogenous_burn_rate'])} g/h")
         
         m2.metric("Tasso Ossidazione Lipidi", f"{int(stats['fat_rate_g_h'])} g/h")
-        
-        gut_acc = stats['gut_accumulation']
-        max_cap = stats['max_exo_capacity']
-        
-        if gut_acc > 30:
-            m3.error(f"⚠️ Rischio GI Alto ({int(gut_acc)} g/h accumulo)")
-        elif gut_acc > 10:
-            m3.warning(f"⚠️ Attenzione GI ({int(gut_acc)} g/h accumulo)")
-        else:
-            m3.success(f"✅ Tolleranza GI Ottimale")
+        m3.metric("Spesa Energetica Totale", f"{int(stats['kcal_total_h'])} kcal/h")
 
         g1, g2 = st.columns([2, 1])
         with g1:
             st.caption("Cinetica di Deplezione Glicogeno: Strategia vs Digiuno")
-            
             max_y = max(start_tank, 800)
-            
             bands = pd.DataFrame([
                 {"Zone": "Critica (<180g)", "Start": 0, "End": 180, "Color": "#FFCDD2"}, 
                 {"Zone": "Warning (180-350g)", "Start": 180, "End": 350, "Color": "#FFE0B2"}, 
@@ -548,67 +663,38 @@ with tab2:
             ])
             
             base = alt.Chart(combined_df).encode(x=alt.X('Time (min)', title='Durata (min)'))
-
-            # Linee Deplezione (Multi-Color in base allo Scenario)
             lines = base.mark_line(strokeWidth=3).encode(
                 y=alt.Y('Glicogeno Residuo (g)', title='Glicogeno Muscolare (g)'),
                 color=alt.Color('Scenario', scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], range=['#D32F2F', '#757575'])),
                 tooltip=['Time (min)', 'Glicogeno Residuo (g)', 'Stato', 'Scenario']
             )
+            zones = alt.Chart(bands).mark_rect(opacity=0.4).encode(y='Start', y2='End', color=alt.Color('Color', scale=None, legend=None))
             
-            zones = alt.Chart(bands).mark_rect(opacity=0.4).encode(
-                y='Start',
-                y2='End',
-                color=alt.Color('Color', scale=None, legend=None), 
-                tooltip='Zone' 
-            )
-            
-            zone_labels = alt.Chart(bands).mark_text(
-                align='left', baseline='middle', dx=5, dy=-5, color='black', opacity=0.6
-            ).encode(
-                y='Start',
-                text='Zone'
-            )
-            
-            chart = (zones + zone_labels + lines).properties(height=350).interactive()
+            chart = (zones + lines).properties(height=350).interactive()
             st.altair_chart(chart, use_container_width=True)
             
-            st.caption("Confronto: Ingestione Pianificata (Target) vs Ossidazione Reale")
-            
+            st.caption("Ingestione (Target) vs Ossidazione (Reale)")
             intake_df = df_sim[['Time (min)', 'Target Intake (g/h)', 'CHO Esogeni (g/min)']].copy()
             intake_df['Ossidazione Reale (g/h)'] = intake_df['CHO Esogeni (g/min)'] * 60
             
             target_chart = alt.Chart(intake_df).mark_line(interpolate='step-after', color='gray', strokeDash=[5,5]).encode(
-                x='Time (min)',
-                y=alt.Y('Target Intake (g/h)', title='Rateo Carboidrati (g/h)'),
-                tooltip=['Time (min)', 'Target Intake (g/h)']
+                x='Time (min)', y=alt.Y('Target Intake (g/h)')
             )
-            
             real_chart = alt.Chart(intake_df).mark_line(color='#1E88E5', strokeWidth=3).encode(
-                x='Time (min)',
-                y='Ossidazione Reale (g/h)',
-                tooltip=['Time (min)', 'Ossidazione Reale (g/h)']
+                x='Time (min)', y='Ossidazione Reale (g/h)'
             )
-            
-            st.altair_chart((target_chart + real_chart).properties(height=200).interactive(), use_container_width=True)
-            st.info("La linea grigia tratteggiata mostra quanto mangi ogni ora. La linea blu mostra quanto il tuo corpo riesce effettivamente a bruciare, considerando il tempo di digestione.")
+            st.altair_chart((target_chart + real_chart).properties(height=200), use_container_width=True)
 
         with g2:
-            st.caption("Accumulo Intestinale (Rischio GI Distress)")
-            gut_chart = alt.Chart(df_sim).mark_area(
-                color='#8D6E63', opacity=0.6
-            ).encode(
-                x='Time (min)',
-                y=alt.Y('Gut Load', title='Carboidrati nello Stomaco (g)'),
-                tooltip=['Time (min)', 'Gut Load']
+            st.caption("Accumulo Intestinale (Rischio GI)")
+            gut_chart = alt.Chart(df_sim).mark_area(color='#8D6E63', opacity=0.6).encode(
+                x='Time (min)', y='Gut Load'
             )
-            
             risk_line = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='red', strokeDash=[2,2]).encode(y='y')
             st.altair_chart((gut_chart + risk_line).properties(height=250), use_container_width=True)
-            st.caption("*Valori > 30g di accumulo indicano alto rischio di nausea/problemi gastrici.*")
             
             st.markdown("---")
-            st.caption("Ossidazione Lipidica Cumulativa")
+            st.caption("Ossidazione Lipidica")
             st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
@@ -620,28 +706,16 @@ with tab2:
         bonk_time_no = critical_df_no['Time (min)'].min() if not critical_df_no.empty else None
         
         s1, s2 = st.columns([2, 1])
-        
         with s1:
             if bonk_time:
-                st.error(f"🚨 **PUNTO CRITICO RILEVATO AL MINUTO {bonk_time}**")
-                if stats['avg_intake'] > 0:
-                    st.warning(f"Con la strategia attuale, le riserve scendono sotto soglia al minuto {bonk_time}. Prova ad aumentare l'intake nella prima ora.")
-                else:
-                    st.warning("Stai viaggiando a zero integrazione. Il crollo è inevitabile.")
+                st.error(f"🚨 **CRISI RILEVATA AL MINUTO {bonk_time}**")
             else:
                 st.success("✅ **STRATEGIA SOSTENIBILE**")
                 if bonk_time_no:
-                    saved_time = duration - bonk_time_no
-                    st.write(f"Senza integrazione saresti andato in crisi al minuto **{bonk_time_no}**. La tua strategia ti ha salvato!")
-                else:
-                    st.write(f"Le riserve rimangono sopra la soglia critica per tutta la durata prevista.")
+                    st.write(f"Senza integrazione crisi prevista al minuto **{bonk_time_no}**.")
         
         with s2:
             if bonk_time:
-                st.metric("Tempo alla Crisi", f"{bonk_time} min", delta=f"-{duration - bonk_time} min vs Target", delta_color="inverse")
+                st.metric("Tempo alla Crisi", f"{bonk_time} min", delta_color="inverse")
             else:
-                st.metric("Buffer Energetico", "Ottimale", delta="Nessun Bonk previsto")
-        
-        final_g = stats['final_glycogen']
-        if final_g <= 0:
-            st.error(f"**DEPLETIONE TOTALE:** Esaurimento riserve (Bonk) stimato al minuto {df_sim[df_sim['Glicogeno Residuo (g)'] <= 0].index[0]}.")
+                st.metric("Buffer", "Ottimale")
