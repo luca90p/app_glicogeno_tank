@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import altair as alt  # Aggiunto per grafici avanzati
 from dataclasses import dataclass
 from enum import Enum
 
@@ -170,12 +171,7 @@ def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
     return min(base_rate, limit)
 
 def calculate_rer_polynomial(intensity_factor):
-    """
-    Calcola il RER (QR) basandosi sulla formula polinomiale di 6° grado fornita.
-    Formula: QR = -0.000000149*IF^6 + ...
-    """
     if_val = intensity_factor
-    
     rer = (
         -0.000000149 * (if_val**6) + 
         141.538462237 * (if_val**5) - 
@@ -185,8 +181,6 @@ def calculate_rer_polynomial(intensity_factor):
         265.460857558 * if_val - 
         39.525121144
     )
-    
-    # Clamp fisiologico RER
     return max(0.70, min(1.15, rer))
 
 def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct, height_cm, gross_efficiency):
@@ -204,7 +198,7 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
     
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
     
-    # --- CALCOLO COSTO ENERGETICO CON EFFICIENZA VARIABILE ---
+    # Costo Energetico
     kcal_per_min_total = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
     
     # Ossidazione Esogena
@@ -214,15 +208,11 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
     useful_exogenous_g_min = min(intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
     gut_accumulation_g_h = (intake_g_min - useful_exogenous_g_min) * 60
     
-    # --- CALCOLO RER (POLINOMIALE) ---
+    # RER Polinomiale
     rer = calculate_rer_polynomial(effective_if_for_rer)
     
-    # --- CALCOLO %CHO (NUOVA FORMULA UTENTE) ---
-    # Formula: x = (QR - 0.7) * 3.45
-    # Se x > 1 -> %CHO = 1, Se x < 1 -> %CHO = x
+    # %CHO (Formula Utente)
     cho_ratio = (rer - 0.70) * 3.45
-    
-    # Clamp ratio
     if cho_ratio < 0: cho_ratio = 0.0
     if cho_ratio > 1.0: cho_ratio = 1.0
     
@@ -448,7 +438,6 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico")
             
-            # SLIDER EFFICIENZA MECCANICA
             efficiency = st.slider("Efficienza Meccanica (Gross Efficiency) [%]", 16.0, 26.0, 22.0, 0.5,
                                    help="Percentuale di energia metabolica convertita in lavoro meccanico. Principianti ~18%, Elite ~24%.")
             
@@ -466,32 +455,26 @@ with tab2:
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
         
-        # NUOVI INDICATORI FISIOLOGICI
         c_if, c_rer, c_mix, c_res = st.columns(4)
         
-        # IF (Intensity Factor)
         if_val = stats['intensity_factor']
         if_color = "normal"
-        if if_val > 1.0: if_color = "inverse" # Sopra soglia
+        if if_val > 1.0: if_color = "inverse" 
         c_if.metric("Intensity Factor (IF)", f"{if_val:.2f}", delta="Sopra FTP" if if_val > 1.0 else None, delta_color=if_color,
                     help="Rapporto tra Potenza Media e FTP. >1.0 indica sforzo anaerobico prevalente.")
         
-        # RER (Respiratory Exchange Ratio)
         rer_val = stats['avg_rer']
         c_rer.metric("RER Stimato (RQ)", f"{rer_val:.2f}", 
                      help="Quoziente Respiratorio Metabolico. 0.7=Grassi puri, 1.0=Carboidrati puri.")
         
-        # Mix
         c_mix.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO",
                      delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
         
-        # Residuo
         c_res.metric("Glicogeno Residuo", f"{int(stats['final_glycogen'])} g", 
                   delta=f"{int(stats['final_glycogen'] - start_tank)} g")
 
         st.markdown("---")
         
-        # DETTAGLIO CONSUMI
         m1, m2, m3 = st.columns(3)
         m1.metric("Ossidazione CHO Totale", f"{int(stats['cho_rate_g_h'])} g/h",
                   help=f"Endogeno: {int(stats['endogenous_burn_rate'])} g/h | Esogeno utile: {int(stats['cho_rate_g_h'] - stats['endogenous_burn_rate'])} g/h")
@@ -511,7 +494,48 @@ with tab2:
         g1, g2 = st.columns([2, 1])
         with g1:
             st.caption("Cinetica di Deplezione Glicogeno")
-            st.area_chart(df_sim.set_index("Time (min)")["Glicogeno Residuo (g)"], color="#FF4B4B")
+            
+            # --- ALTAIR CHART WITH ZONES ---
+            # Define Zones DataFrame
+            max_y = max(start_tank, 800) # Ensure chart has headroom
+            
+            # Dynamic bands definition
+            bands = pd.DataFrame([
+                {"Zone": "Critical (<180g)", "Start": 0, "End": 180, "Color": "#FFCDD2"},  # Light Red
+                {"Zone": "Warning (180-350g)", "Start": 180, "End": 350, "Color": "#FFE0B2"}, # Light Orange
+                {"Zone": "Optimal (>350g)", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} # Light Green
+            ])
+            
+            # Base Chart
+            base = alt.Chart(df_sim).encode(x=alt.X('Time (min)', title='Durata (min)'))
+
+            # Depletion Line
+            line = base.mark_area(
+                line={'color':'#D32F2F'}, 
+                color=alt.Gradient(
+                    gradient='linear',
+                    stops=[alt.GradientStop(color='white', offset=0),
+                           alt.GradientStop(color='#D32F2F', offset=1)],
+                    x1=1, x2=1, y1=1, y2=0
+                ),
+                opacity=0.6
+            ).encode(
+                y=alt.Y('Glicogeno Residuo (g)', title='Glicogeno (g)')
+            )
+            
+            # Background Zones (Rectangles)
+            zones = alt.Chart(bands).mark_rect(opacity=0.3).encode(
+                y='Start',
+                y2='End',
+                color=alt.Color('Color', scale=None), # Use direct hex color
+                tooltip='Zone' # Show zone name on hover
+            )
+            
+            # Combine: Zones first (background), then Line
+            chart = (zones + line).properties(height=300).interactive()
+            
+            st.altair_chart(chart, use_container_width=True)
+
         with g2:
             st.caption("Ossidazione Lipidica Cumulativa")
             st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
