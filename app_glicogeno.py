@@ -267,7 +267,8 @@ with tab1:
             "Stato": ["Massimo Teorico", "Disponibile Ora"],
             "Glicogeno (g)": [tank_data['max_capacity_g'], tank_data['actual_available_g']]
         })
-        st.bar_chart(chart_df, x="Stato", y="Glicogeno (g)", color=["#e0e0e0", "#00CC96"])
+        # CORREZIONE: Usiamo color="Stato" per assegnare colori automatici ma distinti
+        st.bar_chart(chart_df, x="Stato", y="Glicogeno (g)", color="Stato")
         
         st.markdown("---")
         st.caption(f"**Dettaglio:** Stai usando il **{int(combined_filling*100)}%** della tua capacità muscolare a causa di Nutrizione e Recupero.")
