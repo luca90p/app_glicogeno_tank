@@ -495,21 +495,16 @@ with tab2:
         with g1:
             st.caption("Cinetica di Deplezione Glicogeno")
             
-            # --- ALTAIR CHART WITH ZONES ---
-            # Define Zones DataFrame
-            max_y = max(start_tank, 800) # Ensure chart has headroom
+            max_y = max(start_tank, 800)
             
-            # Dynamic bands definition
             bands = pd.DataFrame([
-                {"Zone": "Critical (<180g)", "Start": 0, "End": 180, "Color": "#FFCDD2"},  # Light Red
-                {"Zone": "Warning (180-350g)", "Start": 180, "End": 350, "Color": "#FFE0B2"}, # Light Orange
-                {"Zone": "Optimal (>350g)", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} # Light Green
+                {"Zone": "Critical (<180g)", "Start": 0, "End": 180, "Color": "#FFCDD2"}, 
+                {"Zone": "Warning (180-350g)", "Start": 180, "End": 350, "Color": "#FFE0B2"}, 
+                {"Zone": "Optimal (>350g)", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} 
             ])
             
-            # Base Chart
             base = alt.Chart(df_sim).encode(x=alt.X('Time (min)', title='Durata (min)'))
 
-            # Depletion Line
             line = base.mark_area(
                 line={'color':'#D32F2F'}, 
                 color=alt.Gradient(
@@ -523,27 +518,56 @@ with tab2:
                 y=alt.Y('Glicogeno Residuo (g)', title='Glicogeno (g)')
             )
             
-            # Background Zones (Rectangles)
             zones = alt.Chart(bands).mark_rect(opacity=0.3).encode(
                 y='Start',
                 y2='End',
-                color=alt.Color('Color', scale=None), # Use direct hex color
-                tooltip='Zone' # Show zone name on hover
+                color=alt.Color('Color', scale=None), 
+                tooltip='Zone' 
             )
             
-            # Combine: Zones first (background), then Line
             chart = (zones + line).properties(height=300).interactive()
-            
             st.altair_chart(chart, use_container_width=True)
 
         with g2:
             st.caption("Ossidazione Lipidica Cumulativa")
             st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
         
+        # --- NUOVA SEZIONE: STRATEGIA & TIMING ---
+        st.subheader("Strategia di Integrazione & Timing")
+        
+        # Calcolo del "Time to Bonk" (momento in cui si scende sotto la zona critica)
+        critical_df = df_sim[df_sim['Glicogeno Residuo (g)'] < 180]
+        bonk_time = critical_df['Time (min)'].min() if not critical_df.empty else None
+        
+        s1, s2 = st.columns([2, 1])
+        
+        with s1:
+            if bonk_time:
+                st.error(f"🚨 **PUNTO CRITICO RILEVATO AL MINUTO {bonk_time}**")
+                st.write(f"""
+                Con l'attuale intake di **{carb_intake} g/h**, le tue riserve scenderanno sotto la soglia di sicurezza (180g) dopo **{bonk_time} minuti**.
+                """)
+                
+                # Logica del Timing basata su King & Podlogar (Lag assorbimento ~60-75 min per picco)
+                if carb_intake > 0:
+                    st.info("""
+                    **Consiglio Tattico:** Considerando la cinetica di assorbimento (King et al., 2018), per avere un effetto pieno al minuto critico,
+                    devi assicurarti che il picco di ossidazione esogena sia attivo **prima** del minuto {bonk_time}.
+                    
+                    👉 **INIZIO INTEGRAZIONE:** Si raccomanda vivamente di iniziare l'assunzione di carboidrati **entro i primi 15-20 minuti** di attività per massimizzare il risparmio di glicogeno epatico e stabilizzare la glicemia.
+                    """)
+                else:
+                    st.warning("**Attenzione:** Stai viaggiando a zero integrazione. Questo accelera drasticamente l'esaurimento.")
+            else:
+                st.success("✅ **STRATEGIA SOSTENIBILE**")
+                st.write(f"Con **{carb_intake} g/h**, le riserve rimangono sopra la soglia critica per tutta la durata prevista ({duration} min).")
+        
+        with s2:
+            if bonk_time:
+                st.metric("Tempo alla Crisi", f"{bonk_time} min", delta=f"-{duration - bonk_time} min vs Target", delta_color="inverse")
+            else:
+                st.metric("Buffer Energetico", "Ottimale", delta="Nessun Bonk previsto")
+        
         final_g = stats['final_glycogen']
         if final_g <= 0:
-            st.error(f"**DEPLETIONE TOTALE:** Esaurimento riserve (Bonk) stimato al minuto {df_sim[df_sim['Glicogeno Residuo (g)'] <= 0].index[0]}.")
-        elif final_g < 100:
-            st.warning("**RISERVA CRITICA:** Livelli di glicogeno < 100g. Rischio calo potenza (Fatigue).")
-        else:
-            st.success("**RISERVA ADEGUATA:** Completamento attività senza deplezione critica.")
+            st.error(f"**DEPLETIONE TOTALE:** Esaurimento completo (Bonk) stimato al minuto {df_sim[df_sim['Glicogeno Residuo (g)'] <= 0].index[0]}.")
