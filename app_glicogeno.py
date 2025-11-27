@@ -245,7 +245,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        # STRATEGIA UNIFICATA (Costante)
         current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
@@ -275,7 +274,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # --- SHIFT METABOLICO (Rif. Zanella/Watt 2002) ---
+            # --- SHIFT METABOLICO DINAMICO (Zanella et al.) ---
+            # Riduzione progressiva uso CHO nel tempo se intensità non è massimale
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 metabolic_shift = (t - 60) * (0.05 / 60.0) 
@@ -514,8 +514,7 @@ with tab2:
         
         act_params = {'mode': sport_mode}
         
-        # Placeholder variabili durata
-        duration = 120 # Default
+        duration = 120 
         
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
@@ -559,7 +558,6 @@ with tab2:
 
                 act_params['speed_kmh'] = speed_kmh
                 
-                st.markdown("---")
                 c_hr1, c_hr2 = st.columns(2)
                 thr_hr = c_hr1.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
                 avg_hr = c_hr2.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
@@ -576,7 +574,6 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
-            # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
@@ -608,9 +605,11 @@ with tab2:
                 
         h_cm = subj.height_cm 
         
+        # Simulazione Principale
         df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, crossover, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
+        # Simulazione Digiuno
         df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, crossover, subj, act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
@@ -710,7 +709,6 @@ with tab2:
             else:
                 st.metric("Buffer", "Ottimale")
         
-        # PIANO DI GARA TABELLARE
         st.markdown("### 📋 Cronotabella di Integrazione")
         
         if carb_intake > 0 and cho_per_unit > 0:
