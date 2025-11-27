@@ -267,14 +267,20 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
         if current_glycogen < 0:
             current_glycogen = 0
             
+        # Definizione stato fisiologico per tooltip
+        status_label = "Ottimale"
+        if current_glycogen < 180: status_label = "CRITICO (Bonk)"
+        elif current_glycogen < 350: status_label = "Warning (Riserva Bassa)"
+            
         results.append({
             "Time (min)": t,
             "Glicogeno Residuo (g)": current_glycogen,
             "Lipidi Ossidati (g)": total_fat_burned_g,
             "CHO Esogeni (g/min)": actual_exo_oxidation_g_min,
-            "Gut Load": gut_accumulation_total,  # Aggiunto per risolvere KeyError
+            "Gut Load": gut_accumulation_total,
             "CHO %": cho_ratio * 100,
-            "RER": rer
+            "RER": rer,
+            "Stato": status_label
         })
         
     stats = {
@@ -520,58 +526,95 @@ with tab2:
         with g1:
             st.caption("Cinetica di Deplezione Glicogeno")
             
+            # --- ALTAIR GRAFICO AVANZATO ---
             max_y = max(start_tank, 800)
             
+            # Fasce di colore per le zone di sicurezza
             bands = pd.DataFrame([
-                {"Zone": "Critical (<180g)", "Start": 0, "End": 180, "Color": "#FFCDD2"}, 
-                {"Zone": "Warning (180-350g)", "Start": 180, "End": 350, "Color": "#FFE0B2"}, 
-                {"Zone": "Optimal (>350g)", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} 
+                {"Zone": "Critica (<180g) - Rischio Bonk", "Start": 0, "End": 180, "Color": "#FFCDD2"}, 
+                {"Zone": "Warning (180-350g) - Sub-ottimale", "Start": 180, "End": 350, "Color": "#FFE0B2"}, 
+                {"Zone": "Ottimale (>350g) - Piena Potenza", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} 
             ])
             
             base = alt.Chart(df_sim).encode(x=alt.X('Time (min)', title='Durata (min)'))
 
-            line = base.mark_area(
-                line={'color':'#D32F2F'}, 
-                color=alt.Gradient(
-                    gradient='linear',
-                    stops=[alt.GradientStop(color='white', offset=0),
-                           alt.GradientStop(color='#D32F2F', offset=1)],
-                    x1=1, x2=1, y1=1, y2=0
-                ),
-                opacity=0.6
-            ).encode(
+            # Linea Principale (Glicogeno)
+            line = base.mark_line(color='#D32F2F', strokeWidth=3).encode(
                 y=alt.Y('Glicogeno Residuo (g)', title='Glicogeno Muscolare (g)'),
-                tooltip=['Time (min)', 'Glicogeno Residuo (g)']
+                tooltip=['Time (min)', 'Glicogeno Residuo (g)', 'Stato']
             )
             
-            zones = alt.Chart(bands).mark_rect(opacity=0.3).encode(
+            # Area sfumata sotto la linea
+            area = base.mark_area(opacity=0.3, color='#D32F2F').encode(
+                y=alt.Y('Glicogeno Residuo (g)')
+            )
+            
+            # Zone di sfondo (Rettangoli colorati) con Label diretta
+            zones = alt.Chart(bands).mark_rect(opacity=0.4).encode(
                 y='Start',
                 y2='End',
-                color=alt.Color('Color', scale=None), 
+                color=alt.Color('Color', scale=None, legend=None), 
                 tooltip='Zone' 
             )
             
-            chart = (zones + line).properties(height=300).interactive()
+            # Etichette delle zone (Testo sul grafico)
+            zone_labels = alt.Chart(bands).mark_text(
+                align='left', baseline='middle', dx=5, dy=-5, color='black', opacity=0.6
+            ).encode(
+                y='Start',
+                text='Zone'
+            )
+            
+            # Linea verticale del Bonk (se presente)
+            critical_df = df_sim[df_sim['Glicogeno Residuo (g)'] <= 0]
+            bonk_chart = alt.Chart(pd.DataFrame()).mark_rule()
+            if not critical_df.empty:
+                bonk_min = critical_df['Time (min)'].min()
+                bonk_data = pd.DataFrame({'x': [bonk_min], 'label': ['ESAURIMENTO']})
+                bonk_rule = alt.Chart(bonk_data).mark_rule(color='black', strokeDash=[4,4]).encode(x='x')
+                bonk_text = alt.Chart(bonk_data).mark_text(align='right', dx=-5, dy=-100, color='black').encode(x='x', text='label')
+                bonk_chart = bonk_rule + bonk_text
+
+            chart = (zones + zone_labels + area + line + bonk_chart).properties(height=350).interactive()
             st.altair_chart(chart, use_container_width=True)
             
-            st.caption("Cinetica Ossidazione Esogena (Ritardo Gastrico)")
+            # Grafico Cinetica Ossidazione (Lag Phase)
+            st.caption("Confronto: Ingestione (Target) vs Ossidazione Reale (Lag Fisiologico)")
             exo_chart = base.mark_line(color='#1E88E5', strokeWidth=3).encode(
-                y=alt.Y('CHO Esogeni (g/min)', title='Ossidazione Esogena Reale (g/min)'),
+                y=alt.Y('CHO Esogeni (g/min)', title='Ossidazione (g/min)'),
                 tooltip=['Time (min)', 'CHO Esogeni (g/min)']
-            ).properties(height=150)
+            ).properties(height=200)
             
             target_line = alt.Chart(pd.DataFrame({'y': [carb_intake/60]})).mark_rule(color='gray', strokeDash=[5,5]).encode(y='y')
+            target_label = alt.Chart(pd.DataFrame({'y': [carb_intake/60], 'label': ['INTAKE TARGET']})).mark_text(align='left', dx=5, dy=-5, color='gray').encode(y='y', text='label')
             
-            st.altair_chart(exo_chart + target_line, use_container_width=True)
-            st.caption("*La linea tratteggiata indica l'ingestione, la linea blu l'ossidazione reale effettiva (con ritardo fisiologico).*")
+            st.altair_chart(exo_chart + target_line + target_label, use_container_width=True)
+            st.info("""
+            ℹ️ **Nota sul Ritardo di Assorbimento:**
+            Il grafico blu mostra che l'energia dei carboidrati ingeriti non è immediata. 
+            Il picco di ossidazione si raggiunge dopo **60-75 minuti** (Steady State).
+            Per questo motivo, integrare tardi (quando si è già stanchi) è inefficace.
+            """)
 
         with g2:
+            st.caption("Accumulo Intestinale (Rischio GI Distress)")
+            # Area chart Gut Load
+            gut_chart = base.mark_area(
+                color='#8D6E63', opacity=0.6
+            ).encode(
+                y=alt.Y('Gut Load', title='Carboidrati nello Stomaco (g)'),
+                tooltip=['Time (min)', 'Gut Load']
+            )
+            
+            # Linea soglia rischio
+            risk_line = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='red', strokeDash=[2,2]).encode(y='y')
+            
+            st.altair_chart((gut_chart + risk_line).properties(height=250), use_container_width=True)
+            st.caption("*Valori > 30g di accumulo indicano alto rischio di nausea/problemi gastrici.*")
+            
+            st.markdown("---")
             st.caption("Ossidazione Lipidica Cumulativa")
             st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
-            
-            st.caption("Accumulo Intestinale Stimato")
-            st.area_chart(df_sim.set_index("Time (min)")["Gut Load"], color="#8D6E63")
-            st.caption("*Carboidrati ingeriti ma non ancora ossidati (Rischio GI).*")
         
         st.subheader("Strategia di Integrazione & Timing")
         
@@ -585,9 +628,9 @@ with tab2:
                 st.error(f"🚨 **PUNTO CRITICO RILEVATO AL MINUTO {bonk_time}**")
                 st.write(f"Con l'attuale intake di **{carb_intake} g/h**, le riserve scenderanno sotto la soglia di sicurezza (180g) dopo **{bonk_time} minuti**.")
                 if carb_intake > 0:
-                    st.info(f"**Consiglio Tattico:** Inizia l'assunzione entro i primi 15-20 minuti per anticipare il picco di ossidazione prima del minuto {bonk_time}.")
+                    st.warning(f"**Azione Richiesta:** Inizia l'assunzione entro i primi **15 minuti**. Se possibile, aumenta la dose o riduci l'intensità.")
                 else:
-                    st.warning("**Attenzione:** Stai viaggiando a zero integrazione.")
+                    st.warning("**Attenzione:** Stai viaggiando a zero integrazione. Il crollo è inevitabile.")
             else:
                 st.success("✅ **STRATEGIA SOSTENIBILE**")
                 st.write(f"Con **{carb_intake} g/h**, le riserve rimangono sopra la soglia critica per tutta la durata prevista.")
