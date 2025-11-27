@@ -34,13 +34,15 @@ class SportType(Enum):
 
 # --- PARAMETRI FASE 2 (RIEMPIMENTO & STATO) ---
 class DietType(Enum):
-    HIGH_CARB = (1.0, "High Carb / Carico (>8g/kg)")
-    NORMAL = (0.85, "Dieta Mista Standard")
-    LOW_CARB = (0.50, "Low Carb / Keto (<3g/kg)")
+    # (factor, label, g_kg_reference)
+    HIGH_CARB = (1.0, "Carico di CHO", 8.0)    # >8 g/kg
+    NORMAL = (0.85, "Dieta Standard", 5.0)     # ~5 g/kg
+    LOW_CARB = (0.50, "Scarico di CHO", 2.5)   # <3 g/kg
 
-    def __init__(self, factor, label):
+    def __init__(self, factor, label, ref_value):
         self.factor = factor
         self.label = label
+        self.ref_value = ref_value
 
 class FatigueState(Enum):
     RESTED = (1.0, "Riposo / Scarico (Tapering)")
@@ -257,8 +259,23 @@ with tab1:
         st.markdown("---")
         st.subheader("2. Stato Iniziale (Livello)")
         
-        diet_map = {d.label: d for d in DietType}
-        s_diet = diet_map[st.selectbox("Nutrizione (Ultime 48h)", list(diet_map.keys()), index=1)]
+        # Generazione Etichette Dinamiche per la Dieta
+        # Creiamo un dizionario temporaneo per mappare "Etichetta Dinamica" -> Oggetto Enum
+        diet_options_map = {}
+        for d in DietType:
+            # Calcolo stima giornaliera: peso * valore_riferimento
+            daily_cho = int(weight * d.ref_value)
+            
+            # Simbolo maggiore/minore per chiarezza
+            sign = ">" if d == DietType.HIGH_CARB else ("<" if d == DietType.LOW_CARB else "~")
+            
+            # Etichetta formattata
+            label = f"{d.label} ({sign}{d.ref_value} g/kg) [~{daily_cho}g/die]"
+            diet_options_map[label] = d
+        
+        # Selectbox usa le etichette dinamiche
+        selected_diet_label = st.selectbox("Nutrizione (Ultime 48h)", list(diet_options_map.keys()), index=1)
+        s_diet = diet_options_map[selected_diet_label]
         
         fatigue_map = {f.label: f for f in FatigueState}
         s_fatigue = fatigue_map[st.selectbox("Attività (Ultime 24h)", list(fatigue_map.keys()), index=0)]
