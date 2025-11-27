@@ -515,6 +515,10 @@ with tab2:
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
+            # --- SEZIONE NUOVA: NUTRIZIONE PRATICA ---
+            st.subheader("Gestione Nutrizione Pratica")
+            cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
+
             if sport_mode == 'cycling':
                 ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 250, step=5)
                 avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
@@ -577,6 +581,13 @@ with tab2:
                 with h_cols[col_idx]:
                     val = st.slider(f"Ora {i+1} (g)", 0, 150, 60, step=10, key=f"intake_h{i}")
                     hourly_intakes.append(val)
+                    
+                    # CALCOLO INTERVALLO PRATICO
+                    if val > 0:
+                        units_per_hour = val / cho_per_unit
+                        if units_per_hour > 0:
+                            interval_min = 60 / units_per_hour
+                            st.caption(f"👉 {units_per_hour:.1f} unità/h (1 ogni **{int(interval_min)} min**)")
             
         with col_meta:
             st.subheader("Profilo Metabolico")
@@ -702,3 +713,20 @@ with tab2:
                 st.metric("Tempo alla Crisi", f"{bonk_time} min", delta_color="inverse")
             else:
                 st.metric("Buffer", "Ottimale")
+        
+        # PIANO DI GARA TABELLARE
+        st.markdown("### 📋 Piano di Gara")
+        plan_data = []
+        for i, intake in enumerate(hourly_intakes):
+            if intake > 0:
+                units = intake / cho_per_unit
+                interval = 60 / units if units > 0 else 60
+                plan_data.append({
+                    "Ora": f"Ora {i+1}",
+                    "Target (g)": intake,
+                    "Azione": f"Assumere 1 unità ({cho_per_unit}g CHO) ogni **{int(interval)} minuti**"
+                })
+        if plan_data:
+            st.table(pd.DataFrame(plan_data))
+        else:
+            st.info("Nessuna integrazione pianificata.")
