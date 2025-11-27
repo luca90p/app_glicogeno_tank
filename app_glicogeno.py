@@ -174,78 +174,57 @@ def calculate_rer_polynomial(intensity_factor):
     return max(0.70, min(1.15, rer))
 
 def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, crossover_pct, subject_obj, activity_params):
-    """
-    Motore di simulazione ibrido: Ciclismo (Watt), Corsa/Altro (HR/Pace) o Lab Data.
-    activity_params: dizionario con i driver dello sforzo.
-    """
     tank_g = subject_data['actual_available_g']
     results = []
     current_glycogen = tank_g
     
-    # 1. Determinazione Driver di Intensità e Costo Energetico
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
     
-    # Valori di default
     avg_power = 0
-    ftp_watts = 250
-    intensity_factor = 0.7 # Default
-    kcal_per_min_total = 10.0 # Default
+    ftp_watts = 250 
+    intensity_factor = 0.7
+    kcal_per_min_base = 10.0
     
-    # Scenario A: Ciclismo (Power)
     if mode == 'cycling':
         avg_power = activity_params['avg_watts']
         ftp_watts = activity_params['ftp_watts']
         intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
-        # Costo: Watt -> Kcal (GE)
-        kcal_per_min_total = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
         
-    # Scenario B: Corsa (Pace + HR)
     elif mode == 'running':
-        # Costo Corsa: ~1 kcal/kg/km (formula di Arcelli/Margaria) indipendentemente dalla velocità
         speed_kmh = activity_params['speed_kmh']
         weight = subject_obj.weight_kg
+        # Costo Corsa: 1 kcal/kg/km
         kcal_per_hour = 1.0 * weight * speed_kmh
-        kcal_per_min_total = kcal_per_hour / 60.0
+        kcal_per_min_base = kcal_per_hour / 60.0
         
-        # Intensità per RER: Usiamo HR come proxy
         avg_hr = activity_params['avg_hr']
         threshold_hr = activity_params['threshold_hr']
         intensity_factor = avg_hr / threshold_hr if threshold_hr > 0 else 0.7
         
-        # FTP proxy per stima max oxidation
         ftp_watts = (subject_obj.vo2max_absolute_l_min * 1000) / 12 
         
-    # Scenario C: Altri Sport (HR puro)
     elif mode == 'other':
         avg_hr = activity_params['avg_hr']
         max_hr = activity_params['max_hr']
         hr_pct = avg_hr / max_hr if max_hr > 0 else 0.7
-        
-        # VO2 stimato a questa %HR 
         vo2_operating = subject_obj.vo2max_absolute_l_min * hr_pct
-        kcal_per_min_total = vo2_operating * 5.0 # 5 kcal/L O2
-        
-        # Threshold proxy
+        kcal_per_min_base = vo2_operating * 5.0 
         threshold_proxy = max_hr * 0.85
         intensity_factor = avg_hr / threshold_proxy 
-        ftp_watts = 200 # Default
+        ftp_watts = 200 
         
-    # Scenario D: Dati Laboratorio (Override Totale)
     is_lab_data = activity_params.get('use_lab_data', False)
     lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
     lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
     
-    # Parametri Calcolo
     crossover_if = crossover_pct / 100.0
     effective_if_for_rer = intensity_factor + ((75.0 - crossover_pct) / 100.0)
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
     
-    # Max Exo Oxidation
     max_exo_rate_g_min = estimate_max_exogenous_oxidation(subject_obj.height_cm, subject_obj.weight_kg, ftp_watts)
     oxidation_efficiency = 0.80 
     
-    # Stato accumulo
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
@@ -253,13 +232,20 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
     for t in range(int(duration_min) + 1):
-        # 1. DRIFT COSTO ENERGETICO (Non si applica se Dati Lab sono fissi)
-        current_kcal_demand = kcal_per_min_total
-        if not is_lab_data and t > 45:
-             # Aumento costo 0.02% al min dopo 45 min
-             current_kcal_demand *= (1 + (t - 45) * 0.0002)
+        current_kcal_demand = 0.0
         
-        # 2. GESTIONE INTAKE
+        if mode == 'cycling':
+            current_eff = gross_efficiency
+            if t > 60: 
+                loss = (t - 60) * 0.02
+                current_eff = max(15.0, gross_efficiency - loss)
+            current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
+        else: 
+            drift_factor = 1.0
+            if t > 60:
+                drift_factor += (t - 60) * 0.0005 
+            current_kcal_demand = kcal_per_min_base * drift_factor
+
         current_hour_idx = min(int(t // 60), len(hourly_intake_strategy) - 1)
         current_intake_g_h = hourly_intake_strategy[current_hour_idx]
         current_intake_g_min = current_intake_g_h / 60.0
@@ -276,32 +262,24 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-        # 3. RIPARTIZIONE SUBSTRATI
         if is_lab_data:
-            # Override da Test Metabolimetro 
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult
-            
-            # Endogeno = Totale - Esogeno
             glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
             min_endo = total_cho_demand * 0.2 
             if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
-            
             fat_burned_per_min = lab_fat_rate 
             cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
-            
         else:
-            # Modello Standard (RER Polinomiale)
             rer = calculate_rer_polynomial(effective_if_for_rer)
             cho_ratio = (rer - 0.70) * 3.45
             cho_ratio = max(0.0, min(1.0, cho_ratio))
             fat_ratio = 1.0 - cho_ratio
             
             kcal_cho_demand = current_kcal_demand * cho_ratio
-            
-            # Glicogeno vs Esogeno
             kcal_from_exo = current_exo_oxidation_g_min * 3.75
+            
             min_glycogen_obligatory = 0.0
             if intensity_factor > 0.6:
                 min_glycogen_obligatory = (kcal_cho_demand * 0.20) / 4.1 
@@ -339,13 +317,14 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
     avg_intake = sum(hourly_intake_strategy) / len(hourly_intake_strategy) if hourly_intake_strategy else 0
     
     total_cho_rate = (glycogen_burned_per_min * 60) + (current_exo_oxidation_g_min * 60)
+    total_kcal_final = current_kcal_demand * 60 
     
     stats = {
         "final_glycogen": current_glycogen,
         "cho_rate_g_h": total_cho_rate,
         "endogenous_burn_rate": glycogen_burned_per_min * 60,
         "fat_rate_g_h": fat_burned_per_min * 60,
-        "kcal_total_h": kcal_per_min_total * 60 if not is_lab_data else (lab_cho_rate*4 + lab_fat_rate*9)*60,
+        "kcal_total_h": total_kcal_final,
         "cho_pct": cho_ratio * 100,
         "gut_accumulation": (gut_accumulation_total / duration_min) * 60 if duration_min > 0 else 0,
         "max_exo_capacity": max_exo_rate_g_min * 60,
@@ -388,7 +367,6 @@ with tab1:
             status_map = {s.label: s for s in TrainingStatus}
             s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2)]
             calculated_conc = s_status.val
-            # Stima inversa VO2 per fallback Tab 2
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
             vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
@@ -521,7 +499,6 @@ with tab2:
         start_tank = st.session_state['tank_g']
         subj = st.session_state.get('subject_struct', None)
         
-        # --- RILEVAMENTO MODALITÀ ---
         sport_mode = 'cycling'
         if subj.sport == SportType.RUNNING:
             sport_mode = 'running'
@@ -532,6 +509,9 @@ with tab2:
         
         act_params = {'mode': sport_mode}
         
+        # Placeholder variabili durata
+        duration = 120 # Default
+        
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
@@ -541,42 +521,52 @@ with tab2:
                 act_params['ftp_watts'] = ftp
                 act_params['avg_watts'] = avg_w
                 act_params['efficiency'] = st.slider("Efficienza Meccanica [%]", 16.0, 26.0, 22.0, 0.5)
+                duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
                 
             elif sport_mode == 'running':
-                c_speed, c_hr = st.columns(2)
+                run_input_mode = st.radio("Modalità Obiettivo:", ["Imposta Passo & Distanza", "Imposta Tempo & Distanza"], horizontal=True)
                 
-                # --- GENERAZIONE LISTA PASSI (5 sec step) ---
+                c_dist, c_var = st.columns(2)
+                distance_km = c_dist.number_input("Distanza (km)", 1.0, 100.0, 21.1, 0.1)
+                
                 paces_options = []
-                for m in range(2, 16): # Da 2:00 a 15:00
+                for m in range(2, 16): 
                     for s in range(0, 60, 5):
                         paces_options.append(f"{m}:{s:02d}")
-                
-                pace_str = c_speed.select_slider(
-                    "Passo Gara (min/km)",
-                    options=paces_options,
-                    value="5:00"
-                )
-                
-                # Conversione Passo -> km/h
-                pm, ps = map(int, pace_str.split(':'))
-                pace_decimal = pm + ps/60.0
-                speed_kmh = 60.0 / pace_decimal
-                
-                st.caption(f"Velocità stimata: {speed_kmh:.1f} km/h")
+
+                if run_input_mode == "Imposta Passo & Distanza":
+                    pace_str = c_var.select_slider("Passo Obiettivo (min/km)", options=paces_options, value="5:00")
+                    pm, ps = map(int, pace_str.split(':'))
+                    pace_decimal = pm + ps/60.0
+                    duration = distance_km * pace_decimal
+                    speed_kmh = 60.0 / pace_decimal
+                    st.info(f"⏱️ Durata prevista: **{int(duration // 60)}h {int(duration % 60)}m**")
+                else:
+                    target_h = c_var.number_input("Ore", 0, 24, 1)
+                    target_m = c_var.number_input("Minuti", 0, 59, 45)
+                    duration = (target_h * 60) + target_m
+                    if duration == 0: duration = 1
+                    pace_decimal = duration / distance_km
+                    speed_kmh = 60.0 / pace_decimal
+                    p_min = int(pace_decimal)
+                    p_sec = int((pace_decimal - p_min) * 60)
+                    st.info(f"🏃 Passo richiesto: **{p_min}:{p_sec:02d} /km**")
+
                 act_params['speed_kmh'] = speed_kmh
                 
-                thr_hr = c_hr.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
-                avg_hr = c_hr.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
+                st.markdown("---")
+                c_hr1, c_hr2 = st.columns(2)
+                thr_hr = c_hr1.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
+                avg_hr = c_hr2.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['threshold_hr'] = thr_hr
                 
-            else: # Other sports
+            else: 
                 max_hr = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
                 avg_hr = st.number_input("Frequenza Cardiaca Media Gara", 80, 220, 140, 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['max_hr'] = max_hr
-            
-            duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
+                duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
             
             st.markdown("#### Strategia Nutrizionale (per ora)")
             num_hours = math.ceil(duration / 60)
@@ -591,7 +581,6 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico")
             
-            # --- CUSTOM LAB DATA TOGGLE ---
             use_lab = st.checkbox("Usa Dati Reali da Metabolimetro (Test)", help="Se hai fatto un test del gas in laboratorio, inserisci i dati reali per la massima precisione.")
             act_params['use_lab_data'] = use_lab
             
@@ -601,7 +590,7 @@ with tab2:
                 lab_fat = st.number_input("Consumo Grassi (g/h) da Test", 0, 150, 30, 5)
                 act_params['lab_cho_g_h'] = lab_cho
                 act_params['lab_fat_g_h'] = lab_fat
-                crossover = 75 # Dummy value
+                crossover = 75 
             else:
                 crossover = st.slider("Crossover Point (Soglia Aerobica) [% Soglia]", 50, 85, 70, 5,
                                       help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
@@ -611,11 +600,9 @@ with tab2:
                 
         h_cm = subj.height_cm 
         
-        # Simulazione Principale (Con Integrazione)
         df_sim, stats = simulate_metabolism(tank_data, duration, hourly_intakes, crossover, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
-        # Simulazione Confronto (Zero Intake)
         zero_intake = [0] * num_hours
         df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, zero_intake, crossover, subj, act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
