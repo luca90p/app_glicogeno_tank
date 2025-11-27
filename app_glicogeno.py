@@ -35,8 +35,12 @@ class SportType(Enum):
 # --- PARAMETRI STATO FISIOLOGICO ---
 class DietType(Enum):
     # (factor, label, g_kg_reference)
-    HIGH_CARB = (1.0, "Carico Carboidrati (High CHO)", 8.0)
-    NORMAL = (0.85, "Regime Normocalorico Misto", 5.0)
+    # RICALIBRAZIONE ARETA & HOPKINS 2018:
+    # La formula base stima la condizione "Normal".
+    # High Carb (Supercompensazione) offre un boost (+25%).
+    # Low Carb causa una deplezione severa (-50%).
+    HIGH_CARB = (1.25, "Carico Carboidrati (Supercompensazione)", 8.0)
+    NORMAL = (1.00, "Regime Normocalorico Misto (Baseline)", 5.0)
     LOW_CARB = (0.50, "Restrizione Glucidica / Low Carb", 2.5)
 
     def __init__(self, factor, label, ref_value):
@@ -47,7 +51,7 @@ class DietType(Enum):
 class FatigueState(Enum):
     RESTED = (1.0, "Riposo / Tapering (Pieno Recupero)")
     ACTIVE = (0.9, "Carico di lavoro moderato (24h prec.)")
-    TIRED = (0.65, "Carico di lavoro elevato (Recupero incompleto)")
+    TIRED = (0.60, "Alto carico o Danno Muscolare (EIMD)") # Penalità aumentata per danno
 
     def __init__(self, factor, label):
         self.factor = factor
@@ -106,7 +110,7 @@ class Subject:
 def get_concentration_from_vo2max(vo2_max):
     """
     Stima lineare della concentrazione di glicogeno muscolare (g/kg ww) basata sul VO2max.
-    Rif: Areta & Hopkins (2018).
+    Rif: Areta & Hopkins (2018) - Valori per disponibilità CHO NORMALE.
     """
     conc = 13.0 + (vo2_max - 30.0) * 0.24
     if conc < 12.0: conc = 12.0
@@ -118,44 +122,56 @@ def calculate_tank(subject: Subject):
     total_muscle = lbm * subject.muscle_fraction
     active_muscle = total_muscle * subject.sport.val
     
-    # 1. Capacità Teorica Massima
+    # 1. Capacità Basale (Normal Diet)
+    base_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg
+    
+    # 2. Capacità "Boosted" (Creatina aumenta lo spazio di stoccaggio)
     creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
-    max_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg * creatine_multiplier
+    potential_capacity = base_muscle_glycogen * creatine_multiplier
     
-    # 2. Riempimento Reale (Muscolo)
+    # 3. Riempimento Reale (Applicazione Diet & Fatigue)
+    # Nota: DietType.HIGH_CARB ora è > 1.0, permettendo la supercompensazione oltre il basale
     final_filling_factor = subject.filling_factor * subject.menstrual_phase.factor
-    current_muscle_glycogen = max_muscle_glycogen * final_filling_factor
+    current_muscle_glycogen = potential_capacity * final_filling_factor
     
-    # 3. Riempimento Reale (Fegato) con Logica Biomarker (Glicemia)
+    # Cap di sicurezza fisiologica (non possiamo superare certi limiti biologici assoluti ~35 g/kg)
+    max_physiological_limit = active_muscle * 35.0
+    if current_muscle_glycogen > max_physiological_limit:
+        current_muscle_glycogen = max_physiological_limit
+    
+    # 4. Riserve Epatiche
     liver_fill_factor = 1.0
     liver_correction_note = None
     
-    # A. Correzione base da dieta/filling
-    if final_filling_factor <= 0.6: 
+    # A. Correzione da dieta (Low Carb svuota anche il fegato)
+    # Se la dieta è normale o alta, il fegato si presume pieno (salvo digiuno)
+    if subject.filling_factor <= 0.6: 
         liver_fill_factor = 0.6
         
     # B. Override da Biomarker (Glicemia)
     if subject.glucose_mg_dl is not None:
         if subject.glucose_mg_dl < 70:
-            liver_fill_factor = 0.2 # Ipoglicemia a digiuno = fegato vuoto
+            liver_fill_factor = 0.2 # Ipoglicemia
             liver_correction_note = "Criticità Epatica (Glicemia < 70)"
         elif subject.glucose_mg_dl < 85:
-            liver_fill_factor = min(liver_fill_factor, 0.5) # Riserve compromesse
+            liver_fill_factor = min(liver_fill_factor, 0.5)
             liver_correction_note = "Riduzione Epatica (Glicemia 70-85)"
     
     current_liver_glycogen = subject.liver_glycogen_g * liver_fill_factor
         
     total_actual_glycogen = current_muscle_glycogen + current_liver_glycogen
-    max_total_glycogen = max_muscle_glycogen + 100.0 
+    
+    # Max capacity teorica (per il grafico) è considerata in condizioni di Carico Perfetto
+    max_total_capacity = (base_muscle_glycogen * 1.25 * creatine_multiplier) + 100.0
 
     return {
         "active_muscle_kg": active_muscle,
-        "max_capacity_g": max_total_glycogen,          
+        "max_capacity_g": max_total_capacity,          
         "actual_available_g": total_actual_glycogen,   
         "muscle_glycogen_g": current_muscle_glycogen,
         "liver_glycogen_g": current_liver_glycogen,
         "concentration_used": subject.glycogen_conc_g_kg,
-        "fill_pct": (total_actual_glycogen / max_total_glycogen) * 100 if max_total_glycogen > 0 else 0,
+        "fill_pct": (total_actual_glycogen / max_total_capacity) * 100 if max_total_capacity > 0 else 0,
         "creatine_bonus": subject.uses_creatine,
         "liver_note": liver_correction_note
     }
@@ -167,7 +183,6 @@ def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_
     intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
     crossover_if = crossover_pct / 100.0
     
-    # Efficienza meccanica lorda standard (Gross Efficiency) ~22%
     kcal_per_min_total = (avg_power * 60) / 4184 / 0.22
     
     slope_k = 12.0
@@ -175,11 +190,9 @@ def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_
     if intensity_factor <= 0.2:
         cho_ratio = 0.10
     else:
-        # Funzione Sigmoide per la transizione metabolica
         cho_ratio = 1 / (1 + np.exp(-slope_k * (intensity_factor - crossover_if)))
         if cho_ratio < 0.10: cho_ratio = 0.10
         if cho_ratio > 1.0: cho_ratio = 1.0
-        # Sopra soglia (FTP), contributo anaerobico preponderante
         if intensity_factor > 1.05:
             cho_ratio = 1.0
 
@@ -187,7 +200,6 @@ def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_
     kcal_cho = kcal_per_min_total * cho_ratio
     kcal_fat = kcal_per_min_total * fat_ratio
     
-    # Conversione energetica substrati (4.1 kcal/g CHO, 9.0 kcal/g FAT)
     glycogen_burned_per_min = kcal_cho / 4.1
     fat_burned_per_min = kcal_fat / 9.0
     glycogen_intake_per_min = carb_intake_g_h / 60.0
@@ -266,7 +278,6 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        # PARAMETRI AVANZATI (Include ora anche la Glicemia)
         with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
             use_creatine = st.checkbox("Supplementazione Creatina", help="Aumento volume cellulare e capacità di stoccaggio stimata (+10%).")
             
@@ -305,7 +316,6 @@ with tab1:
         fatigue_map = {f.label: f for f in FatigueState}
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0)]
         
-        # Checkbox Digiuno: visibile SOLO se NON abbiamo la glicemia (che è più precisa)
         is_fasted = False
         if not has_glucose:
             is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
@@ -314,7 +324,7 @@ with tab1:
         
         liver_val = 100.0
         if is_fasted:
-            liver_val = 40.0 # Valore default se digiuno senza glucometro
+            liver_val = 40.0 
         
         subject = Subject(
             weight_kg=weight, body_fat_pct=bf, sex=s_sex, 
@@ -348,12 +358,12 @@ with tab1:
                   help="Quantità totale stimata disponibile per l'attività.")
         c2.metric("Capacità di Stoccaggio", f"{int(tank_data['max_capacity_g'])} g",
                   delta=f"{int(tank_data['actual_available_g'] - tank_data['max_capacity_g'])} g",
-                  help="Capacità massima teorica in condizioni ideali.")
+                  help="Capacità massima teorica in condizioni di Supercompensazione.")
         c3.metric("Energia Disponibile (CHO)", f"{int(tank_data['actual_available_g'] * 4.1)} kcal")
         
         st.caption("Analisi comparativa: Capacità Teorica vs Disponibilità Reale")
         chart_df = pd.DataFrame({
-            "Stato": ["Capacità Teorica", "Disponibilità Reale"],
+            "Stato": ["Capacità Teorica (Carico)", "Disponibilità Reale"],
             "Glicogeno (g)": [tank_data['max_capacity_g'], tank_data['actual_available_g']]
         })
         st.bar_chart(chart_df, x="Stato", y="Glicogeno (g)", color="Stato")
@@ -361,7 +371,8 @@ with tab1:
         st.markdown("---")
         
         factors_text = []
-        if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
+        if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+        if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
         if use_creatine: factors_text.append("Bonus volume plasmatico/creatina (+10% Cap)")
         if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5% filling)")
         if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
