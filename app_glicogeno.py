@@ -202,7 +202,7 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
         
     # Scenario B: Corsa (Pace + HR)
     elif mode == 'running':
-        # Costo Corsa: ~1 kcal/kg/km
+        # Costo Corsa: ~1 kcal/kg/km (formula di Arcelli/Margaria) indipendentemente dalla velocità
         speed_kmh = activity_params['speed_kmh']
         weight = subject_obj.weight_kg
         kcal_per_hour = 1.0 * weight * speed_kmh
@@ -544,8 +544,24 @@ with tab2:
                 
             elif sport_mode == 'running':
                 c_speed, c_hr = st.columns(2)
-                pace_min = c_speed.number_input("Passo Gara (min/km)", 2.0, 10.0, 5.0, 0.1)
-                speed_kmh = 60 / pace_min
+                
+                # --- GENERAZIONE LISTA PASSI (5 sec step) ---
+                paces_options = []
+                for m in range(2, 16): # Da 2:00 a 15:00
+                    for s in range(0, 60, 5):
+                        paces_options.append(f"{m}:{s:02d}")
+                
+                pace_str = c_speed.select_slider(
+                    "Passo Gara (min/km)",
+                    options=paces_options,
+                    value="5:00"
+                )
+                
+                # Conversione Passo -> km/h
+                pm, ps = map(int, pace_str.split(':'))
+                pace_decimal = pm + ps/60.0
+                speed_kmh = 60.0 / pace_decimal
+                
                 st.caption(f"Velocità stimata: {speed_kmh:.1f} km/h")
                 act_params['speed_kmh'] = speed_kmh
                 
