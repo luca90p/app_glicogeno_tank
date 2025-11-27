@@ -32,7 +32,7 @@ class SportType(Enum):
         self.val = val
         self.label = label
 
-# --- NUOVI ENUM PER FASE 2 (RIEMPIMENTO) ---
+# --- PARAMETRI FASE 2 (RIEMPIMENTO & STATO) ---
 class DietType(Enum):
     HIGH_CARB = (1.0, "High Carb / Carico (>8g/kg)")
     NORMAL = (0.85, "Dieta Mista Standard")
@@ -51,6 +51,25 @@ class FatigueState(Enum):
         self.factor = factor
         self.label = label
 
+# NUOVI PARAMETRI AVANZATI
+class SleepQuality(Enum):
+    GOOD = (1.0, "Ottimo (>7h, ristoratore)")
+    AVERAGE = (0.95, "Sufficiente (6-7h)")
+    POOR = (0.85, "Insufficiente (<6h o disturbato)")
+
+    def __init__(self, factor, label):
+        self.factor = factor
+        self.label = label
+
+class MenstrualPhase(Enum):
+    NONE = (1.0, "Non applicabile / Amenorrea")
+    FOLLICULAR = (1.0, "Fase Follicolare (Giorni 1-14)")
+    LUTEAL = (0.95, "Fase Luteale/Premestruale (Giorni 15-28)")
+
+    def __init__(self, factor, label):
+        self.factor = factor
+        self.label = label
+
 @dataclass
 class Subject:
     weight_kg: float
@@ -59,8 +78,13 @@ class Subject:
     glycogen_conc_g_kg: float
     sport: SportType
     liver_glycogen_g: float = 100.0
-    # Parametro chiave Fase 2
+    
+    # Parametri riempimento
     filling_factor: float = 1.0 
+    
+    # Parametri avanzati
+    uses_creatine: bool = False
+    menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
 
     @property
     def lean_body_mass(self) -> float:
@@ -88,27 +112,33 @@ def calculate_tank(subject: Subject):
     active_muscle = total_muscle * subject.sport.val
     
     # 1. Capacità Teorica Massima (100% Full)
-    max_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg
+    # Include Bonus Creatina se presente (+10% capacità stoccaggio)
+    creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
+    max_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg * creatine_multiplier
     
-    # 2. Riempimento Reale (Applicazione Diet & Fatigue)
-    current_muscle_glycogen = max_muscle_glycogen * subject.filling_factor
+    # 2. Riempimento Reale
+    # Include penalità mestruale (solo fase Luteale) nel filling factor
+    final_filling_factor = subject.filling_factor * subject.menstrual_phase.factor
     
-    # Fegato: influenzato da Low Carb e Digiuno (gestito fuori)
+    current_muscle_glycogen = max_muscle_glycogen * final_filling_factor
+    
+    # Fegato
     current_liver_glycogen = subject.liver_glycogen_g
-    if subject.filling_factor <= 0.6: # Caso Low Carb
+    if final_filling_factor <= 0.6: 
         current_liver_glycogen *= 0.6 
         
     total_actual_glycogen = current_muscle_glycogen + current_liver_glycogen
-    max_total_glycogen = max_muscle_glycogen + 100.0 # Standard liver max
+    max_total_glycogen = max_muscle_glycogen + 100.0 
 
     return {
         "active_muscle_kg": active_muscle,
-        "max_capacity_g": max_total_glycogen,          # Quanto PUO' tenere
-        "actual_available_g": total_actual_glycogen,   # Quanto HA adesso
+        "max_capacity_g": max_total_glycogen,          
+        "actual_available_g": total_actual_glycogen,   
         "muscle_glycogen_g": current_muscle_glycogen,
         "liver_glycogen_g": current_liver_glycogen,
         "concentration_used": subject.glycogen_conc_g_kg,
-        "fill_pct": (total_actual_glycogen / max_total_glycogen) * 100 if max_total_glycogen > 0 else 0
+        "fill_pct": (total_actual_glycogen / max_total_glycogen) * 100 if max_total_glycogen > 0 else 0,
+        "creatine_bonus": subject.uses_creatine
     }
 
 def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct):
@@ -210,11 +240,23 @@ with tab1:
 
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Sport", list(sport_map.keys()))]
+        
+        # PARAMETRI AVANZATI (Nuova Sezione)
+        with st.expander("🔬 Parametri Avanzati (Creatina, Sonno, Ciclo)"):
+            use_creatine = st.checkbox("Uso di Creatina", help="La creatina aumenta la ritenzione idrica muscolare e lo stoccaggio di glicogeno (+10%).")
+            
+            sleep_map = {s.label: s for s in SleepQuality}
+            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (Ieri)", list(sleep_map.keys()), index=0)]
+            
+            # Mostra ciclo solo se Donna
+            s_menstrual = MenstrualPhase.NONE
+            if s_sex == Sex.FEMALE:
+                menstrual_map = {m.label: m for m in MenstrualPhase}
+                s_menstrual = menstrual_map[st.selectbox("Fase Ciclo Mestruale", list(menstrual_map.keys()), index=0)]
 
         st.markdown("---")
         st.subheader("2. Stato Iniziale (Livello)")
         
-        # INPUT NUOVI: DIETA E FATICA
         diet_map = {d.label: d for d in DietType}
         s_diet = diet_map[st.selectbox("Nutrizione (Ultime 48h)", list(diet_map.keys()), index=1)]
         
@@ -223,8 +265,8 @@ with tab1:
         
         is_fasted = st.checkbox("Allenamento a Digiuno", help="Riduce drasticamente le scorte epatiche.")
         
-        # Calcolo combinato del Filling Factor
-        combined_filling = s_diet.factor * s_fatigue.factor
+        # Calcolo combinato del Filling Factor (Diet * Fatigue * Sleep)
+        combined_filling = s_diet.factor * s_fatigue.factor * s_sleep.factor
         
         liver_val = 40.0 if is_fasted else 100.0
         
@@ -232,7 +274,9 @@ with tab1:
             weight_kg=weight, body_fat_pct=bf, sex=s_sex, 
             glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
             liver_glycogen_g=liver_val,
-            filling_factor=combined_filling 
+            filling_factor=combined_filling,
+            uses_creatine=use_creatine,
+            menstrual_phase=s_menstrual
         )
         
         tank_data = calculate_tank(subject)
@@ -267,11 +311,17 @@ with tab1:
             "Stato": ["Massimo Teorico", "Disponibile Ora"],
             "Glicogeno (g)": [tank_data['max_capacity_g'], tank_data['actual_available_g']]
         })
-        # CORREZIONE: Usiamo color="Stato" per assegnare colori automatici ma distinti
         st.bar_chart(chart_df, x="Stato", y="Glicogeno (g)", color="Stato")
         
         st.markdown("---")
-        st.caption(f"**Dettaglio:** Stai usando il **{int(combined_filling*100)}%** della tua capacità muscolare a causa di Nutrizione e Recupero.")
+        
+        factors_text = []
+        if combined_filling < 1.0: factors_text.append(f"Nutrizione/Sonno/Recupero ({int(combined_filling*100)}%)")
+        if use_creatine: factors_text.append("Bonus Creatina (+10% Cap)")
+        if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5%)")
+        
+        if factors_text:
+            st.caption(f"**Fattori attivi:** {', '.join(factors_text)}")
 
 # --- TAB 2: SIMULAZIONE CONSUMO ---
 with tab2:
