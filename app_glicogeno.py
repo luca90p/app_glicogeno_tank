@@ -194,11 +194,10 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, hourly
     # Stato accumulo e ossidazione
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
-    current_exo_oxidation_g_min = 0.0 # Valore corrente filtrato (lagged)
+    current_exo_oxidation_g_min = 0.0 
     
     # Parametri Cinetica Dinamica
     tau_absorption = 20.0 
-    # Coefficiente filtro esponenziale (1 min step)
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
     for t in range(int(duration_min) + 1):
@@ -215,10 +214,10 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, hourly
         current_intake_g_h = hourly_intake_strategy[current_hour_idx]
         current_intake_g_min = current_intake_g_h / 60.0
         
-        # Target ossidabile a regime per questo intake
+        # Target ossidabile a regime
         target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
         
-        # Aggiornamento dinamico ossidazione (Filtro passa-basso per simulare ritardo)
+        # Aggiornamento dinamico ossidazione
         if t > 0:
             current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
         else:
@@ -226,10 +225,9 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, hourly
             
         # Accumulo intestinale
         if t > 0:
-            # Ciò che mangio - ciò che ossido realmente
             delta_gut = (current_intake_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             gut_accumulation_total += delta_gut
-            if gut_accumulation_total < 0: gut_accumulation_total = 0 # Safety
+            if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
         # 3. BILANCIO ENERGETICO
         rer = calculate_rer_polynomial(effective_if_for_rer)
@@ -268,7 +266,7 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, hourly
             "Glicogeno Residuo (g)": current_glycogen,
             "Lipidi Ossidati (g)": total_fat_burned_g,
             "CHO Esogeni (g/min)": current_exo_oxidation_g_min,
-            "Target Intake (g/h)": current_intake_g_h, # Per grafico
+            "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "CHO %": cho_ratio * 100,
             "RER": rer,
@@ -459,14 +457,11 @@ with tab2:
             avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
             duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
             
-            # --- STRATEGIA DI INTAKE MULTI-STAGE ---
             st.markdown("#### Strategia Nutrizionale (per ora)")
             num_hours = math.ceil(duration / 60)
             hourly_intakes = []
             
-            # Creazione dinamica slider per ogni ora
-            # Usiamo colonne per compattare
-            h_cols = st.columns(min(num_hours, 4)) # Max 4 colonne per riga
+            h_cols = st.columns(min(num_hours, 4)) 
             
             for i in range(num_hours):
                 col_idx = i % 4
@@ -489,7 +484,17 @@ with tab2:
         subj = st.session_state.get('subject_struct', None)
         h_cm = subj.height_cm if subj else 175
         
+        # Simulazione Principale (Con Integrazione)
         df_sim, stats = simulate_metabolism(tank_data, ftp, avg_w, duration, hourly_intakes, crossover, h_cm, efficiency)
+        df_sim["Scenario"] = "Con Integrazione (Strategia)"
+        
+        # Simulazione Confronto (Zero Intake)
+        zero_intake = [0] * num_hours
+        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, ftp, avg_w, duration, zero_intake, crossover, h_cm, efficiency)
+        df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
+        
+        # Unione dati per grafico
+        combined_df = pd.concat([df_sim, df_no_cho])
         
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
@@ -532,25 +537,23 @@ with tab2:
 
         g1, g2 = st.columns([2, 1])
         with g1:
-            st.caption("Cinetica di Deplezione Glicogeno")
+            st.caption("Cinetica di Deplezione Glicogeno: Strategia vs Digiuno")
             
             max_y = max(start_tank, 800)
             
             bands = pd.DataFrame([
-                {"Zone": "Critica (<180g) - Rischio Bonk", "Start": 0, "End": 180, "Color": "#FFCDD2"}, 
-                {"Zone": "Warning (180-350g) - Sub-ottimale", "Start": 180, "End": 350, "Color": "#FFE0B2"}, 
-                {"Zone": "Ottimale (>350g) - Piena Potenza", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} 
+                {"Zone": "Critica (<180g)", "Start": 0, "End": 180, "Color": "#FFCDD2"}, 
+                {"Zone": "Warning (180-350g)", "Start": 180, "End": 350, "Color": "#FFE0B2"}, 
+                {"Zone": "Ottimale (>350g)", "Start": 350, "End": max_y + 100, "Color": "#C8E6C9"} 
             ])
             
-            base = alt.Chart(df_sim).encode(x=alt.X('Time (min)', title='Durata (min)'))
+            base = alt.Chart(combined_df).encode(x=alt.X('Time (min)', title='Durata (min)'))
 
-            line = base.mark_line(color='#D32F2F', strokeWidth=3).encode(
+            # Linee Deplezione (Multi-Color in base allo Scenario)
+            lines = base.mark_line(strokeWidth=3).encode(
                 y=alt.Y('Glicogeno Residuo (g)', title='Glicogeno Muscolare (g)'),
-                tooltip=['Time (min)', 'Glicogeno Residuo (g)', 'Stato']
-            )
-            
-            area = base.mark_area(opacity=0.3, color='#D32F2F').encode(
-                y=alt.Y('Glicogeno Residuo (g)')
+                color=alt.Color('Scenario', scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], range=['#D32F2F', '#757575'])),
+                tooltip=['Time (min)', 'Glicogeno Residuo (g)', 'Stato', 'Scenario']
             )
             
             zones = alt.Chart(bands).mark_rect(opacity=0.4).encode(
@@ -567,37 +570,20 @@ with tab2:
                 text='Zone'
             )
             
-            critical_df = df_sim[df_sim['Glicogeno Residuo (g)'] <= 0]
-            bonk_chart = alt.Chart(pd.DataFrame()).mark_rule()
-            if not critical_df.empty:
-                bonk_min = critical_df['Time (min)'].min()
-                bonk_data = pd.DataFrame({'x': [bonk_min], 'label': ['ESAURIMENTO']})
-                bonk_rule = alt.Chart(bonk_data).mark_rule(color='black', strokeDash=[4,4]).encode(x='x')
-                bonk_text = alt.Chart(bonk_data).mark_text(align='right', dx=-5, dy=-100, color='black').encode(x='x', text='label')
-                bonk_chart = bonk_rule + bonk_text
-
-            chart = (zones + zone_labels + area + line + bonk_chart).properties(height=350).interactive()
+            chart = (zones + zone_labels + lines).properties(height=350).interactive()
             st.altair_chart(chart, use_container_width=True)
             
-            st.caption("Confronto: Ingestione Pianificata (Target) vs Ossidazione Reale (Lag Fisiologico)")
+            st.caption("Confronto: Ingestione Pianificata (Target) vs Ossidazione Reale")
             
-            # Grafico combinato Target vs Reale
-            # Usiamo mark_step per il Target (perché cambia a scatti ogni ora)
-            # E mark_line per l'Ossidazione (curva smooth)
-            
-            # Per il target, dobbiamo creare una serie temporale step nel dataframe
-            # Creiamo i dati per il grafico intake
             intake_df = df_sim[['Time (min)', 'Target Intake (g/h)', 'CHO Esogeni (g/min)']].copy()
             intake_df['Ossidazione Reale (g/h)'] = intake_df['CHO Esogeni (g/min)'] * 60
             
-            # Chart Target (Step)
             target_chart = alt.Chart(intake_df).mark_line(interpolate='step-after', color='gray', strokeDash=[5,5]).encode(
                 x='Time (min)',
                 y=alt.Y('Target Intake (g/h)', title='Rateo Carboidrati (g/h)'),
                 tooltip=['Time (min)', 'Target Intake (g/h)']
             )
             
-            # Chart Ossidazione (Smooth)
             real_chart = alt.Chart(intake_df).mark_line(color='#1E88E5', strokeWidth=3).encode(
                 x='Time (min)',
                 y='Ossidazione Reale (g/h)',
@@ -609,9 +595,10 @@ with tab2:
 
         with g2:
             st.caption("Accumulo Intestinale (Rischio GI Distress)")
-            gut_chart = base.mark_area(
+            gut_chart = alt.Chart(df_sim).mark_area(
                 color='#8D6E63', opacity=0.6
             ).encode(
+                x='Time (min)',
                 y=alt.Y('Gut Load', title='Carboidrati nello Stomaco (g)'),
                 tooltip=['Time (min)', 'Gut Load']
             )
@@ -629,6 +616,9 @@ with tab2:
         critical_df = df_sim[df_sim['Glicogeno Residuo (g)'] < 180]
         bonk_time = critical_df['Time (min)'].min() if not critical_df.empty else None
         
+        critical_df_no = df_no_cho[df_no_cho['Glicogeno Residuo (g)'] < 180]
+        bonk_time_no = critical_df_no['Time (min)'].min() if not critical_df_no.empty else None
+        
         s1, s2 = st.columns([2, 1])
         
         with s1:
@@ -640,7 +630,11 @@ with tab2:
                     st.warning("Stai viaggiando a zero integrazione. Il crollo è inevitabile.")
             else:
                 st.success("✅ **STRATEGIA SOSTENIBILE**")
-                st.write(f"Le riserve rimangono sopra la soglia critica per tutta la durata prevista.")
+                if bonk_time_no:
+                    saved_time = duration - bonk_time_no
+                    st.write(f"Senza integrazione saresti andato in crisi al minuto **{bonk_time_no}**. La tua strategia ti ha salvato!")
+                else:
+                    st.write(f"Le riserve rimangono sopra la soglia critica per tutta la durata prevista.")
         
         with s2:
             if bonk_time:
