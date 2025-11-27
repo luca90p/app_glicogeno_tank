@@ -192,7 +192,7 @@ def calculate_rer_polynomial(intensity_factor):
     # Per il calcolo dei substrati (stechiometria Frayn), RER > 1.0 viene trattato come 100% CHO.
     return max(0.70, min(1.15, rer))
 
-def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct, height_cm):
+def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct, height_cm, gross_efficiency):
     tank_g = subject_data['actual_available_g']
     results = []
     current_glycogen = tank_g
@@ -201,18 +201,17 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
     base_intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
     
     # Adattamento Individuale (Crossover Slider)
-    # La formula polinomiale è fissa. Per rispettare il profilo metabolico dell'atleta (Diesel vs Turbo),
-    # spostiamo l'IF effettivo percepito dalla formula.
-    # Standard Crossover (RER 0.85~0.90) avviene solitamente intorno a IF 0.75-0.80.
-    # Se l'atleta ha crossover a 60% (Turbo), per lui IF 0.60 è faticoso come 0.75.
-    standard_crossover_ref = 75.0 # % FTP di riferimento medio
+    standard_crossover_ref = 75.0 
     shift_factor = (standard_crossover_ref - crossover_pct) / 100.0
     effective_if_for_rer = base_intensity_factor + shift_factor
     
-    # Limiti di sicurezza per il calcolo
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
     
-    kcal_per_min_total = (avg_power * 60) / 4184 / 0.22
+    # --- CALCOLO COSTO ENERGETICO CON EFFICIENZA VARIABILE ---
+    # 1 kcal = 4184 J
+    # Efficiency (es. 22%) significa che solo il 22% dell'energia metabolica diventa meccanica.
+    # Quindi: Kcal Totali = (Watt * 60) / 4184 / Efficiency
+    kcal_per_min_total = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
     
     # Ossidazione Esogena
     max_exo_rate_g_min = estimate_max_exogenous_oxidation(height_cm, subject_data['active_muscle_kg']*2.2, ftp_watts)
@@ -225,7 +224,6 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
     rer = calculate_rer_polynomial(effective_if_for_rer)
     
     # Calcolo %CHO da RER (Tabella Zuntz: RER 0.7=0% CHO, RER 1.0=100% CHO)
-    # Formula inversa lineare approssimata: %CHO = (RER - 0.70) / 0.30
     cho_ratio = (rer - 0.70) / 0.30
     
     # Clamp ratio
@@ -278,7 +276,8 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
         "gut_accumulation": gut_accumulation_g_h,
         "max_exo_capacity": max_exo_rate_g_min * 60,
         "intensity_factor": base_intensity_factor,
-        "avg_rer": rer
+        "avg_rer": rer,
+        "gross_efficiency": gross_efficiency
     }
 
     return pd.DataFrame(results), stats
@@ -452,6 +451,11 @@ with tab2:
             
         with col_meta:
             st.subheader("Profilo Metabolico")
+            
+            # SLIDER EFFICIENZA MECCANICA
+            efficiency = st.slider("Efficienza Meccanica (Gross Efficiency) [%]", 16.0, 26.0, 22.0, 0.5,
+                                   help="Percentuale di energia metabolica convertita in lavoro meccanico. Principianti ~18%, Elite ~24%.")
+            
             crossover = st.slider("Crossover Point (Soglia Aerobica) [% FTP]", 50, 85, 70, 5,
                                   help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
             if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
@@ -461,7 +465,7 @@ with tab2:
         subj = st.session_state.get('subject_struct', None)
         h_cm = subj.height_cm if subj else 175
         
-        df_sim, stats = simulate_metabolism(tank_data, ftp, avg_w, duration, carb_intake, crossover, h_cm)
+        df_sim, stats = simulate_metabolism(tank_data, ftp, avg_w, duration, carb_intake, crossover, h_cm, efficiency)
         
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
