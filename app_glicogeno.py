@@ -271,7 +271,8 @@ def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_i
             "Time (min)": t,
             "Glicogeno Residuo (g)": current_glycogen,
             "Lipidi Ossidati (g)": total_fat_burned_g,
-            "CHO Esogeni (g/min)": actual_exo_oxidation_g_min, 
+            "CHO Esogeni (g/min)": actual_exo_oxidation_g_min,
+            "Gut Load": gut_accumulation_total,  # Aggiunto per risolvere KeyError
             "CHO %": cho_ratio * 100,
             "RER": rer
         })
@@ -517,7 +518,7 @@ with tab2:
 
         g1, g2 = st.columns([2, 1])
         with g1:
-            st.caption("Cinetica di Deplezione Glicogeno (Non-Lineare)")
+            st.caption("Cinetica di Deplezione Glicogeno")
             
             max_y = max(start_tank, 800)
             
