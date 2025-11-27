@@ -237,7 +237,6 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
-                # Fatigue Drift (meccanico)
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
