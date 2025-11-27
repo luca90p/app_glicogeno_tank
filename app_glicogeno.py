@@ -35,10 +35,6 @@ class SportType(Enum):
 # --- PARAMETRI STATO FISIOLOGICO ---
 class DietType(Enum):
     # (factor, label, g_kg_reference)
-    # RICALIBRAZIONE ARETA & HOPKINS 2018:
-    # La formula base stima la condizione "Normal".
-    # High Carb (Supercompensazione) offre un boost (+25%).
-    # Low Carb causa una deplezione severa (-50%).
     HIGH_CARB = (1.25, "Carico Carboidrati (Supercompensazione)", 8.0)
     NORMAL = (1.00, "Regime Normocalorico Misto (Baseline)", 5.0)
     LOW_CARB = (0.50, "Restrizione Glucidica / Low Carb", 2.5)
@@ -51,7 +47,7 @@ class DietType(Enum):
 class FatigueState(Enum):
     RESTED = (1.0, "Riposo / Tapering (Pieno Recupero)")
     ACTIVE = (0.9, "Carico di lavoro moderato (24h prec.)")
-    TIRED = (0.60, "Alto carico o Danno Muscolare (EIMD)") # Penalità aumentata per danno
+    TIRED = (0.60, "Alto carico o Danno Muscolare (EIMD)")
 
     def __init__(self, factor, label):
         self.factor = factor
@@ -78,6 +74,7 @@ class MenstrualPhase(Enum):
 @dataclass
 class Subject:
     weight_kg: float
+    height_cm: float # Aggiunto per modello Podlogar
     body_fat_pct: float
     sex: Sex
     glycogen_conc_g_kg: float
@@ -92,7 +89,7 @@ class Subject:
     menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
     
     # Biomarker
-    glucose_mg_dl: float = None # Dato opzionale
+    glucose_mg_dl: float = None
 
     @property
     def lean_body_mass(self) -> float:
@@ -108,10 +105,6 @@ class Subject:
 # --- 2. LOGICA DI CALCOLO ---
 
 def get_concentration_from_vo2max(vo2_max):
-    """
-    Stima lineare della concentrazione di glicogeno muscolare (g/kg ww) basata sul VO2max.
-    Rif: Areta & Hopkins (2018) - Valori per disponibilità CHO NORMALE.
-    """
     conc = 13.0 + (vo2_max - 30.0) * 0.24
     if conc < 12.0: conc = 12.0
     if conc > 26.0: conc = 26.0
@@ -122,36 +115,31 @@ def calculate_tank(subject: Subject):
     total_muscle = lbm * subject.muscle_fraction
     active_muscle = total_muscle * subject.sport.val
     
-    # 1. Capacità Basale (Normal Diet)
+    creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
     base_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg
     
-    # 2. Capacità "Boosted" (Creatina aumenta lo spazio di stoccaggio)
-    creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
-    potential_capacity = base_muscle_glycogen * creatine_multiplier
+    # Max Capacity (Theoretical High)
+    max_total_capacity = (base_muscle_glycogen * 1.25 * creatine_multiplier) + 100.0
     
-    # 3. Riempimento Reale (Applicazione Diet & Fatigue)
-    # Nota: DietType.HIGH_CARB ora è > 1.0, permettendo la supercompensazione oltre il basale
+    # Actual Availability
     final_filling_factor = subject.filling_factor * subject.menstrual_phase.factor
-    current_muscle_glycogen = potential_capacity * final_filling_factor
+    current_muscle_glycogen = base_muscle_glycogen * creatine_multiplier * final_filling_factor
     
-    # Cap di sicurezza fisiologica (non possiamo superare certi limiti biologici assoluti ~35 g/kg)
+    # Cap fisiologico
     max_physiological_limit = active_muscle * 35.0
     if current_muscle_glycogen > max_physiological_limit:
         current_muscle_glycogen = max_physiological_limit
     
-    # 4. Riserve Epatiche
+    # Liver
     liver_fill_factor = 1.0
     liver_correction_note = None
     
-    # A. Correzione da dieta (Low Carb svuota anche il fegato)
-    # Se la dieta è normale o alta, il fegato si presume pieno (salvo digiuno)
     if subject.filling_factor <= 0.6: 
         liver_fill_factor = 0.6
         
-    # B. Override da Biomarker (Glicemia)
     if subject.glucose_mg_dl is not None:
         if subject.glucose_mg_dl < 70:
-            liver_fill_factor = 0.2 # Ipoglicemia
+            liver_fill_factor = 0.2
             liver_correction_note = "Criticità Epatica (Glicemia < 70)"
         elif subject.glucose_mg_dl < 85:
             liver_fill_factor = min(liver_fill_factor, 0.5)
@@ -160,9 +148,6 @@ def calculate_tank(subject: Subject):
     current_liver_glycogen = subject.liver_glycogen_g * liver_fill_factor
         
     total_actual_glycogen = current_muscle_glycogen + current_liver_glycogen
-    
-    # Max capacity teorica (per il grafico) è considerata in condizioni di Carico Perfetto
-    max_total_capacity = (base_muscle_glycogen * 1.25 * creatine_multiplier) + 100.0
 
     return {
         "active_muscle_kg": active_muscle,
@@ -176,40 +161,104 @@ def calculate_tank(subject: Subject):
         "liver_note": liver_correction_note
     }
 
-def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct):
+def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
+    """
+    Stima il tasso massimo di ossidazione esogena (g/min) basandosi su 
+    evidenze Podlogar et al. (2025) e Ijaz et al. (2024).
+    Correlazione positiva con Dimensioni Corporee (Altezza) e Potenza Assoluta.
+    """
+    # Base rate (sedentario piccolo)
+    base_rate = 0.8 # g/min (~48 g/h)
+    
+    # Fattore Altezza (Proxy per superficie assorbimento intestinale/taglia)
+    # Ref: Podlogar trova correlazione Height -> Ox Rate
+    if height_cm > 170:
+        base_rate += (height_cm - 170) * 0.015
+        
+    # Fattore Potenza Assoluta (Richiesta metabolica e flusso ematico splancnico gestibile)
+    if ftp_watts > 200:
+        base_rate += (ftp_watts - 200) * 0.0015
+        
+    # Cap fisiologico umano (senza training intestinale estremo)
+    # 1.5 g/min = 90 g/h è considerato il limite funzionale standard per mix Gluc/Fruc
+    # Alcuni elite arrivano a 120 g/h (2.0), ma è raro.
+    limit = 1.6 
+    
+    return min(base_rate, limit)
+
+def simulate_metabolism(subject_data, ftp_watts, avg_power, duration_min, carb_intake_g_h, crossover_pct, height_cm):
+    tank_g = subject_data['actual_available_g']
     results = []
     current_glycogen = tank_g
     
     intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
     crossover_if = crossover_pct / 100.0
     
+    # Efficienza meccanica lorda standard (Gross Efficiency) ~22%
     kcal_per_min_total = (avg_power * 60) / 4184 / 0.22
     
+    # --- LOGICA OSSIDAZIONE ESOGENA (AGGIORNATA FASE 3) ---
+    # 1. Calcolo limite fisiologico dell'atleta
+    max_exo_rate_g_min = estimate_max_exogenous_oxidation(height_cm, subject_data['active_muscle_kg']*2.2, ftp_watts) # approx weight uses
+    
+    # 2. Intake vs Absorbed
+    intake_g_min = carb_intake_g_h / 60.0
+    
+    # Efficienza di ossidazione (Podlogar 2025): ~80% dell'ingestione viene ossidata (se sotto il limite)
+    oxidation_efficiency = 0.80 
+    
+    # Se l'atleta mangia più del suo limite massimo assorbibile, l'ossidazione non sale
+    # Anzi, "over-dosing" (King 2018) non aiuta a risparmiare glicogeno muscolare.
+    useful_exogenous_g_min = min(intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
+    
+    # Accumulo intestinale (per stima distress GI)
+    gut_accumulation_g_h = (intake_g_min - useful_exogenous_g_min) * 60
+    
+    # --- LOGICA MIX ENERGETICO ---
     slope_k = 12.0
     
     if intensity_factor <= 0.2:
         cho_ratio = 0.10
     else:
+        # Sigmoide per transizione metabolica
         cho_ratio = 1 / (1 + np.exp(-slope_k * (intensity_factor - crossover_if)))
         if cho_ratio < 0.10: cho_ratio = 0.10
         if cho_ratio > 1.0: cho_ratio = 1.0
-        if intensity_factor > 1.05:
+        if intensity_factor > 1.05: # Sopra FTP
             cho_ratio = 1.0
 
     fat_ratio = 1.0 - cho_ratio
-    kcal_cho = kcal_per_min_total * cho_ratio
-    kcal_fat = kcal_per_min_total * fat_ratio
     
-    glycogen_burned_per_min = kcal_cho / 4.1
-    fat_burned_per_min = kcal_fat / 9.0
-    glycogen_intake_per_min = carb_intake_g_h / 60.0
+    # Calcolo calorie richieste da CHO
+    kcal_cho_demand = kcal_per_min_total * cho_ratio
+    
+    # Soddisfazione richiesta: Esogeno prima, poi Endogeno
+    # 3.75 kcal/g per CHO esogeno (in soluzione, approx), 4.1 per glicogeno
+    kcal_from_exo = useful_exogenous_g_min * 3.75
+    
+    # Se l'esogeno copre tutto (raro ad alta intensità), non usiamo glicogeno?
+    # No, fisiologicamente c'è sempre un minimo consumo di glicogeno (King 2018)
+    # "Sparing" non è mai 100%. Imponiamo un floor di utilizzo glicogeno se l'intensità è alta.
+    min_glycogen_obligatory = 0.0
+    if intensity_factor > 0.6:
+        min_glycogen_obligatory = (kcal_cho_demand * 0.20) / 4.1 # Almeno il 20% della richiesta viene da scorte interne sopra il 60% FTP
+        
+    remaining_kcal_demand = kcal_cho_demand - kcal_from_exo
+    
+    # Se l'esogeno copre "troppo", riduciamo l'uso dell'esogeno per rispettare l'obbligatorio endogeno
+    # (Semplificazione modellistica per evitare consumo 0 di glicogeno a 200W mangiando 120g/h)
+    
+    glycogen_burned_per_min = remaining_kcal_demand / 4.1
+    if glycogen_burned_per_min < min_glycogen_obligatory:
+        glycogen_burned_per_min = min_glycogen_obligatory
+        
+    fat_burned_per_min = (kcal_per_min_total * fat_ratio) / 9.0
 
     total_fat_burned_g = 0.0
     
     for t in range(int(duration_min) + 1):
         if t > 0:
-            net_change = glycogen_intake_per_min - glycogen_burned_per_min
-            current_glycogen += net_change
+            current_glycogen -= glycogen_burned_per_min
             total_fat_burned_g += fat_burned_per_min
         
         if current_glycogen < 0:
@@ -219,17 +268,18 @@ def simulate_metabolism(tank_g, ftp_watts, avg_power, duration_min, carb_intake_
             "Time (min)": t,
             "Glicogeno Residuo (g)": current_glycogen,
             "Lipidi Ossidati (g)": total_fat_burned_g,
-            "CHO %": cho_ratio * 100,
-            "FAT %": fat_ratio * 100
+            "CHO %": cho_ratio * 100
         })
         
     stats = {
         "final_glycogen": current_glycogen,
-        "cho_rate_g_h": glycogen_burned_per_min * 60,
+        "cho_rate_g_h": (glycogen_burned_per_min * 60) + (useful_exogenous_g_min * 60), # Totale ossidato
+        "endogenous_burn_rate": glycogen_burned_per_min * 60,
         "fat_rate_g_h": fat_burned_per_min * 60,
         "kcal_total_h": kcal_per_min_total * 60,
         "cho_pct": cho_ratio * 100,
-        "total_fat_g": total_fat_burned_g
+        "gut_accumulation": gut_accumulation_g_h,
+        "max_exo_capacity": max_exo_rate_g_min * 60
     }
 
     return pd.DataFrame(results), stats
@@ -250,6 +300,8 @@ with tab1:
     with col_in:
         st.subheader("Parametri Antropometrici")
         weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 70.0, 0.5)
+        # NUOVO INPUT ALTEZZA (per Podlogar model)
+        height = st.slider("Altezza (cm)", 150, 210, 175, 1)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 15.0, 0.5) / 100.0
         
         sex_map = {s.value: s for s in Sex}
@@ -327,7 +379,9 @@ with tab1:
             liver_val = 40.0 
         
         subject = Subject(
-            weight_kg=weight, body_fat_pct=bf, sex=s_sex, 
+            weight_kg=weight, 
+            height_cm=height, # Passiamo altezza
+            body_fat_pct=bf, sex=s_sex, 
             glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
             liver_glycogen_g=liver_val,
             filling_factor=combined_filling,
@@ -338,6 +392,7 @@ with tab1:
         
         tank_data = calculate_tank(subject)
         st.session_state['tank_g'] = tank_data['actual_available_g']
+        st.session_state['subject_struct'] = subject # Salviamo per usarlo nel tab 2
 
     with col_res:
         st.subheader("Bilancio Riserve Energetiche")
@@ -394,27 +449,49 @@ with tab2:
             ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 250, step=5)
             avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
             duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
-            carb_intake = st.slider("Integrazione CHO esogena (g/h)", 0, 120, 30, step=10)
+            carb_intake = st.slider("Integrazione CHO esogena (g/h)", 0, 150, 60, step=10, 
+                                    help="Attenzione: dosaggi >90g/h richiedono 'training intestinale' e mix Gluc/Fruc.")
             
         with col_meta:
             st.subheader("Profilo Metabolico")
             crossover = st.slider("Crossover Point (Soglia Aerobica) [% FTP]", 50, 85, 70, 5)
-            
             if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
             elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
             else: st.caption("Profilo: Bilanciato / Misto")
 
-        df_sim, stats = simulate_metabolism(start_tank, ftp, avg_w, duration, carb_intake, crossover)
+        # Recupero dati altezza dal session state se disponibile, altrimenti default
+        subj = st.session_state.get('subject_struct', None)
+        h_cm = subj.height_cm if subj else 175
+        
+        df_sim, stats = simulate_metabolism(tank_data, ftp, avg_w, duration, carb_intake, crossover, h_cm)
         
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
         
+        # METRICHE PRINCIPALI
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Glicogeno Residuo", f"{int(stats['final_glycogen'])} g", 
                   delta=f"{int(stats['final_glycogen'] - start_tank)} g")
+        
+        # Display del mix energetico
         m2.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO")
-        m3.metric("Tasso Ossidazione CHO", f"{int(stats['cho_rate_g_h'])} g/h")
+        
+        # Dettaglio consumi con distinzione Endo/Eso
+        m3.metric("Ossidazione CHO Totale", f"{int(stats['cho_rate_g_h'])} g/h",
+                  help=f"Endogeno: {int(stats['endogenous_burn_rate'])} g/h | Esogeno utile: {int(stats['cho_rate_g_h'] - stats['endogenous_burn_rate'])} g/h")
+        
         m4.metric("Tasso Ossidazione Lipidi", f"{int(stats['fat_rate_g_h'])} g/h")
+
+        # ALERT GASTROINTESTINALE (Nuova Feature)
+        gut_acc = stats['gut_accumulation']
+        max_cap = stats['max_exo_capacity']
+        
+        if gut_acc > 30:
+            st.error(f"⚠️ **RISCHIO GI ALTO:** Stai ingerendo {carb_intake} g/h ma la tua capacità stimata è ~{int(max_cap)} g/h. Circa {int(gut_acc)} g/h si accumulano nell'intestino.")
+        elif gut_acc > 10:
+            st.warning(f"⚠️ **Attenzione GI:** Ingestione leggermente superiore alla capacità di ossidazione stimata ({int(max_cap)} g/h).")
+        else:
+            st.success(f"✅ **Tolleranza GI:** L'ingestione è ben tollerata (Capacità stimata: {int(max_cap)} g/h).")
 
         g1, g2 = st.columns([2, 1])
         with g1:
@@ -427,7 +504,7 @@ with tab2:
         final_g = stats['final_glycogen']
         if final_g <= 0:
             st.error(f"**DEPLETIONE TOTALE:** Esaurimento riserve (Bonk) stimato al minuto {df_sim[df_sim['Glicogeno Residuo (g)'] <= 0].index[0]}.")
-        elif final_g < 150:
-            st.warning("**RISERVA CRITICA:** Livelli di glicogeno sub-ottimali. Possibile calo di prestazione.")
+        elif final_g < 100: # Soglia critica abbassata leggermente per realismo
+            st.warning("**RISERVA CRITICA:** Livelli di glicogeno < 100g. Rischio calo potenza (Fatigue).")
         else:
             st.success("**RISERVA ADEGUATA:** Completamento attività senza deplezione critica.")
