@@ -176,7 +176,6 @@ def calculate_rer_polynomial(intensity_factor):
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
-    current_glycogen = tank_g
     
     # Dati Iniziali
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -250,6 +249,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             if t > 60: 
                 # Fatigue Drift (meccanico) - Gollnick et al 1973:
                 # Deplezione ST forza reclutamento FT (meno efficienti)
+                # Aumento progressivo del costo energetico
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
@@ -257,6 +257,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
+                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -266,6 +267,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
         target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
         
+        # Cinetica assorbimento (non lineare)
         if t > 0:
             current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
         else:
@@ -291,11 +293,14 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # Shift metabolico temporale (Zanella/Watt 2002)
-            # Riduzione progressiva %CHO se int < 85%
+            # --- SHIFT METABOLICO DINAMICO (Zanella/Watt 2002) ---
+            # Riduzione progressiva %CHO se int < 85% per "difesa" scorte
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                metabolic_shift = (t - 60) * (0.05 / 60.0) 
+                # Shift non-lineare (accelerato)
+                # (t-60)/60 -> ore oltre la prima. Elevato a 1.5 per non linearità
+                hours_past = (t - 60) / 60.0
+                metabolic_shift = 0.05 * (hours_past ** 1.2) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -353,7 +358,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
-            "Stato": status_label
+            "Stato": status_label,
+            "CHO %": cho_ratio * 100
         })
         
     total_kcal_final = current_kcal_demand * 60 
@@ -371,7 +377,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         "intensity_factor": intensity_factor,
         "avg_rer": rer,
         "gross_efficiency": gross_efficiency,
-        "intake_g_h": constant_carb_intake_g_h
+        "intake_g_h": constant_carb_intake_g_h,
+        "cho_pct": cho_ratio * 100
     }
 
     return pd.DataFrame(results), stats
@@ -681,9 +688,11 @@ with tab2:
         st.markdown("---")
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Uso Glicogeno Muscolare", f"{int(stats['total_muscle_used'])} g", help="Totale svuotato dalle gambe")
-        m2.metric("Uso Glicogeno Epatico", f"{int(stats['total_liver_used'])} g", help="Totale prelevato dal fegato")
-        m3.metric("Uso CHO Esogeno", f"{int(stats['total_exo_used'])} g", help="Totale energia da integrazione")
+        m1.metric("Ossidazione CHO Totale", f"{int(stats['cho_rate_g_h'])} g/h",
+                  help=f"Endogeno: {int(stats['endogenous_burn_rate'])} g/h | Esogeno utile: {int(stats['cho_rate_g_h'] - stats['endogenous_burn_rate'])} g/h")
+        
+        m2.metric("Tasso Ossidazione Lipidi", f"{int(stats['fat_rate_g_h'])} g/h")
+        m3.metric("Spesa Energetica Totale", f"{int(stats['kcal_total_h'])} kcal/h")
 
         g1, g2 = st.columns([2, 1])
         with g1:
