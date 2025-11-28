@@ -939,8 +939,13 @@ with tab2:
         # --- BLOCCO ACCUMULO INTESTINALE (PIENA PAGINA) ---
         st.markdown("### ⚠️ Accumulo Intestinale (Rischio GI) & Flusso CHO")
         
+        # TESTO INTERPRETATIVO AGGIUNTO
+        st.caption(f"""
+        **Interpretazione:** La distanza verticale tra la Linea Blu (Ingerito) e la Linea Verde (Ossidato) crea l'**Accumulo CHO (g)**, ovvero il carico intestinale istantaneo. Se l'area supera la Soglia di Rischio GI ({risk_threshold_input} g), la strategia di assunzione è troppo aggressiva.
+        """)
+
         # Spiegazione per l'utente, resa più chiara e sintetica
-        with st.expander("Sintesi del Modello Flusso CHO e Rischio GI"):
+        with st.expander("Dettagli Modello Flusso CHO e Rischio GI"):
             st.markdown(f"""
             Questo grafico visualizza il **bilancio dinamico** tra ciò che ingerisci e ciò che il tuo corpo riesce ad ossidare (bruciare), indicando il rischio di *Distress Gastrointestinale (GI)*.
             
