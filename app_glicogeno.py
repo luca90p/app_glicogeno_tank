@@ -730,6 +730,8 @@ with tab2:
         with g1:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
+            # --- NUOVO BLOCCO GRAFICO CINETA DI DEPLEZIONE ---
+            
             # Mappatura colori richiesta dall'utente
             color_map = {
                 'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (4) - BASE
@@ -750,13 +752,13 @@ with tab2:
             df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                                   var_name='Source', value_name='Rate (g/h)')
             
-            # TRUCCO: Mappatura dell'indice numerico invertita per forzare l'ordinamento in modo DECRESCENTE
-            # Questo è l'ordine desiderato: l'indice 3 è la base, l'indice 0 è la cima.
+            # TRUCCO: Mappatura dell'indice ordinale per forzare l'ordinamento
+            # Indice 0 = Base (Muscolare), Indice 3 = Cima (Epatico). Usiamo sort: ascending.
             sort_map = {
-                'Glicogeno Muscolare (g)': 3,
-                'Ossidazione Lipidica (g)': 2,
-                'Carboidrati Esogeni (g)': 1,
-                'Glicogeno Epatico (g)': 0
+                'Glicogeno Muscolare (g)': 0,
+                'Ossidazione Lipidica (g)': 1,
+                'Carboidrati Esogeni (g)': 2,
+                'Glicogeno Epatico (g)': 3
             }
             df_long['sort_index'] = df_long['Source'].map(sort_map)
             
@@ -770,14 +772,18 @@ with tab2:
                 color=alt.Color('Source', 
                                 scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
                                                 range=color_range),
-                                # FORZA L'ORDINE USANDO L'INDICE NUMERICO IN MODO DECRESCENTE
-                                # L'indice 3 va in fondo, l'indice 0 va in cima.
-                                sort=alt.SortField(field='sort_index', order='descending') 
+                                # FORZA L'ORDINE SULL'INDICE NUMERICO IN MODO CRESCENTE (ascending)
+                                # L'indice 0 (Muscolare) va in fondo, l'indice 3 (Epatico) va in cima.
+                                sort=alt.SortField(field='sort_index', order='ascending') 
                                ),
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
+            ).properties(
+                title="Cinetica di Deplezione (Muscolo + Fegato)" # Aggiungo titolo al grafico stack
             ).interactive()
             
             st.altair_chart(chart_stack, use_container_width=True)
+            
+            # --- FINE NUOVO BLOCCO GRAFICO CINETA DI DEPLEZIONE ---
             
             # INSIGHT SCIENTIFICI BURN
             with st.expander("Note Tecniche: Cinetica Deplezione & Sparing"):
@@ -798,7 +804,7 @@ with tab2:
 
             st.caption("Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno) ")
             
-            # --- NUOVA LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
+            # --- LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
             
             # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
             initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
