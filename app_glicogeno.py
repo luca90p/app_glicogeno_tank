@@ -747,7 +747,8 @@ with tab2:
                 st.info("""
                 **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
                 
-                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973).                 * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
+                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973). 
+                * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
                 """)
                 
             # EXPANDER FRAYN RICHIESTO
@@ -795,9 +796,9 @@ with tab2:
                 # CORREZIONE 2: Assicuriamo che la mappatura del colore sia forte
                 color=alt.Color('Scenario', 
                                 scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
-                                                range=['#D32F2F', '#757575'],
-                                                legend=alt.Legend(title="Scenario")
-                                                )
+                                                range=['#D32F2F', '#757575']
+                                                ),
+                                legend=alt.Legend(title="Scenario") # <--- CORREZIONE: Spostato legend fuori da scale
                                ),
                 tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
             ).interactive()
