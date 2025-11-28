@@ -936,21 +936,21 @@ with tab2:
 
             # Combinazione del grafico principale (Accumulo) e delle tracce cumulative (asse secondario)
             
-            # Asse sinistro (Area di Accumulo)
-            gut_layer = alt.layer(gut_area, risk_line, max_point).encode(
+            # Layer Accumulo (Asse Sinistro)
+            gut_layer_combined = alt.layer(gut_area, risk_line, max_point).encode(
                 y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63'))
             )
             
-            # Asse destro (Linee Cumulative)
+            # Layer Cumulative (Asse Destro)
             cumulative_layer = intake_oxidation_lines.encode(
                 y=alt.Y('Grammi', 
-                        axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2'),
+                        axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2', orient='right'), # Aggiungo orient='right'
                         scale=alt.Scale(domain=[0, df_sim['Intake Cumulativo (g)'].max() * 1.1])
                         )
             )
             
             final_gut_chart = alt.layer(
-                gut_layer,
+                gut_layer_combined,
                 cumulative_layer
             ).resolve_scale(
                 y='independent'
