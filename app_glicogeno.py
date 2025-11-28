@@ -176,6 +176,7 @@ def calculate_rer_polynomial(intensity_factor):
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
+    current_glycogen = tank_g
     
     # Dati Iniziali
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -236,7 +237,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     tau_absorption = 20.0 
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
-    # Accumulatori
+    # Accumulatori per statistiche finali
     total_muscle_used = 0.0
     total_liver_used = 0.0
     total_exo_used = 0.0
@@ -247,12 +248,16 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
+                # Fatigue Drift (meccanico) - Gollnick et al 1973:
+                # Deplezione ST forza reclutamento FT (meno efficienti)
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
         else: 
+            # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
-            if t > 60: drift_factor += (t - 60) * 0.0005 
+            if t > 60:
+                drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
         # 2. Gestione Intake (Costante)
@@ -286,7 +291,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # Shift metabolico
+            # Shift metabolico temporale (Zanella/Watt 2002)
+            # Riduzione progressiva %CHO se int < 85%
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 metabolic_shift = (t - 60) * (0.05 / 60.0) 
@@ -299,10 +305,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
         # Bilancio
         total_cho_g_min = kcal_cho_demand / 4.1
-        kcal_from_exo = current_exo_oxidation_g_min * 3.75 # (Non usato per bilancio di massa ma per energia)
+        kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
-        # Più è vuoto, meno contribuisce (shift verso sangue)
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
         
@@ -311,10 +315,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
-        # Blood glucose coperto prima da Esogeno
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
-        # Poi da Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
         max_liver_output = 1.2 
         from_liver = min(remaining_blood_demand, max_liver_output)
@@ -519,6 +521,17 @@ with tab1:
         
         st.markdown("---")
         
+        # INSIGHT SCIENTIFICI TANK (Costill 1981)
+        with st.expander("📚 Insight: Ricarica Glicogeno (Costill et al., 1981)"):
+             st.info("""
+            **Quantità Totale vs Frequenza**
+            
+            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
+            
+            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
+            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
+            """)
+        
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -608,7 +621,7 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
-            # NUTRIZIONE PRATICA: Definita QUI
+            # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
@@ -716,7 +729,8 @@ with tab2:
             st.altair_chart((gut_chart + risk_line).properties(height=250), use_container_width=True)
             
             st.markdown("---")
-            st.metric("Residuo Epatico (Fegato)", f"{int(stats['final_liver'])} g", delta="Critico se < 20g", delta_color="inverse")
+            st.caption("Ossidazione Lipidica")
+            st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
