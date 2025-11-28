@@ -275,6 +275,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     total_liver_used = 0.0
     total_exo_used = 0.0
     
+    # Nuovi accumulatori per il grafico GI
+    total_intake_cumulative = 0.0
+    total_exo_oxidation_cumulative = 0.0
+    
     for t in range(int(duration_min) + 1):
         # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
@@ -306,6 +310,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             delta_gut = (current_intake_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
+        
+        # Aggiornamento Accumulatori GI
+        if t > 0:
+            total_intake_cumulative += current_intake_g_min * oxidation_efficiency
+            total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
         # 3. Ripartizione Substrati
         if is_lab_data:
@@ -397,7 +406,9 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "Stato": status_label,
-            "CHO %": cho_ratio * 100
+            "CHO %": cho_ratio * 100,
+            "Intake Cumulativo (g)": total_intake_cumulative,
+            "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative
         })
         
     total_kcal_final = current_kcal_demand * 60 
@@ -860,11 +871,96 @@ with tab2:
 
         with g2:
             st.caption("Accumulo Intestinale (Rischio GI)")
-            gut_chart = alt.Chart(df_sim).mark_area(color='#8D6E63', opacity=0.6).encode(
-                x='Time (min)', y='Gut Load'
+            
+            # --- NUOVO BLOCCO ACCUMULO INTESTINALE AGGIUNTO CUMULATIVO ---
+            RISK_THRESHOLD = 30 # Soglia fissa di rischio GI
+            
+            # Calcolo del colore condizionale per l'area
+            df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio (>30g)', 'Basso Rischio (<30g)')
+            
+            # Crea un punto per evidenziare il massimo carico
+            max_gut_load = df_sim['Gut Load'].max()
+            max_gut_load_time = df_sim[df_sim['Gut Load'] == max_gut_load]['Time (min)'].iloc[0]
+            max_df = pd.DataFrame([{'Time (min)': max_gut_load_time, 'Gut Load': max_gut_load}])
+
+            # 1. Grafico Area di Accumulo con Colorazione Condizionale
+            gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
+                x='Time (min)', 
+                y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63')),
+                # Colorazione condizionale non sul colore, ma su un campo nascosto per non influenzare la legenda principale
+                tooltip=['Time (min)', 'Gut Load', 'Rischio']
             )
-            risk_line = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='red', strokeDash=[2,2]).encode(y='y')
-            st.altair_chart((gut_chart + risk_line).properties(height=250), use_container_width=True)
+            
+            # Linea di Soglia di Rischio (30g)
+            risk_line = alt.Chart(pd.DataFrame({'y': [RISK_THRESHOLD]})).mark_rule(color='#F44336', strokeDash=[4,4], size=2).encode(
+                y=alt.Y('y', title='Soglia Rischio', axis=None)
+            )
+            
+            # Punto di Massimo Accumulo
+            max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
+                x='Time (min)',
+                y='Gut Load',
+                tooltip=[alt.Tooltip('Time (min)', title='Max Time'), alt.Tooltip('Gut Load', title='Max Accumulo')]
+            )
+            
+            # --- Tracce Cumulative per il Secondo Asse Y ---
+            
+            # 2. Linea Intake Cumulativo (asse secondario)
+            intake_line = alt.Chart(df_sim).mark_line(strokeWidth=2, color='#1976D2').encode(
+                x='Time (min)',
+                y=alt.Y('Intake Cumulativo (g)', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
+                tooltip=['Time (min)', 'Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)']
+            )
+
+            # 3. Linea Ossidazione Cumulativa (asse secondario)
+            oxidation_line = alt.Chart(df_sim).mark_line(strokeWidth=2, color='#4CAF50', strokeDash=[5,5]).encode(
+                x='Time (min)',
+                y='Ossidazione Cumulativa (g)',
+                tooltip=['Time (min)', 'Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)']
+            )
+            
+            # Combinazione del grafico principale (Accumulo) e delle tracce cumulative (asse secondario)
+            dual_axis_chart = alt.layer(
+                gut_area,
+                risk_line,
+                max_point
+            ).properties(height=250)
+            
+            cumulative_chart = alt.layer(
+                intake_line,
+                oxidation_line
+            ).encode(
+                y=alt.Y('Intake Cumulativo (g)', axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2'))
+            )
+            
+            # Utilizziamo l'asse Y destro (secondary axis) per le tracce cumulative
+            final_gut_chart = alt.layer(
+                dual_axis_chart,
+                cumulative_chart.encode(
+                    y=alt.Y('Intake Cumulativo (g)', 
+                            axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2'),
+                            scale=alt.Scale(domain=[0, df_sim['Intake Cumulativo (g)'].max() * 1.1])
+                            )
+                )
+            ).resolve_scale(
+                y='independent'
+            ).properties(
+                title="Accumulo Intestinale vs Flusso CHO (Doppio Asse Y)"
+            )
+
+
+            st.altair_chart(final_gut_chart, use_container_width=True)
+            
+            st.markdown(f"""
+            **Analisi Flusso CHO:**
+            * **Linea Blu Continua:** Grammi totali di CHO *Ingeriti* (corretti per efficienza di assorbimento).
+            * **Linea Verde Tratteggiata:** Grammi totali di CHO *Ossidati* (bruciati).
+            * **Area Grigia/Verde/Rossa:** La differenza verticale tra queste due linee (Ingerito - Ossidato) rappresenta l'**Accumulo Intestinale (Gut Load)**.
+            * **Soglia di Rischio (Linea Rossa):** Superare i {RISK_THRESHOLD}g di Accumulo indica un alto rischio di distress gastrointestinale.
+            """)
+            
+            
+            # --- FINE NUOVO BLOCCO ACCUMULO INTESTINALE ---
             
             with st.expander("Note Tecniche: Tolleranza Gastrointestinale"):
                  st.info("""
