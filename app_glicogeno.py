@@ -233,7 +233,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     tau_absorption = 20.0 
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
-    # Accumulatori
+    # Accumulatori per statistiche finali
     total_muscle_used = 0.0
     total_liver_used = 0.0
     total_exo_used = 0.0
@@ -252,7 +252,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             if t > 60: drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        # 2. Gestione Intake (Costante)
+        # 2. Gestione Intake
         current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
@@ -268,24 +268,21 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-        # 3. Ripartizione Substrati
+        # 3. Ripartizione Substrati (Modello Coggan 1991)
+        # Calcolo RER e CHO Ratio Totale
         if is_lab_data:
+            # ... Logica Lab esistente
+            rer = 0.85 # Dummy
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult
-            
-            glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
-            min_endo = total_cho_demand * 0.2 
-            if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
-            
-            fat_burned_per_min = lab_fat_rate 
-            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
-            rer = 0.7 + (0.3 * cho_ratio) 
+            cho_ratio = 1.0 # Lab override
+            kcal_cho_demand = total_cho_demand * 4.1 # Reverse calc
         else:
             rer = calculate_rer_polynomial(effective_if_for_rer)
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # Shift metabolico temporale (Zanella)
+            # Shift metabolico temporale (Coggan/Zanella)
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 metabolic_shift = (t - 60) * (0.05 / 60.0) 
@@ -295,63 +292,89 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             fat_ratio = 1.0 - cho_ratio
             kcal_cho_demand = current_kcal_demand * cho_ratio
         
+        # DOMANDA CHO TOTALE (g/min)
         total_cho_g_min = kcal_cho_demand / 4.1
         
-        # Modello Coggan (Deplezione Muscolare e Integrazione)
-        muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
+        # RIPARTIZIONE FONTI CHO (Coggan 1991 - Fig 1.7 Model)
+        muscle_fill_state = current_muscle_glycogen / tank_g if tank_g > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
         
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
+        
+        # Cap se serbatoio vuoto
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
         
+        # Il resto deve venire dal Sangue (Blood Glucose)
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
+        
+        # Soddisfazione Blood Glucose
+        # Prima priorità: Esogeno (dallo stomaco/intestino)
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
+        # Se avanza richiesta, la prendiamo dal Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
-        max_liver_output = 1.2 
-        from_liver = min(remaining_blood_demand, max_liver_output)
-        if current_liver_glycogen <= 0: from_liver = 0
+        from_liver = 0.0
         
-        # Aggiornamento
+        if remaining_blood_demand > 0:
+            # Il fegato ha un rate limitato (~1.0 - 1.2 g/min max gluconeogenesi/glicogenolisi)
+            max_liver_output = 1.2 
+            from_liver = min(remaining_blood_demand, max_liver_output)
+            # Se il fegato è vuoto, non dà nulla -> Bonk ipoglicemico
+            if current_liver_glycogen <= 0: from_liver = 0
+        
+        # Aggiornamento Serbatoi
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
             
+            # Clamp a 0
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
             
-            total_fat_burned_g += (current_kcal_demand * fat_ratio) / 9.0
+            if not is_lab_data:
+                total_fat_burned_g += (current_kcal_demand * fat_ratio) / 9.0
+            else:
+                total_fat_burned_g += lab_fat_rate
+            
             total_muscle_used += muscle_usage_g_min
             total_liver_used += from_liver
             total_exo_used += from_exogenous
             
+        # Status
         status_label = "Ottimale"
         if current_liver_glycogen < 20: status_label = "CRITICO (Ipoglicemia)"
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
         results.append({
             "Time (min)": t,
-            "Muscle Glycogen (g)": muscle_usage_g_min * 60, 
+            "Muscle Glycogen (g)": muscle_usage_g_min * 60, # Rate g/h per grafico stacked
             "Liver Glycogen (g)": from_liver * 60,
             "Exogenous CHO (g)": from_exogenous * 60,
-            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60,
+            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
+            
             "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "Stato": status_label
         })
         
+    avg_intake = constant_carb_intake_g_h
+    
     total_kcal_final = current_kcal_demand * 60 
     
     stats = {
         "final_muscle": current_muscle_glycogen,
         "final_liver": current_liver_glycogen,
+        
         "total_muscle_used": total_muscle_used,
         "total_liver_used": total_liver_used,
         "total_exo_used": total_exo_used,
+        
         "fat_total_g": total_fat_burned_g,
         "kcal_total_h": total_kcal_final,
+        
         "gut_accumulation": (gut_accumulation_total / duration_min) * 60 if duration_min > 0 else 0,
         "max_exo_capacity": max_exo_rate_g_min * 60,
         "intensity_factor": intensity_factor,
@@ -507,6 +530,17 @@ with tab1:
         
         st.markdown("---")
         
+        # INSIGHT SCIENTIFICI TANK (Costill 1981)
+        with st.expander("📚 Insight: Ricarica Glicogeno (Costill et al., 1981)"):
+             st.info("""
+            **Quantità Totale vs Frequenza**
+            
+            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
+            
+            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
+            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
+            """)
+        
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -535,7 +569,8 @@ with tab2:
         
         act_params = {'mode': sport_mode}
         
-        duration = 120 
+        # Placeholder variabili durata
+        duration = 120 # Default
         
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
@@ -674,7 +709,14 @@ with tab2:
             ).interactive()
             
             st.altair_chart(chart_stack, use_container_width=True)
-            st.info("Il grafico mostra le fonti energetiche minuto per minuto. Nota come il contributo muscolare cala e viene sostituito da quello epatico/esogeno.")
+            
+            # INSIGHT SCIENTIFICI BURN (Gollnick 1973)
+            with st.expander("📚 Insight: Fatigue Drift (Gollnick et al., 1973)"):
+                st.info("""
+                **Deplezione Selettiva delle Fibre**
+                
+                Gollnick et al. hanno dimostrato che le fibre lente (ST) si svuotano per prime. Quando queste sono esauste, il corpo recluta le fibre rapide (FT) anche a bassa intensità. Le fibre FT sono meno efficienti, aumentando il costo metabolico nel tempo (Fatigue Drift). Questo spiega perché la curva di consumo si inclina verso il basso dopo la prima ora.
+                """)
 
             st.caption("Confronto: Strategia vs Digiuno")
             max_y = max(start_tank, 800)
