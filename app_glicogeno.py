@@ -750,12 +750,16 @@ with tab2:
             df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                                   var_name='Source', value_name='Rate (g/h)')
             
+            # Creazione del domain/range personalizzato basato sull'ordine di stack
+            color_domain = stack_order
+            color_range = [color_map[source] for source in stack_order]
+
             chart_stack = alt.Chart(df_long).mark_area().encode(
                 x=alt.X('Time (min)'),
                 y=alt.Y('Rate (g/h)', stack=True), 
                 color=alt.Color('Source', 
-                                scale=alt.Scale(domain=list(color_map.keys()), 
-                                                range=list(color_map.values())),
+                                scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
+                                                range=color_range),
                                 # IMPOSIZIONE DELL'ORDINE DI STACK (tramite sort)
                                 sort=stack_order
                                ),
