@@ -751,13 +751,58 @@ with tab2:
                 """)
 
             st.caption("Confronto: Strategia vs Digiuno")
-            base = alt.Chart(combined_df).encode(x=alt.X('Time (min)', title='Durata (min)'))
-            lines = base.mark_line(strokeWidth=3).encode(
-                y=alt.Y('Residuo Muscolare', title='Glicogeno Residuo (g)'),
-                color=alt.Color('Scenario', scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], range=['#D32F2F', '#757575'])),
-                tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
-            )
-            st.altair_chart(lines.interactive(), use_container_width=True)
+           # --- Rimpiazza il blocco da riga 737 (base = alt.Chart(combined_df)...) ---
+
+# 1. Calcola i livelli in base al serbatoio iniziale (max_capacity_g)
+# Assumiamo di prendere la Capacità Massima dalla session_state o da tank_data se disponibile
+# Utilizziamo una stima, ma nella tua app dovresti usare tank_data['max_capacity_g']
+# max_glycogen = tank_data['max_capacity_g'] - tank_data['liver_glycogen_g'] # Approssimazione muscolare max
+
+# Poiché 'Residuo Muscolare' parte da initial_muscle_glycogen, lo usiamo come 100%
+initial_muscle_glycogen = tank_data['muscle_glycogen_g']
+max_muscle = initial_muscle_glycogen * 1.25 # Stima conservativa per l'asse Y
+
+zone_green_end = max_muscle * 0.75
+zone_yellow_end = max_muscle * 0.35 
+zone_red_end = max_muscle * 0.05 
+
+zones_df = pd.DataFrame({
+    'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
+    # L'ordinamento Y parte dal basso (0) fino all'alto (max_muscle)
+    'Start': [zone_yellow_end, zone_red_end, 0],
+    'End': [max_muscle, zone_yellow_end, zone_red_end],
+    'Color': ['#4CAF50', '#FFC107', '#F44336'] # Verde, Giallo, Rosso
+})
+
+# 2. Layer 1: Sfondo colorato (Bande)
+background = alt.Chart(zones_df).mark_rect().encode(
+    y=alt.Y('Start', axis=None), # Inizio della banda (dal basso)
+    y2=alt.Y2('End'),         # Fine della banda
+    color=alt.Color('Color', scale=None), # Usa il colore definito nel DF
+    tooltip=['Zone']
+)
+
+# 3. Layer 2: Linee di Deplezione
+lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
+    x=alt.X('Time (min)', title='Durata (min)'),
+    y=alt.Y('Residuo Muscolare', title='Glicogeno Muscolare Residuo (g)'),
+    color=alt.Color('Scenario', 
+                    scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
+                                    range=['#D32F2F', '#757575'])
+                   ),
+    tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
+).interactive()
+
+# 4. Combinazione dei Layer
+chart = (background + lines).properties(
+    title="Confronto: Deplezione Muscolare (Strategia vs Digiuno)"
+).resolve_scale(
+    color='independent' # Assicura che le scale di colore non interferiscano
+)
+
+st.altair_chart(chart, use_container_width=True)
+
+# --- Fine sostituzione ---
 
         with g2:
             st.caption("Accumulo Intestinale (Rischio GI)")
@@ -830,5 +875,6 @@ with tab2:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
+
 
 
