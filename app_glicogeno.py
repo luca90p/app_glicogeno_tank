@@ -307,25 +307,24 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             instantaneous_input_g_min = cho_per_unit_g # Assegniamo l'unità intera al minuto di assunzione
         
         # Ossidazione massima effettiva
-        target_exo_g_min = min(instantaneous_input_g_min, max_exo_rate_g_min) * oxidation_efficiency
+        # Questo è il tasso massimo a cui il sistema può *ossidare* CHO esogeno
+        target_exo_oxidation_limit_g_min = max_exo_rate_g_min * oxidation_efficiency
         
         # Cinetica assorbimento (non lineare)
         if t > 0:
-            # L'accumulo è lo stato interno, l'ossidazione è il tasso di rilascio nel sangue.
-            # L'ossidazione in atto è limitata dal flusso di ossidazione cinetica (smussata)
-            current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
+            # L'ossidazione cinetica (smussata) si muove verso il tasso massimo consentito
+            current_exo_oxidation_g_min += alpha * (target_exo_oxidation_limit_g_min - current_exo_oxidation_g_min)
         else:
             current_exo_oxidation_g_min = 0.0
             
         if t > 0:
-            # Accumulo = ciò che entra - ciò che viene ossidato
-            delta_gut = (instantaneous_input_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
-            gut_accumulation_total += delta_gut
+            # 2a. Aggiornamento Accumulatori GI/Input Discreto
+            # L'input discreto aumenta il pool, l'ossidazione lo riduce.
+            gut_accumulation_total += (instantaneous_input_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
-        
-        # Aggiornamento Accumulatori GI
-        if t > 0:
-            total_intake_cumulative += instantaneous_input_g_min * oxidation_efficiency # L'intake cumulativo è a gradini
+
+            # Aggiornamento Cumulativo (per grafico GI)
+            total_intake_cumulative += instantaneous_input_g_min # L'intake cumulativo è a gradini (non moltiplicato per efficienza)
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
         # 3. Ripartizione Substrati
@@ -373,6 +372,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
+        # *** CORREZIONE CRITICA DELLA LOGICA DI DEPLEZIONE ESOGENA ***
+        # from_exogenous deve essere limitato solo dalla domanda di glucosio ematico,
+        # NON dalla velocità di ossidazione che è già contenuta in current_exo_oxidation_g_min.
+        # Qui usiamo current_exo_oxidation_g_min come la quantità disponibile dal pool esterno/ematico.
+        
+        # Il prelievo esogeno è il MIN tra la domanda e quanto sta EFFETTIVAMENTE uscendo dalla cinetica
+        # (che a sua volta è limitata dall'accumulo).
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
@@ -384,6 +390,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
+            
+            # Non dobbiamo togliere i CHO esogeni da nessun accumulatore di CHO esogeni/intestinale. 
+            # I CHO esogeni sono prelevati dal flusso costante di "current_exo_oxidation_g_min" (la cinetica)
+            # che è già stato aggiornato con l'input istantaneo all'inizio del ciclo.
             
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
@@ -406,13 +416,14 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
         # Correzione del valore nel dizionario results per il grafico a pila (deve essere smussato)
-        exo_oxidation_g_h = current_exo_oxidation_g_min * 60
+        # Deve usare from_exogenous perché è la quantità EFFETTIVAMENTE USATA per il bilancio.
+        exo_oxidation_g_h = from_exogenous * 60
             
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
-            # Correzione: Uso il tasso di ossidazione cinetica (smussato)
+            # Correzione: Uso la quantità EFFETTIVA prelevata (exo_oxidation_g_h)
             "Carboidrati Esogeni (g)": exo_oxidation_g_h, 
             # Calcolo corretto dell'Ossidazione Lipidica (g/h)
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
@@ -916,7 +927,7 @@ with tab2:
             
             # Punto di Massimo Accumulo
             max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
-                x='Time (min)', # Rimosso la virgola
+                x='Time (min)', 
                 y='Gut Load',
                 tooltip=[alt.Tooltip('Time (min)', title='Max Time'), alt.Tooltip('Gut Load', title='Max Accumulo')]
             )
@@ -936,7 +947,7 @@ with tab2:
 
             # 2. Linea Intake Cumulativo (asse secondario)
             intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
-                x='Time (min)', # Rimosso la virgola
+                x='Time (min)', 
                 y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
                 color=alt.Color('Flusso', 
                                 scale=alt.Scale(domain=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
