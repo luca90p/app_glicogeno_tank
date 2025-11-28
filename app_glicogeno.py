@@ -415,7 +415,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Residuo Totale": current_muscle_glycogen + current_liver_glycogen, # <--- MODIFICA 1
-            "Target Intake (g/h)": current_intake_g_h, 
+            "Target Intake (g/h)": constant_carb_intake_g_h, # FIX: Usiamo il parametro di input
             "Gut Load": gut_accumulation_total,
             "Stato": status_label,
             "CHO %": cho_ratio * 100,
