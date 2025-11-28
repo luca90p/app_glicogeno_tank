@@ -206,7 +206,7 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
-def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, subject_obj, activity_params):
+def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, tau_absorption, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
     
@@ -267,7 +267,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
-    tau_absorption = 20.0 
+    
+    # PARAMETRO DINAMICO
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
     # Accumulatori per statistiche finali
@@ -725,16 +726,23 @@ with tab2:
                 if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
                 elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
                 else: st.caption("Profilo: Bilanciato / Misto")
+            
+            st.markdown("---")
+            st.subheader("Parametri Cinetici Avanzati")
+            
+            # PARAMETRI CUSTOMIZZABILI
+            tau_absorption_input = st.slider("Tau (τ) Cinetica Assorbimento (min)", 5.0, 60.0, 20.0, 2.5, help="Tempo di 'smussamento' della disponibilità di CHO dopo l'ingestione. Minore è il valore, più veloce è l'assorbimento.")
+            risk_threshold_input = st.slider("Soglia di Rischio GI (g)", 10, 80, 30, 5, help="Massimo accumulo tollerabile prima che insorgano sintomi GI.")
                 
         h_cm = subj.height_cm 
         
         # Le due simulazioni devono usare gli stessi parametri di attività,
         # ma la simulazione "No Cho" ha intake=0.
-        # Passiamo cho_per_unit_g alla funzione simulate_metabolism
-        df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, cho_per_unit, crossover, subj, act_params)
+        # Passiamo cho_per_unit_g e tau_absorption_input alla funzione simulate_metabolism
+        df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, cho_per_unit, crossover, tau_absorption_input, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
-        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, cho_per_unit, crossover, subj, act_params)
+        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, cho_per_unit, crossover, tau_absorption_input, subj, act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
         combined_df = pd.concat([df_sim, df_no_cho])
@@ -763,8 +771,6 @@ with tab2:
         m2.metric("Uso Glicogeno Epatico", f"{int(stats['total_liver_used'])} g", help="Totale prelevato dal fegato")
         m3.metric("Uso CHO Esogeno", f"{int(stats['total_exo_used'])} g", help="Totale energia da integrazione")
 
-        
-        # Le colonne g1 e g2 sono state rimosse e i loro contenuti resi a piena pagina.
         
         # --- GRAFICO CINETICA DI DEPLEZIONE (PIENA PAGINA) ---
         st.markdown("### 📊 Cinetica di Deplezione (Muscolo + Fegato)")
@@ -823,7 +829,7 @@ with tab2:
             st.info("""
             **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
             
-            * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolali diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973). 
+            * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973). 
             * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
             """)
             
@@ -899,10 +905,26 @@ with tab2:
         # --- BLOCCO ACCUMULO INTESTINALE (PIENA PAGINA) ---
         st.markdown("### ⚠️ Accumulo Intestinale (Rischio GI) & Flusso CHO")
         
-        RISK_THRESHOLD = 30 # Soglia fissa di rischio GI
+        # Spiegazione per l'utente, resa più chiara e sintetica
+        with st.expander("Sintesi del Modello Flusso CHO e Rischio GI"):
+            st.markdown(f"""
+            Questo grafico visualizza il **bilancio dinamico** tra ciò che ingerisci e ciò che il tuo corpo riesce ad ossidare (bruciare), indicando il rischio di *Distress Gastrointestinale (GI)*.
+            
+            **Linee Cumulative (Asse Destro):**
+            * **Linea Blu (Intake):** Apporto totale di CHO (a gradini, riflette le assunzioni discrete).
+            * **Linea Verde (Ossidazione):** CHO totale bruciato (curva smussata, limitata dalla cinetica di assorbimento).
+            
+            **Area di Rischio (Asse Sinistro):**
+            * L'area sottesa è l'**Accumulo Intestinale (Gut Load)**: $\\text{{Intake}} - \\text{{Ossidazione}}$.
+            * **τ Cinetica (Tempo di Smussamento):** {tau_absorption_input} min. Determina quanto velocemente la curva di Ossidazione (Verde) risponde all'Ingestione (Blu).
+            * **Soglia di Rischio GI:** {risk_threshold_input} g (Linea Rossa Tratteggiata). Superarla indica un alto rischio di sintomi GI.
+            """)
+        
+        # PARAMETRO DINAMICO
+        RISK_THRESHOLD = risk_threshold_input
         
         # Calcolo del colore condizionale per l'area
-        df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio (>30g)', 'Basso Rischio (<30g)')
+        df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio', 'Basso Rischio')
         
         # Crea un punto per evidenziare il massimo carico
         max_gut_load = df_sim['Gut Load'].max()
@@ -969,24 +991,6 @@ with tab2:
 
         st.altair_chart(final_gut_chart, use_container_width=True)
         
-        st.markdown(f"""
-        **Analisi Flusso CHO:**
-        * **Linea Blu Continua:** Grammi totali di CHO *Ingeriti* (input a gradini, corretti per efficienza di assorbimento).
-        * **Linea Verde Tratteggiata:** Grammi totali di CHO *Ossidati* (burn cinetico).
-        * **Area Grigia/Verde/Rossa:** La differenza verticale tra queste due linee (Ingerito - Ossidato) rappresenta l'**Accumulo Intestinale (Gut Load)**.
-        * **Soglia di Rischio (Linea Rossa):** Superare i {RISK_THRESHOLD}g di Accumulo indica un alto rischio di distress gastrointestinale.
-        """)
-        
-        
-        # --- FINE BLOCCO ACCUMULO INTESTINALE ---
-        
-        with st.expander("Note Tecniche: Tolleranza Gastrointestinale"):
-             st.info("""
-             **Limiti di Ossidazione e Distress GI**
-             Come evidenziato da *Podlogar et al. (2025)*, la capacità di ossidazione esogena non è illimitata ed è correlata alla taglia corporea e alla potenza metabolica. L'ingestione superiore alla capacità di ossidazione porta ad accumulo intestinale, aumentando il rischio di disturbi gastrointestinali (GI Distress). 
-             """)
-        
-        st.markdown("---")
         st.caption("Ossidazione Lipidica (Tasso Orario)")
         st.line_chart(df_sim.set_index("Time (min)")["Ossidazione Lipidica (g)"], color="#FFA500")
         
