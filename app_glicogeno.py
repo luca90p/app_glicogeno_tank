@@ -750,9 +750,14 @@ with tab2:
             df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                                   var_name='Source', value_name='Rate (g/h)')
             
-            # TRUCCO: Aggiungi un indice di sort per forzare l'ordine in Altair
-            # L'indice va da 0 (base) a 3 (cima)
-            sort_map = {source: i for i, source in enumerate(stack_order)}
+            # TRUCCO: Mappatura dell'indice numerico invertita per forzare l'ordinamento in modo decrescente
+            # Iniziamo da 3 (indice più alto) per la Base, fino a 0 (indice più basso) per la Cima
+            sort_map = {
+                'Glicogeno Muscolare (g)': 3,
+                'Ossidazione Lipidica (g)': 2,
+                'Carboidrati Esogeni (g)': 1,
+                'Glicogeno Epatico (g)': 0
+            }
             df_long['sort_index'] = df_long['Source'].map(sort_map)
             
             # Creazione del domain/range personalizzato basato sull'ordine di stack
@@ -765,8 +770,9 @@ with tab2:
                 color=alt.Color('Source', 
                                 scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
                                                 range=color_range),
-                                # FORZA L'ORDINE SULL'ASSE DEL COLORE USANDO L'INDICE NUMERICO
-                                sort=alt.SortField(field='sort_index', order='ascending')
+                                # FORZA L'ORDINE USANDO L'INDICE NUMERICO IN MODO DECRESCENTE
+                                # Questo dovrebbe mettere l'indice 3 in fondo e l'indice 0 in cima
+                                sort=alt.SortField(field='sort_index', order='descending') 
                                ),
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
             ).interactive()
