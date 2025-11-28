@@ -192,6 +192,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     intensity_factor = 0.7
     kcal_per_min_base = 10.0
     
+    # --- DETERMINAZIONE PARAMETRI SFORZO ---
     if mode == 'cycling':
         avg_power = activity_params['avg_watts']
         ftp_watts = activity_params['ftp_watts']
@@ -528,17 +529,6 @@ with tab1:
         
         st.markdown("---")
         
-        # INSIGHT SCIENTIFICI TANK (Costill 1981)
-        with st.expander("📚 Insight: Ricarica Glicogeno (Costill et al., 1981)"):
-             st.info("""
-            **Quantità Totale vs Frequenza**
-            
-            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
-            
-            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
-            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
-            """)
-        
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -570,6 +560,10 @@ with tab2:
         # Placeholder variabili durata
         duration = 120 # Default
         
+        # INIZIALIZZAZIONE VARIABILI NUTRIZIONALI PRIMA DEL LAYOUT
+        cho_per_unit = 25 # Default
+        carb_intake = 60  # Default
+
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
@@ -688,11 +682,9 @@ with tab2:
         st.markdown("---")
         
         m1, m2, m3 = st.columns(3)
-        m1.metric("Ossidazione CHO Totale", f"{int(stats['cho_rate_g_h'])} g/h",
-                  help=f"Endogeno: {int(stats['endogenous_burn_rate'])} g/h | Esogeno utile: {int(stats['cho_rate_g_h'] - stats['endogenous_burn_rate'])} g/h")
-        
-        m2.metric("Tasso Ossidazione Lipidi", f"{int(stats['fat_rate_g_h'])} g/h")
-        m3.metric("Spesa Energetica Totale", f"{int(stats['kcal_total_h'])} kcal/h")
+        m1.metric("Uso Glicogeno Muscolare", f"{int(stats['total_muscle_used'])} g", help="Totale svuotato dalle gambe")
+        m2.metric("Uso Glicogeno Epatico", f"{int(stats['total_liver_used'])} g", help="Totale prelevato dal fegato")
+        m3.metric("Uso CHO Esogeno", f"{int(stats['total_exo_used'])} g", help="Totale energia da integrazione")
 
         g1, g2 = st.columns([2, 1])
         with g1:
