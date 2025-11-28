@@ -224,7 +224,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
     lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
     
-    # Parametri Generali
     crossover_if = crossover_pct / 100.0
     effective_if_for_rer = intensity_factor + ((75.0 - crossover_pct) / 100.0)
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
@@ -232,7 +231,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     max_exo_rate_g_min = estimate_max_exogenous_oxidation(subject_obj.height_cm, subject_obj.weight_kg, ftp_watts)
     oxidation_efficiency = 0.80 
     
-    # Stato Variabili
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
