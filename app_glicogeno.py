@@ -730,14 +730,25 @@ with tab2:
         with g1:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
-            # Stacked Area Chart per vedere le FONTI
+            # Mappatura colori richiesta dall'utente
+            color_map = {
+                'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso
+                'Carboidrati Esogeni (g)': '#1976D2', # Blu
+                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro
+                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue
+            }
+            
+            # Stacked Area Chart per vedere le FONTI (con colori personalizzati)
             df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
                 x=alt.X('Time (min)'),
                 y=alt.Y('Rate (g/h)'),
-                color='Source',
+                color=alt.Color('Source', 
+                                scale=alt.Scale(domain=list(color_map.keys()), 
+                                                range=list(color_map.values()))
+                               ),
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
             ).interactive()
             
