@@ -174,7 +174,7 @@ def calculate_tank(subject: Subject):
 
     return {
         "active_muscle_kg": active_muscle,
-        "max_capacity_g": max_total_capacity,          
+        "max_capacity_g": max_total_capacity,         
         "actual_available_g": total_actual_glycogen,   
         "muscle_glycogen_g": current_muscle_glycogen,
         "liver_glycogen_g": current_liver_glycogen,
@@ -307,14 +307,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-       # 3. Ripartizione Substrati
+        # 3. Ripartizione Substrati
         if is_lab_data:
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult # Questa è g/min
 
-            # *** AGGIUNGI QUESTA RIGA ***
+            # CORREZIONE 1: Definizione di kcal_cho_demand per evitare UnboundLocalError
             kcal_cho_demand = total_cho_demand * 4.1
-            # ****************************
             
             glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
             min_endo = total_cho_demand * 0.2 
@@ -368,9 +367,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
             
+            # Nota: fat_ratio viene definita solo nell'else, quindi la gestiamo qui per non is_lab_data
             if not is_lab_data:
-                total_fat_burned_g += (current_kcal_demand * fat_ratio) / 9.0
+                # Usa fat_ratio calcolato nel blocco else
+                fat_ratio_used = 1.0 - cho_ratio
+                total_fat_burned_g += (current_kcal_demand * fat_ratio_used) / 9.0
             else:
+                # Usa lab_fat_rate (g/min) direttamente
                 total_fat_burned_g += lab_fat_rate
             
             total_muscle_used += muscle_usage_g_min
@@ -386,7 +389,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": from_exogenous * 60,
-            "Ossidazione Lipidica (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            # Calcolo corretto dell'Ossidazione Lipidica (g/h)
+            "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -532,6 +536,7 @@ with tab1:
         )
         
         tank_data = calculate_tank(subject)
+        st.session_state['tank_data'] = tank_data # Salvo tank_data completo
         st.session_state['tank_g'] = tank_data['actual_available_g']
         st.session_state['subject_struct'] = subject 
 
@@ -581,7 +586,9 @@ with tab2:
     if 'tank_g' not in st.session_state:
         st.warning("Calcolare prima le riserve nel Tab 'Analisi Riserve'.")
     else:
-        start_tank = st.session_state['tank_g']
+        # Recupero i dati completi
+        tank_data = st.session_state['tank_data']
+        start_tank = tank_data['actual_available_g']
         subj = st.session_state.get('subject_struct', None)
         
         sport_mode = 'cycling'
@@ -684,6 +691,8 @@ with tab2:
                 
         h_cm = subj.height_cm 
         
+        # Le due simulazioni devono usare gli stessi parametri di attività,
+        # ma la simulazione "No Cho" ha intake=0.
         df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, crossover, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
@@ -704,10 +713,10 @@ with tab2:
         c_rer.metric("RER Stimato (RQ)", f"{rer_val:.2f}", help="Quoziente Respiratorio Metabolico.")
         
         c_mix.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO",
-                     delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
+                      delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
         
         c_res.metric("Glicogeno Residuo", f"{int(stats['final_glycogen'])} g", 
-                  delta=f"{int(stats['final_glycogen'] - start_tank)} g")
+                      delta=f"{int(stats['final_glycogen'] - start_tank)} g")
 
         st.markdown("---")
         
@@ -725,8 +734,8 @@ with tab2:
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
-                x='Time (min)',
-                y='Rate (g/h)',
+                x=alt.X('Time (min)'),
+                y=alt.Y('Rate (g/h)'),
                 color='Source',
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
             ).interactive()
@@ -738,7 +747,7 @@ with tab2:
                 st.info("""
                 **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
                 
-                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973).
+                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973). 
                 * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
                 """)
                 
@@ -750,59 +759,57 @@ with tab2:
                 Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
                 """)
 
-            st.caption("Confronto: Strategia vs Digiuno")
-           # --- Rimpiazza il blocco da riga 737 (base = alt.Chart(combined_df)...) ---
+            st.caption("Confronto: Deplezione Glicogeno Muscolare (Strategia vs Digiuno) ")
+            
+            # --- NUOVA LOGICA PER GRAFICO CON BANDE DI RISCHIO ---
+            
+            # 1. Calcola i livelli in base al serbatoio muscolare iniziale (tank_data['muscle_glycogen_g'])
+            initial_muscle_glycogen = tank_data['muscle_glycogen_g']
+            max_muscle = initial_muscle_glycogen * 1.05 # L'asse Y può leggermente superare il valore iniziale
+            
+            # Definizione delle soglie di rischio (percentuali sul serbatoio iniziale)
+            # Ad esempio: Verde > 75%; Giallo 35-75%; Rosso < 35%
+            zone_green_end = initial_muscle_glycogen * 1.05 # Max per l'asse
+            zone_yellow_end = initial_muscle_glycogen * 0.75 
+            zone_red_end = initial_muscle_glycogen * 0.35 
+            
+            zones_df = pd.DataFrame({
+                'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)', 'Esaurimento'],
+                # L'ordinamento Y deve essere corretto: Start e End definiscono l'area verticale
+                'Start': [zone_yellow_end, zone_red_end, 20, 0], # 20g è il limite per l'esaurimento
+                'End': [zone_green_end, zone_yellow_end, zone_red_end, 20],
+                'Color': ['#4CAF50', '#FFC107', '#FF9800', '#F44336'] # Verde, Giallo, Arancione, Rosso Scuro
+            })
 
-# 1. Calcola i livelli in base al serbatoio iniziale (max_capacity_g)
-# Assumiamo di prendere la Capacità Massima dalla session_state o da tank_data se disponibile
-# Utilizziamo una stima, ma nella tua app dovresti usare tank_data['max_capacity_g']
-# max_glycogen = tank_data['max_capacity_g'] - tank_data['liver_glycogen_g'] # Approssimazione muscolare max
+            # 2. Layer 1: Sfondo colorato (Bande)
+            background = alt.Chart(zones_df).mark_rect(opacity=0.1).encode(
+                y=alt.Y('Start', axis=None, title='Glicogeno Muscolare Residuo (g)'), # Inizio della banda (dal basso)
+                y2=alt.Y2('End'),         # Fine della banda
+                color=alt.Color('Color', scale=None), # Usa il colore definito nel DF
+                tooltip=['Zone']
+            )
 
-# Poiché 'Residuo Muscolare' parte da initial_muscle_glycogen, lo usiamo come 100%
-initial_muscle_glycogen = tank_data['muscle_glycogen_g']
-max_muscle = initial_muscle_glycogen * 1.25 # Stima conservativa per l'asse Y
+            # 3. Layer 2: Linee di Deplezione
+            lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
+                x=alt.X('Time (min)', title='Durata (min)'),
+                y=alt.Y('Residuo Muscolare', title='Glicogeno Muscolare Residuo (g)', scale=alt.Scale(domain=[0, max_muscle])),
+                color=alt.Color('Scenario', 
+                                scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
+                                                range=['#D32F2F', '#757575'])
+                               ),
+                tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
+            ).interactive()
 
-zone_green_end = max_muscle * 0.75
-zone_yellow_end = max_muscle * 0.35 
-zone_red_end = max_muscle * 0.05 
+            # 4. Combinazione dei Layer
+            chart = (background + lines).properties(
+                title="Confronto: Deplezione Muscolare (Strategia vs Digiuno)"
+            ).resolve_scale(
+                color='independent', 
+                y='shared' # Condivide l'asse Y
+            )
 
-zones_df = pd.DataFrame({
-    'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
-    # L'ordinamento Y parte dal basso (0) fino all'alto (max_muscle)
-    'Start': [zone_yellow_end, zone_red_end, 0],
-    'End': [max_muscle, zone_yellow_end, zone_red_end],
-    'Color': ['#4CAF50', '#FFC107', '#F44336'] # Verde, Giallo, Rosso
-})
-
-# 2. Layer 1: Sfondo colorato (Bande)
-background = alt.Chart(zones_df).mark_rect().encode(
-    y=alt.Y('Start', axis=None), # Inizio della banda (dal basso)
-    y2=alt.Y2('End'),         # Fine della banda
-    color=alt.Color('Color', scale=None), # Usa il colore definito nel DF
-    tooltip=['Zone']
-)
-
-# 3. Layer 2: Linee di Deplezione
-lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
-    x=alt.X('Time (min)', title='Durata (min)'),
-    y=alt.Y('Residuo Muscolare', title='Glicogeno Muscolare Residuo (g)'),
-    color=alt.Color('Scenario', 
-                    scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
-                                    range=['#D32F2F', '#757575'])
-                   ),
-    tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
-).interactive()
-
-# 4. Combinazione dei Layer
-chart = (background + lines).properties(
-    title="Confronto: Deplezione Muscolare (Strategia vs Digiuno)"
-).resolve_scale(
-    color='independent' # Assicura che le scale di colore non interferiscano
-)
-
-st.altair_chart(chart, use_container_width=True)
-
-# --- Fine sostituzione ---
+            st.altair_chart(chart, use_container_width=True)
+            # --- FINE NUOVA LOGICA GRAFICO ---
 
         with g2:
             st.caption("Accumulo Intestinale (Rischio GI)")
@@ -815,7 +822,7 @@ st.altair_chart(chart, use_container_width=True)
             with st.expander("Note Tecniche: Tolleranza Gastrointestinale"):
                  st.info("""
                  **Limiti di Ossidazione e Distress GI**
-                 Come evidenziato da *Podlogar et al. (2025)*, la capacità di ossidazione esogena non è illimitata ed è correlata alla taglia corporea e alla potenza metabolica. L'ingestione superiore alla capacità di ossidazione porta ad accumulo intestinale, aumentando il rischio di disturbi gastrointestinali (GI Distress).
+                 Come evidenziato da *Podlogar et al. (2025)*, la capacità di ossidazione esogena non è illimitata ed è correlata alla taglia corporea e alla potenza metabolica. L'ingestione superiore alla capacità di ossidazione porta ad accumulo intestinale, aumentando il rischio di disturbi gastrointestinali (GI Distress). 
                  """)
             
             st.markdown("---")
@@ -875,6 +882,3 @@ st.altair_chart(chart, use_container_width=True)
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
-
-
-
