@@ -307,16 +307,22 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-        # 3. Ripartizione Substrati
+       # 3. Ripartizione Substrati
         if is_lab_data:
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
-            total_cho_demand = lab_cho_rate * fatigue_mult
+            total_cho_demand = lab_cho_rate * fatigue_mult # Questa è g/min
+
+            # *** AGGIUNGI QUESTA RIGA ***
+            kcal_cho_demand = total_cho_demand * 4.1
+            # ****************************
+            
             glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
             min_endo = total_cho_demand * 0.2 
             if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
             fat_burned_per_min = lab_fat_rate 
             cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
+        
         else:
             rer = calculate_rer_polynomial(effective_if_for_rer)
             base_cho_ratio = (rer - 0.70) * 3.45
@@ -824,4 +830,5 @@ with tab2:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
+
 
