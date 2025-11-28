@@ -738,13 +738,12 @@ with tab2:
                 'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro
             }
             
-            # Ordine richiesto (dal basso verso l'alto): Lipidi, Muscolare, Esogeni, Epatico
-            # L'ordine è definito qui sotto
+            # Ordine RICHIESTO (dal basso verso l'alto): Lipidi (4), Muscolare (3), Esogeni (2), Epatico (1)
             stack_order = [
-                'Ossidazione Lipidica (g)',  # 1. Base (Sotto)
-                'Glicogeno Muscolare (g)',   # 2. Sopra 1
-                'Carboidrati Esogeni (g)',   # 3. Sopra 2
-                'Glicogeno Epatico (g)'      # 4. Cima (Sopra 3)
+                'Ossidazione Lipidica (g)',  # 1. BASE (Posizione 4)
+                'Glicogeno Muscolare (g)',   # 2. Sopra 1 (Posizione 3)
+                'Carboidrati Esogeni (g)',   # 3. Sopra 2 (Posizione 2)
+                'Glicogeno Epatico (g)'      # 4. CIMA (Posizione 1)
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
