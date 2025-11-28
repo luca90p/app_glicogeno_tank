@@ -224,6 +224,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
     lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
     
+    # Parametri Generali
     crossover_if = crossover_pct / 100.0
     effective_if_for_rer = intensity_factor + ((75.0 - crossover_pct) / 100.0)
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
@@ -231,6 +232,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     max_exo_rate_g_min = estimate_max_exogenous_oxidation(subject_obj.height_cm, subject_obj.weight_kg, ftp_watts)
     oxidation_efficiency = 0.80 
     
+    # Stato Variabili
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
@@ -249,8 +251,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             current_eff = gross_efficiency
             if t > 60: 
                 # Fatigue Drift (meccanico) - Gollnick et al 1973:
-                # Deplezione ST forza reclutamento FT (meno efficienti)
-                # Aumento progressivo del costo energetico
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
@@ -313,6 +313,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
+        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
+        # Più è vuoto, meno contribuisce (shift verso sangue)
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
         
@@ -321,8 +323,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
+        # Blood glucose coperto prima da Esogeno
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
+        # Poi da Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
         max_liver_output = 1.2 
         from_liver = min(remaining_blood_demand, max_liver_output)
@@ -528,6 +532,17 @@ with tab1:
         st.bar_chart(chart_df, x="Stato", y="Glicogeno (g)", color="Stato")
         
         st.markdown("---")
+        
+        # INSIGHT SCIENTIFICI TANK (Costill 1981)
+        with st.expander("📚 Insight: Ricarica Glicogeno (Costill et al., 1981)"):
+             st.info("""
+            **Quantità Totale vs Frequenza**
+            
+            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
+            
+            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
+            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
+            """)
         
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
