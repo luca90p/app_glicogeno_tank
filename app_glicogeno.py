@@ -732,23 +732,28 @@ with tab2:
             
             # Mappatura colori richiesta dall'utente
             color_map = {
-                'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso
-                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue
-                'Carboidrati Esogeni (g)': '#1976D2', # Blu
-                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro
+                'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso (4)
+                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (3)
+                'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
+                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1)
             }
             
             # Ordine RICHIESTO (dal basso verso l'alto): Lipidi (4), Muscolare (3), Esogeni (2), Epatico (1)
+            # Questo è l'ordine in cui il DataFrame viene "meltato" (stack_order)
             stack_order = [
-                'Ossidazione Lipidica (g)',  # 1. BASE (Posizione 4)
-                'Glicogeno Muscolare (g)',   # 2. Sopra 1 (Posizione 3)
-                'Carboidrati Esogeni (g)',   # 3. Sopra 2 (Posizione 2)
-                'Glicogeno Epatico (g)'      # 4. CIMA (Posizione 1)
+                'Ossidazione Lipidica (g)',  # BASE
+                'Glicogeno Muscolare (g)',   
+                'Carboidrati Esogeni (g)',   
+                'Glicogeno Epatico (g)'      # CIMA
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
             df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                                   var_name='Source', value_name='Rate (g/h)')
+            
+            # TRUCCO: Aggiungi un indice di sort per forzare l'ordine in Altair
+            sort_map = {source: i for i, source in enumerate(stack_order)}
+            df_long['sort_index'] = df_long['Source'].map(sort_map)
             
             # Creazione del domain/range personalizzato basato sull'ordine di stack
             color_domain = stack_order
@@ -760,8 +765,8 @@ with tab2:
                 color=alt.Color('Source', 
                                 scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
                                                 range=color_range),
-                                # IMPOSIZIONE DELL'ORDINE DI STACK (tramite sort)
-                                sort=stack_order
+                                # FORZA L'ORDINE SULL'ASSE DEL COLORE USANDO L'INDICE NUMERICO
+                                sort=alt.SortField(field='sort_index', order='ascending')
                                ),
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
             ).interactive()
