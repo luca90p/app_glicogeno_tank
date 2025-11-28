@@ -750,8 +750,8 @@ with tab2:
             df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                                   var_name='Source', value_name='Rate (g/h)')
             
-            # TRUCCO: Mappatura dell'indice numerico invertita per forzare l'ordinamento in modo decrescente
-            # Iniziamo da 3 (indice più alto) per la Base, fino a 0 (indice più basso) per la Cima
+            # TRUCCO: Mappatura dell'indice numerico invertita per forzare l'ordinamento in modo DECRESCENTE
+            # Questo è l'ordine desiderato: l'indice 3 è la base, l'indice 0 è la cima.
             sort_map = {
                 'Glicogeno Muscolare (g)': 3,
                 'Ossidazione Lipidica (g)': 2,
@@ -771,7 +771,7 @@ with tab2:
                                 scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
                                                 range=color_range),
                                 # FORZA L'ORDINE USANDO L'INDICE NUMERICO IN MODO DECRESCENTE
-                                # Questo dovrebbe mettere l'indice 3 in fondo e l'indice 0 in cima
+                                # L'indice 3 va in fondo, l'indice 0 va in cima.
                                 sort=alt.SortField(field='sort_index', order='descending') 
                                ),
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
