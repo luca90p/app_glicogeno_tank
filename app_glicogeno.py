@@ -902,7 +902,6 @@ with tab2:
 
             # 1. Grafico Area di Accumulo con Colorazione Condizionale (Asse Y Sinistro)
             # Definiamo la scala Y per l'Accumulo
-            max_gut_y = df_sim['Gut Load'].max() * 1.2
             
             gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
                 x='Time (min)', 
@@ -917,7 +916,7 @@ with tab2:
             
             # Punto di Massimo Accumulo
             max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
-                x='Time (min)'),
+                x='Time (min)', # Rimosso la virgola
                 y='Gut Load',
                 tooltip=[alt.Tooltip('Time (min)', title='Max Time'), alt.Tooltip('Gut Load', title='Max Accumulo')]
             )
@@ -937,7 +936,7 @@ with tab2:
 
             # 2. Linea Intake Cumulativo (asse secondario)
             intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
-                x='Time (min)'),
+                x='Time (min)', # Rimosso la virgola
                 y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
                 color=alt.Color('Flusso', 
                                 scale=alt.Scale(domain=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
