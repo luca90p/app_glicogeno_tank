@@ -747,8 +747,7 @@ with tab2:
                 st.info("""
                 **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
                 
-                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973). 
-                * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
+                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973).                 * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
                 """)
                 
             # EXPANDER FRAYN RICHIESTO
@@ -793,19 +792,22 @@ with tab2:
             lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
                 x=alt.X('Time (min)', title='Durata (min)'),
                 y=alt.Y('Residuo Muscolare', title='Glicogeno Muscolare Residuo (g)', scale=alt.Scale(domain=[0, max_muscle])),
+                # CORREZIONE 2: Assicuriamo che la mappatura del colore sia forte
                 color=alt.Color('Scenario', 
                                 scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
-                                                range=['#D32F2F', '#757575'])
+                                                range=['#D32F2F', '#757575'],
+                                                legend=alt.Legend(title="Scenario")
+                                                )
                                ),
                 tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
             ).interactive()
 
             # 4. Combinazione dei Layer
+            # CORREZIONE 3: Rimuoviamo il resolve_scale sul colore per evitare conflitti, mantenendo solo l'asse Y condiviso
             chart = (background + lines).properties(
                 title="Confronto: Deplezione Muscolare (Strategia vs Digiuno)"
             ).resolve_scale(
-                color='independent', 
-                y='shared' # Condivide l'asse Y
+                y='shared' 
             )
 
             st.altair_chart(chart, use_container_width=True)
