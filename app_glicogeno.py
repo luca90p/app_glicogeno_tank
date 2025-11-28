@@ -738,12 +738,13 @@ with tab2:
                 'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro
             }
             
-            # Ordine richiesto (dal basso verso l'alto): Epatico, Esogeni, Muscolare, Lipidi
+            # Ordine richiesto (dal basso verso l'alto): Lipidi, Muscolare, Esogeni, Epatico
+            # L'ordine è definito qui sotto
             stack_order = [
-                'Ossidazione Lipidica (g)',    # 1. Base (Sotto)
-                'Glicogeno Muscolare (g)',  # 2. Sopra 1
-                'Carboidrati Esogeni (g)',  # 3. Sopra 2
-                'Glicogeno Epatico (g)'  # 4. Cima (Sopra 3)
+                'Ossidazione Lipidica (g)',  # 1. Base (Sotto)
+                'Glicogeno Muscolare (g)',   # 2. Sopra 1
+                'Carboidrati Esogeni (g)',   # 3. Sopra 2
+                'Glicogeno Epatico (g)'      # 4. Cima (Sopra 3)
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
@@ -752,7 +753,7 @@ with tab2:
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
                 x=alt.X('Time (min)'),
-                y=alt.Y('Rate (g/h)', stack=True), # Semplicifico lo stack a True
+                y=alt.Y('Rate (g/h)', stack=True), 
                 color=alt.Color('Source', 
                                 scale=alt.Scale(domain=list(color_map.keys()), 
                                                 range=list(color_map.values())),
@@ -908,4 +909,3 @@ with tab2:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
-
