@@ -252,10 +252,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
+                # Fatigue Drift (meccanico) - Gollnick et al 1973:
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
         else: 
+            # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
                 drift_factor += (t - 60) * 0.0005 
@@ -294,11 +296,9 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
             # --- SHIFT METABOLICO (King/Zanella: Deplezione Non Lineare) ---
-            # Il consumo di CHO non è fisso. Più passa il tempo, più il corpo risparmia (se intensità < critical)
-            # Aggiungiamo un fattore di "Sparing" naturale progressivo dopo la prima ora
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                metabolic_shift = (t - 60) * (0.08 / 60.0) # Shift più marcato (~8% in meno di CHO per ora extra)
+                metabolic_shift = (t - 60) * (0.08 / 60.0) # Shift più marcato
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -310,21 +310,17 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
-        # Più è vuoto, meno contribuisce (shift verso sangue/fegato)
-        # Questa funzione di decadimento rende la curva CONVESSA (veloce all'inizio, lenta alla fine)
+        # Modello Coggan: Deplezione Muscolare
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
-        muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) # Esponente < 1 per curva convessa
+        muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
         
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
-        # Blood glucose coperto prima da Esogeno
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
-        # Poi da Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
         max_liver_output = 1.2 
         from_liver = min(remaining_blood_demand, max_liver_output)
@@ -353,10 +349,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             
         results.append({
             "Time (min)": t,
-            "Muscle Glycogen (g)": muscle_usage_g_min * 60, 
-            "Liver Glycogen (g)": from_liver * 60,
-            "Exogenous CHO (g)": from_exogenous * 60,
-            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
+            "Glicogeno Epatico (g)": from_liver * 60,
+            "Carboidrati Esogeni (g)": from_exogenous * 60,
+            "Lipidi Ossidati (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -367,7 +363,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
     total_kcal_final = current_kcal_demand * 60 
     
-    # Calcolo del totale residuo per stats
     final_total_glycogen = current_muscle_glycogen + current_liver_glycogen
 
     stats = {
@@ -437,27 +432,29 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
+        with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
+            st.info("""
+            **1. Stima Glicogeno da VO2max:**
+            Basata sulla correlazione lineare osservata tra fitness aerobico e densità di stoccaggio (Areta & Hopkins, 2018).
+            
+            **2. Quantità Totale vs Frequenza (Costill et al., 1981):**
+            Per il riempimento del serbatoio (24h pre-gara), è la quantità totale (g/kg) a determinare il livello finale, non la frequenza dei pasti.
+            """)
+            
         with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
             use_creatine = st.checkbox("Supplementazione Creatina", help="Aumento volume cellulare e capacità di stoccaggio stimata (+10%).")
-            
             sleep_map = {s.label: s for s in SleepQuality}
             s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0)]
-            
             s_menstrual = MenstrualPhase.NONE
             if s_sex == Sex.FEMALE:
                 menstrual_map = {m.label: m for m in MenstrualPhase}
                 s_menstrual = menstrual_map[st.selectbox("Fase Ciclo Mestruale", list(menstrual_map.keys()), index=0)]
-                
             st.markdown("---")
             st.write("**Biomarker (Glicemia)**")
             has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
             glucose_val = None
             if has_glucose:
                 glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
-                if glucose_val < 70:
-                    st.error("Rilevata Ipoglicemia: Riserve epatiche critiche.")
-                elif glucose_val < 85:
-                    st.warning("Glicemia bassa: Riserve epatiche ridotte.")
 
         st.markdown("---")
         st.subheader("Stato Nutrizionale e di Recupero")
@@ -535,17 +532,6 @@ with tab1:
         
         st.markdown("---")
         
-        # INSIGHT SCIENTIFICI TANK (Costill 1981)
-        with st.expander("📚 Insight: Ricarica Glicogeno (Costill et al., 1981)"):
-             st.info("""
-            **Quantità Totale vs Frequenza**
-            
-            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
-            
-            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
-            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
-            """)
-        
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -573,14 +559,10 @@ with tab2:
         col_param, col_meta = st.columns([1, 1])
         
         act_params = {'mode': sport_mode}
-        
-        # Placeholder variabili durata
         duration = 120 # Default
-        
-        # INIZIALIZZAZIONE VARIABILI NUTRIZIONALI PRIMA DEL LAYOUT
         cho_per_unit = 25 # Default
         carb_intake = 60  # Default
-
+        
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
@@ -594,10 +576,8 @@ with tab2:
                 
             elif sport_mode == 'running':
                 run_input_mode = st.radio("Modalità Obiettivo:", ["Imposta Passo & Distanza", "Imposta Tempo & Distanza"], horizontal=True)
-                
                 c_dist, c_var = st.columns(2)
                 distance_km = c_dist.number_input("Distanza (km)", 1.0, 100.0, 21.1, 0.1)
-                
                 paces_options = []
                 for m in range(2, 16): 
                     for s in range(0, 60, 5):
@@ -622,7 +602,6 @@ with tab2:
                     st.info(f"🏃 Passo richiesto: **{p_min}:{p_sec:02d} /km**")
 
                 act_params['speed_kmh'] = speed_kmh
-                
                 c_hr1, c_hr2 = st.columns(2)
                 thr_hr = c_hr1.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
                 avg_hr = c_hr2.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
@@ -639,7 +618,6 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
-            # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
@@ -708,7 +686,7 @@ with tab2:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
             # Stacked Area Chart per vedere le FONTI
-            df_long = df_sim.melt('Time (min)', value_vars=['Muscle Glycogen (g)', 'Liver Glycogen (g)', 'Exogenous CHO (g)', 'Fat Oxidation (g)'], 
+            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Lipidi Ossidati (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
@@ -720,13 +698,13 @@ with tab2:
             
             st.altair_chart(chart_stack, use_container_width=True)
             
-            # INSIGHT SCIENTIFICI BURN (Gollnick 1973)
-            with st.expander("📚 Insight: Fatigue Drift & Sparing"):
+            with st.expander("📘 Note Tecniche: Deplezione Selettiva & Sparing"):
                 st.info("""
-                **Modello di Coggan & Coyle (1991) / King (2018):**
+                **1. Deplezione delle Fibre (Gollnick et al., 1973):**
+                La curva non è lineare perché, esaurendosi le fibre lente (ST), il corpo recluta fibre rapide (FT) meno efficienti, accelerando il costo metabolico nel tempo ("Fatigue Drift").
                 
-                * **Non-Linearità:** L'uso del glicogeno muscolare cala naturalmente nel tempo man mano che le scorte si svuotano, sostituito dal glucosio ematico e dai grassi.
-                * **Effetto Reintegro:** Mangiare carboidrati *protegge* il fegato e mantiene la glicemia, permettendo al muscolo di continuare a lavorare anche quando le scorte interne sono basse.
+                **2. Modello Coggan & Coyle (1991):**
+                Il grafico mostra come l'ossidazione di carboidrati esogeni (blu) non sia immediata (lag di assorbimento) ma diventi cruciale nella seconda metà di gara per sostituire il glicogeno epatico in esaurimento.
                 """)
 
             st.caption("Confronto: Strategia vs Digiuno")
@@ -747,9 +725,15 @@ with tab2:
             risk_line = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='red', strokeDash=[2,2]).encode(y='y')
             st.altair_chart((gut_chart + risk_line).properties(height=250), use_container_width=True)
             
+            with st.expander("📘 Note Tecniche: Assorbimento & GI"):
+                 st.info("""
+                 **Limiti di Ossidazione (Podlogar et al., 2025):**
+                 L'assorbimento non è infinito. La capacità massima è correlata a potenza e taglia corporea. L'eccesso si accumula nell'intestino aumentando il rischio di disturbi gastrointestinali (GI Distress).
+                 """)
+            
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Fat Oxidation (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
