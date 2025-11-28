@@ -173,15 +173,10 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
-def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, crossover_pct, subject_obj, activity_params):
-    # Dati Iniziali
-    initial_muscle_glycogen = subject_data['muscle_glycogen_g']
-    initial_liver_glycogen = subject_data['liver_glycogen_g']
-    
+def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
+    tank_g = subject_data['actual_available_g']
     results = []
-    
-    current_muscle_glycogen = initial_muscle_glycogen
-    current_liver_glycogen = initial_liver_glycogen
+    current_glycogen = tank_g
     
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
@@ -238,7 +233,7 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
     tau_absorption = 20.0 
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
-    # Accumulatori per statistiche finali
+    # Accumulatori
     total_muscle_used = 0.0
     total_liver_used = 0.0
     total_exo_used = 0.0
@@ -257,9 +252,8 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
             if t > 60: drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        # 2. Gestione Intake
-        current_hour_idx = min(int(t // 60), len(hourly_intake_strategy) - 1)
-        current_intake_g_h = hourly_intake_strategy[current_hour_idx]
+        # 2. Gestione Intake (Costante)
+        current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
         target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
@@ -274,19 +268,24 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-        # 3. Ripartizione Substrati (Modello Coggan 1991)
-        # Calcolo RER e CHO Ratio Totale
+        # 3. Ripartizione Substrati
         if is_lab_data:
-            # ... Logica Lab esistente (semplificata per brevità, si può integrare)
-            rer = 0.85 # Dummy
-            cho_ratio = 0.5
-            kcal_cho_demand = current_kcal_demand * cho_ratio
+            fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
+            total_cho_demand = lab_cho_rate * fatigue_mult
+            
+            glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
+            min_endo = total_cho_demand * 0.2 
+            if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
+            
+            fat_burned_per_min = lab_fat_rate 
+            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
+            rer = 0.7 + (0.3 * cho_ratio) 
         else:
             rer = calculate_rer_polynomial(effective_if_for_rer)
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # Shift metabolico temporale (Coggan/Zanella)
+            # Shift metabolico temporale (Zanella)
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 metabolic_shift = (t - 60) * (0.05 / 60.0) 
@@ -296,98 +295,63 @@ def simulate_metabolism(subject_data, duration_min, hourly_intake_strategy, cros
             fat_ratio = 1.0 - cho_ratio
             kcal_cho_demand = current_kcal_demand * cho_ratio
         
-        # DOMANDA CHO TOTALE (g/min)
         total_cho_g_min = kcal_cho_demand / 4.1
         
-        # RIPARTIZIONE FONTI CHO (Coggan 1991 - Fig 1.7 Model)
-        # 1. Muscle Glycogen: Cala con il tempo e con le scorte
-        # Formula empirica: Più il serbatoio è pieno, più ne usi. Più è vuoto, più risparmi.
-        # Muscle contribution % = f(current_glycogen_pct)
-        # A inizio gara (100% full) -> contribuisce ~80-90% del CHO
-        # A fine gara (vicino 0) -> contribuisce ~0%
-        
+        # Modello Coggan (Deplezione Muscolare e Integrazione)
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
-        # Curva di decadimento contributo muscolare (Empirica basata su Coggan)
-        # Contributo muscolare % sul totale CHO = muscle_fill_state^0.5 (radice quadrata per tenerlo alto all'inizio e farlo crollare alla fine)
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
         
-        # Calcolo richiesta Muscolare
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
-        
-        # Cap se serbatoio vuoto
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
         
-        # Il resto deve venire dal Sangue (Blood Glucose)
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
-        
-        # Soddisfazione Blood Glucose
-        # Prima priorità: Esogeno (dallo stomaco/intestino)
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
-        # Se avanza richiesta, la prendiamo dal Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
-        from_liver = 0.0
+        max_liver_output = 1.2 
+        from_liver = min(remaining_blood_demand, max_liver_output)
+        if current_liver_glycogen <= 0: from_liver = 0
         
-        if remaining_blood_demand > 0:
-            # Il fegato ha un rate limitato (~1.0 - 1.2 g/min max gluconeogenesi/glicogenolisi)
-            max_liver_output = 1.2 
-            from_liver = min(remaining_blood_demand, max_liver_output)
-            # Se il fegato è vuoto, non dà nulla -> Bonk ipoglicemico
-            if current_liver_glycogen <= 0: from_liver = 0
-        
-        # Se avanza ancora richiesta e nessuno la copre -> Deficit Energetico (Bonk/Rallentamento)
-        unmet_demand = remaining_blood_demand - from_liver
-        
-        # Aggiornamento Serbatoi
+        # Aggiornamento
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
             
-            # Clamp a 0
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
             
             total_fat_burned_g += (current_kcal_demand * fat_ratio) / 9.0
-            
             total_muscle_used += muscle_usage_g_min
             total_liver_used += from_liver
             total_exo_used += from_exogenous
             
-        # Status
         status_label = "Ottimale"
         if current_liver_glycogen < 20: status_label = "CRITICO (Ipoglicemia)"
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
         results.append({
             "Time (min)": t,
-            "Muscle Glycogen (g)": muscle_usage_g_min * 60, # Rate g/h per grafico stacked
+            "Muscle Glycogen (g)": muscle_usage_g_min * 60, 
             "Liver Glycogen (g)": from_liver * 60,
             "Exogenous CHO (g)": from_exogenous * 60,
             "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60,
-            
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
-            
             "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "Stato": status_label
         })
         
-    avg_intake = sum(hourly_intake_strategy) / len(hourly_intake_strategy) if hourly_intake_strategy else 0
-    
     total_kcal_final = current_kcal_demand * 60 
     
     stats = {
         "final_muscle": current_muscle_glycogen,
         "final_liver": current_liver_glycogen,
-        
         "total_muscle_used": total_muscle_used,
         "total_liver_used": total_liver_used,
         "total_exo_used": total_exo_used,
-        
         "fat_total_g": total_fat_burned_g,
         "kcal_total_h": total_kcal_final,
-        
         "gut_accumulation": (gut_accumulation_total / duration_min) * 60 if duration_min > 0 else 0,
         "max_exo_capacity": max_exo_rate_g_min * 60,
         "intensity_factor": intensity_factor,
@@ -631,7 +595,6 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
-            # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
@@ -663,11 +626,9 @@ with tab2:
                 
         h_cm = subj.height_cm 
         
-        # Simulazione Principale
         df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, crossover, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
-        # Simulazione Digiuno
         df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, crossover, subj, act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
@@ -687,12 +648,11 @@ with tab2:
         c_mix.metric("Ripartizione Substrati", f"{int(stats['cho_pct'])}% CHO",
                      delta=f"{100-int(stats['cho_pct'])}% FAT", delta_color="off")
         
-        # Display dei residui
-        c_res.metric("Residuo Muscolare", f"{int(stats['final_muscle'])} g", delta=f"-{int(stats['total_muscle_used'])} g usati")
+        c_res.metric("Glicogeno Residuo", f"{int(stats['final_glycogen'])} g", 
+                  delta=f"{int(stats['final_glycogen'] - start_tank)} g")
 
         st.markdown("---")
         
-        # DETTAGLIO CONSUMI
         m1, m2, m3 = st.columns(3)
         m1.metric("Uso Glicogeno Muscolare", f"{int(stats['total_muscle_used'])} g", help="Totale svuotato dalle gambe")
         m2.metric("Uso Glicogeno Epatico", f"{int(stats['total_liver_used'])} g", help="Totale prelevato dal fegato")
@@ -702,17 +662,9 @@ with tab2:
         with g1:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
-            # Trasformiamo i dati per grafico stacked
-            # Stacked Area Chart del modello Coggan
-            # X = Time
-            # Y = Source Contribution (Muscle, Liver, Exo, Fat)
-            
-            # Prepariamo i dati long format per Altair
+            # Stacked Area Chart per vedere le FONTI
             df_long = df_sim.melt('Time (min)', value_vars=['Muscle Glycogen (g)', 'Liver Glycogen (g)', 'Exogenous CHO (g)', 'Fat Oxidation (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
-            
-            # Ordine di impilamento logico (Fat sotto, poi Exo, poi Liver, poi Muscle)
-            # Ma Coggan usa % energia. Qui abbiamo rate assoluto g/h. Va bene uguale.
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
                 x='Time (min)',
@@ -722,8 +674,17 @@ with tab2:
             ).interactive()
             
             st.altair_chart(chart_stack, use_container_width=True)
-            
-            st.info("Il grafico mostra da dove arriva l'energia minuto per minuto (Modello Coggan). Nota come il contributo muscolare (blu/verde) cala nel tempo e viene sostituito da quello epatico/esogeno.")
+            st.info("Il grafico mostra le fonti energetiche minuto per minuto. Nota come il contributo muscolare cala e viene sostituito da quello epatico/esogeno.")
+
+            st.caption("Confronto: Strategia vs Digiuno")
+            max_y = max(start_tank, 800)
+            base = alt.Chart(combined_df).encode(x=alt.X('Time (min)', title='Durata (min)'))
+            lines = base.mark_line(strokeWidth=3).encode(
+                y=alt.Y('Residuo Muscolare', title='Glicogeno Residuo (g)'),
+                color=alt.Color('Scenario', scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], range=['#D32F2F', '#757575'])),
+                tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
+            )
+            st.altair_chart(lines.interactive(), use_container_width=True)
 
         with g2:
             st.caption("Accumulo Intestinale (Rischio GI)")
@@ -738,10 +699,8 @@ with tab2:
         
         st.subheader("Strategia & Timing")
         
-        # Bonk check (Liver empty OR Muscle empty)
         liver_bonk_time = df_sim[df_sim['Residuo Epatico'] <= 0]['Time (min)'].min()
-        muscle_bonk_time = df_sim[df_sim['Residuo Muscolare'] <= 20]['Time (min)'].min() # 20g residuali = fatica estrema
-        
+        muscle_bonk_time = df_sim[df_sim['Residuo Muscolare'] <= 20]['Time (min)'].min()
         bonk_time = min(filter(lambda x: not np.isnan(x), [liver_bonk_time, muscle_bonk_time]), default=None)
         
         s1, s2 = st.columns([2, 1])
@@ -749,9 +708,9 @@ with tab2:
             if bonk_time:
                 st.error(f"🚨 **CRISI RILEVATA AL MINUTO {int(bonk_time)}**")
                 if not np.isnan(liver_bonk_time) and liver_bonk_time == bonk_time:
-                    st.write("Causa: **Ipoglicemia (Fegato Vuoto)**. L'integrazione non è sufficiente a proteggere la glicemia.")
+                    st.write("Causa: **Ipoglicemia (Fegato Vuoto)**.")
                 else:
-                    st.write("Causa: **Esaurimento Muscolare**. L'intensità è troppo alta, le gambe si svuotano comunque.")
+                    st.write("Causa: **Esaurimento Muscolare**.")
             else:
                 st.success("✅ **STRATEGIA SOSTENIBILE**")
                 st.write("Il fegato è protetto e il glicogeno muscolare residuo è sufficiente.")
