@@ -206,7 +206,7 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
-def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
+def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
     
@@ -279,6 +279,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     total_intake_cumulative = 0.0
     total_exo_oxidation_cumulative = 0.0
     
+    # Logica di assunzione discreta (impulsi)
+    units_per_hour = constant_carb_intake_g_h / cho_per_unit_g if cho_per_unit_g > 0 else 0
+    intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0 else duration_min + 1
+    
     for t in range(int(duration_min) + 1):
         # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
@@ -294,26 +298,34 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        # 2. Gestione Intake (Costante)
-        current_intake_g_h = constant_carb_intake_g_h
-        current_intake_g_min = current_intake_g_h / 60.0
+        # 2. Gestione Intake (DISCRETA - IMPULSO)
+        # L'input esterno (g/min) è 0 per default. Viene attivato solo all'intervallo.
+        instantaneous_input_g_min = 0.0 
         
-        target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
+        if intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
+            # Assunzione discreta di un'unità
+            instantaneous_input_g_min = cho_per_unit_g / intake_interval_min # Assegnamo l'unità al minuto di assunzione
+        
+        # Ossidazione massima effettiva
+        target_exo_g_min = min(instantaneous_input_g_min, max_exo_rate_g_min) * oxidation_efficiency
         
         # Cinetica assorbimento (non lineare)
         if t > 0:
+            # L'ossidazione in atto è limitata dal flusso di ossidazione cinetica
             current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
         else:
             current_exo_oxidation_g_min = 0.0
             
         if t > 0:
-            delta_gut = (current_intake_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
+            # Accumulo = ciò che è stato ingerito nell'intervallo - ciò che è stato ossidato
+            # Per l'accumulo discreto, usiamo l'input istantaneo per il calcolo del delta
+            delta_gut = (instantaneous_input_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
         # Aggiornamento Accumulatori GI
         if t > 0:
-            total_intake_cumulative += current_intake_g_min * oxidation_efficiency
+            total_intake_cumulative += instantaneous_input_g_min * oxidation_efficiency # L'intake cumulativo è a gradini
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
         # 3. Ripartizione Substrati
@@ -705,10 +717,11 @@ with tab2:
         
         # Le due simulazioni devono usare gli stessi parametri di attività,
         # ma la simulazione "No Cho" ha intake=0.
-        df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, crossover, subj, act_params)
+        # Passiamo cho_per_unit_g alla funzione simulate_metabolism
+        df_sim, stats = simulate_metabolism(tank_data, duration, carb_intake, cho_per_unit, crossover, subj, act_params)
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
-        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, crossover, subj, act_params)
+        df_no_cho, stats_no_cho = simulate_metabolism(tank_data, duration, 0, cho_per_unit, crossover, subj, act_params)
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
         combined_df = pd.concat([df_sim, df_no_cho])
@@ -905,43 +918,40 @@ with tab2:
             
             # --- Tracce Cumulative per il Secondo Asse Y ---
             
+            # Trasformiamo il df_sim per il grafico dual-axis
+            df_cumulative = df_sim.melt('Time (min)', value_vars=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
+                                       var_name='Flusso', value_name='Grammi')
+
             # 2. Linea Intake Cumulativo (asse secondario)
-            intake_line = alt.Chart(df_sim).mark_line(strokeWidth=2, color='#1976D2').encode(
+            intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
                 x='Time (min)',
-                y=alt.Y('Intake Cumulativo (g)', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
-                tooltip=['Time (min)', 'Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)']
+                y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
+                color=alt.Color('Flusso', 
+                                scale=alt.Scale(domain=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
+                                                range=['#1976D2', '#4CAF50'])
+                               ),
+                strokeDash=alt.condition(alt.datum.Flusso == 'Ossidazione Cumulativa (g)', alt.value([5, 5]), alt.value([0])),
+                tooltip=['Time (min)', 'Flusso', 'Grammi']
             )
 
-            # 3. Linea Ossidazione Cumulativa (asse secondario)
-            oxidation_line = alt.Chart(df_sim).mark_line(strokeWidth=2, color='#4CAF50', strokeDash=[5,5]).encode(
-                x='Time (min)',
-                y='Ossidazione Cumulativa (g)',
-                tooltip=['Time (min)', 'Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)']
-            )
-            
             # Combinazione del grafico principale (Accumulo) e delle tracce cumulative (asse secondario)
-            dual_axis_chart = alt.layer(
-                gut_area,
-                risk_line,
-                max_point
-            ).properties(height=250)
             
-            cumulative_chart = alt.layer(
-                intake_line,
-                oxidation_line
-            ).encode(
-                y=alt.Y('Intake Cumulativo (g)', axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2'))
+            # Asse sinistro (Area di Accumulo)
+            gut_layer = alt.layer(gut_area, risk_line, max_point).encode(
+                y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63'))
             )
             
-            # Utilizziamo l'asse Y destro (secondary axis) per le tracce cumulative
+            # Asse destro (Linee Cumulative)
+            cumulative_layer = intake_oxidation_lines.encode(
+                y=alt.Y('Grammi', 
+                        axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2'),
+                        scale=alt.Scale(domain=[0, df_sim['Intake Cumulativo (g)'].max() * 1.1])
+                        )
+            )
+            
             final_gut_chart = alt.layer(
-                dual_axis_chart,
-                cumulative_chart.encode(
-                    y=alt.Y('Intake Cumulativo (g)', 
-                            axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2'),
-                            scale=alt.Scale(domain=[0, df_sim['Intake Cumulativo (g)'].max() * 1.1])
-                            )
-                )
+                gut_layer,
+                cumulative_layer
             ).resolve_scale(
                 y='independent'
             ).properties(
