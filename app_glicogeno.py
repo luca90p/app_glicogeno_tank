@@ -245,6 +245,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
+        # STRATEGIA UNIFICATA (Costante)
         current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
@@ -486,6 +487,17 @@ with tab1:
         
         st.markdown("---")
         
+        # INSIGHT SCIENTIFICI TANK
+        with st.expander("📚 Insight Scientifici: Ricarica Glicogeno"):
+            st.info("""
+            **Quantità Totale vs Frequenza (Costill et al., 1981)**
+            
+            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
+            
+            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
+            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
+            """)
+        
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -514,7 +526,8 @@ with tab2:
         
         act_params = {'mode': sport_mode}
         
-        duration = 120 
+        # Placeholder variabili durata
+        duration = 120 # Default
         
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
@@ -574,6 +587,7 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
+            # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
@@ -673,6 +687,20 @@ with tab2:
                 x='Time (min)', y='Ossidazione Reale (g/h)'
             )
             st.altair_chart((target_chart + real_chart).properties(height=200), use_container_width=True)
+            
+            # INSIGHT SCIENTIFICI BURN
+            with st.expander("📚 Insight Scientifici: Deplezione e Fibre"):
+                st.info("""
+                **Il "Drift" della Fatica e la Deplezione delle Fibre (Gollnick et al., 1973)**
+                
+                Hai notato che la curva grigia (Digiuno) scende meno ripidamente verso la fine? Non è un errore, è fisiologia.
+                
+                1.  **Fibre ST (Lente) Esauste:** Le prime a svuotarsi di glicogeno sono le fibre lente (efficienti). Quando si esauriscono, il corpo è costretto a reclutare fibre **FT (Rapide)** anche a bassa intensità.
+                2.  **Efficienza Ridotta:** Le fibre FT sono meno efficienti e consumano più glicogeno per produrre la stessa forza.
+                3.  **Protezione Metabolica:** Quando le scorte scendono sotto livelli critici, il muscolo inibisce l'uso del glicogeno residuo per proteggersi dal danno rigor mortis, forzando uno shift verso i grassi (e quindi un calo della potenza sostenibile).
+                
+                L'integrazione esogena (Linea Rossa) ritarda drasticamente il momento in cui le fibre ST si svuotano, mantenendo l'efficienza alta più a lungo.
+                """)
 
         with g2:
             st.caption("Accumulo Intestinale (Rischio GI)")
