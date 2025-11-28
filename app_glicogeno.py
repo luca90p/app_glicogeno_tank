@@ -131,10 +131,10 @@ def calculate_tank(subject: Subject):
     if subject.glucose_mg_dl is not None:
         if subject.glucose_mg_dl < 70:
             liver_fill_factor = 0.2
-            liver_correction_note = "Criticità Epatica (Glicemia < 70)"
+            liver_correction_note = "Criticità Epatica (Glicemia < 70 mg/dL)"
         elif subject.glucose_mg_dl < 85:
             liver_fill_factor = min(liver_fill_factor, 0.5)
-            liver_correction_note = "Riduzione Epatica (Glicemia 70-85)"
+            liver_correction_note = "Riduzione Epatica (Glicemia 70-85 mg/dL)"
     
     current_liver_glycogen = subject.liver_glycogen_g * liver_fill_factor
     total_actual_glycogen = current_muscle_glycogen + current_liver_glycogen
@@ -242,6 +242,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     total_liver_used = 0.0
     total_exo_used = 0.0
     
+    # Variabili inizializzate per evitare errori di scope
+    cho_ratio = 0.0
+    rer = 0.7
+    
     for t in range(int(duration_min) + 1):
         # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
@@ -256,6 +260,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
+                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -291,13 +296,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # --- SHIFT METABOLICO DINAMICO (Zanella/Watt 2002) ---
-            # Riduzione progressiva %CHO se int < 85% per "difesa" scorte
+            # --- SHIFT METABOLICO (King/Zanella: Deplezione Non Lineare) ---
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                # Shift non-lineare (accelerato)
-                hours_past = (t - 60) / 60.0
-                metabolic_shift = 0.05 * (hours_past ** 1.2) 
+                metabolic_shift = (t - 60) * (0.08 / 60.0) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -318,10 +320,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
-        # Blood glucose coperto prima da Esogeno
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
-        # Poi da Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
         max_liver_output = 1.2 
         from_liver = min(remaining_blood_demand, max_liver_output)
@@ -346,14 +346,14 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             
         status_label = "Ottimale"
         if current_liver_glycogen < 20: status_label = "CRITICO (Ipoglicemia)"
-        elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
+        elif current_muscle_glycogen < 100: status_label = "Warning (Deplezione)"
             
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": from_exogenous * 60,
-            "Lipidi Ossidati (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            "Ossidazione Lipidica (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -364,7 +364,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
     total_kcal_final = current_kcal_demand * 60 
     
-    # Calcolo del totale residuo per stats
     final_total_glycogen = current_muscle_glycogen + current_liver_glycogen
 
     stats = {
@@ -382,8 +381,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         "avg_rer": rer,
         "gross_efficiency": gross_efficiency,
         "intake_g_h": constant_carb_intake_g_h,
-        "cho_pct": cho_ratio * 100,
-        "fat_rate_g_h": (total_fat_burned_g / duration_min) * 60 if duration_min > 0 else 0
+        "cho_pct": cho_ratio * 100
     }
 
     return pd.DataFrame(results), stats
@@ -435,13 +433,13 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
+        with st.expander("Note Tecniche: Riferimenti Scientifici (Tank)"):
             st.info("""
-            **1. Stima Glicogeno da VO2max:**
-            Basata sulla correlazione lineare osservata tra fitness aerobico e densità di stoccaggio (Areta & Hopkins, 2018).
-            
-            **2. Quantità Totale vs Frequenza (Costill et al., 1981):**
-            Per il riempimento del serbatoio (24h pre-gara), è la quantità totale (g/kg) a determinare il livello finale, non la frequenza dei pasti.
+            **Stima Glicogeno da VO2max**
+            Il modello applica una funzione lineare derivata dalla meta-analisi di *Areta & Hopkins (2018)*, che correla la capacità aerobica massima alla densità di stoccaggio del glicogeno muscolare (range 13-26 g/kg di muscolo umido).
+
+            **Quantità Totale vs Frequenza**
+            In accordo con *Costill et al. (1981)*, il modello assume che il determinante principale per il riempimento delle scorte nelle 24h pre-esercizio sia l'introito totale di carboidrati (g/kg) e non la frequenza dei pasti.
             """)
             
         with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
@@ -598,7 +596,7 @@ with tab2:
                     pace_decimal = pm + ps/60.0
                     duration = distance_km * pace_decimal
                     speed_kmh = 60.0 / pace_decimal
-                    st.info(f"⏱️ Durata prevista: **{int(duration // 60)}h {int(duration % 60)}m**")
+                    st.info(f"Tempo Stimato: **{int(duration // 60)}h {int(duration % 60)}m**")
                 else:
                     target_h = c_var.number_input("Ore", 0, 24, 1)
                     target_m = c_var.number_input("Minuti", 0, 59, 45)
@@ -608,7 +606,7 @@ with tab2:
                     speed_kmh = 60.0 / pace_decimal
                     p_min = int(pace_decimal)
                     p_sec = int((pace_decimal - p_min) * 60)
-                    st.info(f"🏃 Passo richiesto: **{p_min}:{p_sec:02d} /km**")
+                    st.info(f"Passo Richiesto: **{p_min}:{p_sec:02d} /km**")
 
                 act_params['speed_kmh'] = speed_kmh
                 
@@ -637,7 +635,7 @@ with tab2:
                 units_per_hour = carb_intake / cho_per_unit
                 if units_per_hour > 0:
                     interval_min = 60 / units_per_hour
-                    st.caption(f"👉 {units_per_hour:.1f} unità/h (1 ogni **{int(interval_min)} min**)")
+                    st.caption(f"Protocollo: {units_per_hour:.1f} unità/h (1 ogni **{int(interval_min)} min**)")
             
             st.markdown("---")
 
@@ -697,7 +695,7 @@ with tab2:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
             # Stacked Area Chart per vedere le FONTI
-            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Lipidi Ossidati (g)'], 
+            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
@@ -709,22 +707,19 @@ with tab2:
             
             st.altair_chart(chart_stack, use_container_width=True)
             
-            # INSIGHT SCIENTIFICI BURN
-            with st.expander("📚 Insight: Fatigue Drift & Sparing"):
+            with st.expander("Note Tecniche: Cinetica Deplezione & Sparing"):
                 st.info("""
-                **Modello di Coggan & Coyle (1991) / King (2018):**
+                **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
                 
-                * **Non-Linearità:** L'uso del glicogeno muscolare cala naturalmente nel tempo man mano che le scorte si svuotano, sostituito dal glucosio ematico e dai grassi.
-                * **Effetto Reintegro:** Mangiare carboidrati *protegge* il fegato e mantiene la glicemia, permettendo al muscolo di continuare a lavorare anche quando le scorte interne sono basse.
+                * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973).
+                * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
                 """)
                 
-            # EXPANDER FRAYN RICHIESTO
-            with st.expander("🧪 Equazioni Metaboliche (Frayn, 1983)"):
+            with st.expander("Note Metodologiche: Equazioni Metaboliche (Frayn)"):
                 st.info("""
-                **Calcolo Substrati (Frayn, 1983)**
+                **Calcolo Stechiometrico dei Substrati**
                 
-                L'app utilizza le equazioni stechiometriche di Frayn per derivare i tassi di ossidazione netta di carboidrati e grassi dai valori di RER (Quoziente Respiratorio) stimati.
-                Questo garantisce che il bilancio energetico rispetti la fisiologia della respirazione cellulare, tenendo conto anche (indirettamente) dei processi di gluconeogenesi che avvengono nelle attività di lunga durata.
+                Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
                 """)
 
             st.caption("Confronto: Strategia vs Digiuno")
@@ -745,15 +740,15 @@ with tab2:
             risk_line = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='red', strokeDash=[2,2]).encode(y='y')
             st.altair_chart((gut_chart + risk_line).properties(height=250), use_container_width=True)
             
-            with st.expander("📘 Note Tecniche: Assorbimento & GI"):
+            with st.expander("Note Tecniche: Tolleranza Gastrointestinale"):
                  st.info("""
-                 **Limiti di Ossidazione (Podlogar et al., 2025):**
-                 L'assorbimento non è infinito. La capacità massima è correlata a potenza e taglia corporea. L'eccesso si accumula nell'intestino aumentando il rischio di disturbi gastrointestinali (GI Distress).
+                 **Limiti di Ossidazione e Distress GI**
+                 Come evidenziato da *Podlogar et al. (2025)*, la capacità di ossidazione esogena non è illimitata ed è correlata alla taglia corporea e alla potenza metabolica. L'ingestione superiore alla capacità di ossidazione porta ad accumulo intestinale, aumentando il rischio di disturbi gastrointestinali.
                  """)
             
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Ossidazione Lipidica (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
@@ -764,20 +759,20 @@ with tab2:
         s1, s2 = st.columns([2, 1])
         with s1:
             if bonk_time:
-                st.error(f"🚨 **CRISI RILEVATA AL MINUTO {int(bonk_time)}**")
+                st.error(f"CRITICITÀ RILEVATA AL MINUTO {int(bonk_time)}")
                 if not np.isnan(liver_bonk_time) and liver_bonk_time == bonk_time:
-                    st.write("Causa: **Ipoglicemia (Fegato Vuoto)**.")
+                    st.write("Causa Primaria: **Esaurimento Glicogeno Epatico (Ipoglicemia)**.")
                 else:
-                    st.write("Causa: **Esaurimento Muscolare**.")
+                    st.write("Causa Primaria: **Esaurimento Glicogeno Muscolare**.")
             else:
-                st.success("✅ **STRATEGIA SOSTENIBILE**")
-                st.write("Il fegato è protetto e il glicogeno muscolare residuo è sufficiente.")
+                st.success("STRATEGIA SOSTENIBILE")
+                st.write("Il bilancio energetico stimato consente di completare la prova senza deplezione critica.")
         
         with s2:
             if bonk_time:
-                st.metric("Tempo alla Crisi", f"{int(bonk_time)} min", delta_color="inverse")
+                st.metric("Tempo Limite Stimato", f"{int(bonk_time)} min", delta_color="inverse")
             else:
-                st.metric("Buffer", "Ottimale")
+                st.metric("Buffer Energetico", "Adeguato")
         
         st.markdown("### 📋 Cronotabella di Integrazione")
         
@@ -805,6 +800,6 @@ with tab2:
                 else:
                     st.info("Durata troppo breve per l'intervallo di assunzione calcolato.")
             else:
-                st.warning("Controlla i parametri di integrazione.")
+                st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
