@@ -252,6 +252,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         avg_hr = activity_params['avg_hr']
         threshold_hr = activity_params['threshold_hr']
         intensity_factor = avg_hr / threshold_hr if threshold_hr > 0 else 0.7
+        
         ftp_watts = (subject_obj.vo2max_absolute_l_min * 1000) / 12 
         
     elif mode == 'other':
@@ -281,31 +282,38 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     tau_absorption = 20.0 
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
+    # Accumulatori per statistiche finali
     total_muscle_used = 0.0
     total_liver_used = 0.0
     total_exo_used = 0.0
     
+    # Variabili inizializzate per evitare errori di scope
     cho_ratio = 0.0
     rer = 0.7
     
     for t in range(int(duration_min) + 1):
+        # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
+                # Fatigue Drift (meccanico) - Gollnick et al 1973:
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
         else: 
+            # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60: drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
+        # 2. Gestione Intake (Costante)
         current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
         target_exo_g_min = min(current_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency
         
+        # Cinetica assorbimento (non lineare)
         if t > 0:
             current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
         else:
@@ -316,6 +324,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
+        # 3. Ripartizione Substrati
         if is_lab_data:
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult
@@ -330,6 +339,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
+            # --- SHIFT METABOLICO DINAMICO (King/Zanella) ---
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 hours_past = (t - 60) / 60.0
@@ -340,9 +350,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             fat_ratio = 1.0 - cho_ratio
             kcal_cho_demand = current_kcal_demand * cho_ratio
         
+        # Bilancio
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
+        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
+        # Più è vuoto, meno contribuisce (shift verso sangue)
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
@@ -358,6 +371,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         from_liver = min(remaining_blood_demand, max_liver_output)
         if current_liver_glycogen <= 0: from_liver = 0
         
+        # Aggiornamento
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
