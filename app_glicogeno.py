@@ -732,19 +732,18 @@ with tab2:
             
             # Mappatura colori richiesta dall'utente
             color_map = {
-                'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso (4)
-                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (3)
+                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (4) - BASE
+                'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso (3)
                 'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
-                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1)
+                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - CIMA
             }
             
-            # Ordine RICHIESTO (dal basso verso l'alto): Lipidi (4), Muscolare (3), Esogeni (2), Epatico (1)
-            # Questo è l'ordine in cui il DataFrame viene "meltato" (stack_order)
+            # Ordine RICHIESTO (dal basso verso l'alto): Muscolare (4), Lipidi (3), Esogeni (2), Epatico (1)
             stack_order = [
-                'Ossidazione Lipidica (g)',  # BASE
-                'Glicogeno Muscolare (g)',   
-                'Carboidrati Esogeni (g)',   
-                'Glicogeno Epatico (g)'      # CIMA
+                'Glicogeno Muscolare (g)',   # 1. BASE (Posizione 4)
+                'Ossidazione Lipidica (g)',  # 2. Sopra 1 (Posizione 3)
+                'Carboidrati Esogeni (g)',   # 3. Sopra 2 (Posizione 2)
+                'Glicogeno Epatico (g)'      # 4. CIMA (Posizione 1)
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
@@ -752,6 +751,7 @@ with tab2:
                                   var_name='Source', value_name='Rate (g/h)')
             
             # TRUCCO: Aggiungi un indice di sort per forzare l'ordine in Altair
+            # L'indice va da 0 (base) a 3 (cima)
             sort_map = {source: i for i, source in enumerate(stack_order)}
             df_long['sort_index'] = df_long['Source'].map(sort_map)
             
