@@ -510,11 +510,17 @@ with tab1:
         
         with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
             st.info("""
-            **1. Stima Glicogeno da VO2max:**
-            Basata sulla correlazione lineare osservata tra fitness aerobico e densità di stoccaggio (Areta & Hopkins, 2018).
+            **1. Stima Riserve & Capacità di Stoccaggio**
+            * **Stima della Concentrazione (g/kg):** Si basa sulla correlazione tra il fitness aerobico (VO2max) e la densità di stoccaggio muscolare, riflettendo la capacità di adattamento cellulare (Burke et al., 2017).
+            * **Capacità Massima (Fattore 1.25):** La supercompensazione del glicogeno si ottiene con carichi di CHO $>8 \text{ g/kg/die}$ in $36-48$ ore, portando le riserve totali oltre i livelli basali (Bergström et al., 1967; Burke et al., 2017).
+            * **Creatina:** La supplementazione di creatina è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, probabilmente a causa di un aumento dell'osmolarità cellulare (Roberts et al., 2016).
             
-            **2. Quantità Totale vs Frequenza (Costill et al., 1981):**
-            Per il riempimento del serbatoio (24h pre-gara), è la quantità totale (g/kg) a determinare il livello finale, non la frequenza dei pasti.
+            ---
+            
+            **2. Prossimi Sviluppi (In Lavorazione)**
+            
+            * **A) Coingestione Proteine:** Valutazione dell'effetto dell'aggiunta di proteine al $\text{CHO}$ quando l'apporto di $\text{CHO}$ è sub-ottimale (es. sotto $60 \text{ g/h}$), un meccanismo che potenzia la risintesi del glicogeno (Burke et al., 2017).
+            * **B) Impatto del GI/Tipo di CHO:** Implementazione della logica secondo cui $\text{CHO}$ ad alto indice glicemico (GI) può accelerare il ripristino delle riserve nelle prime ore post-esercizio.
             """)
             
         with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
@@ -733,7 +739,7 @@ with tab2:
             # CHECKBOX PER PARAMETRI AVANZATI
             use_custom_kinetic = st.checkbox(
                 "Usa parametri cinetici personalizzati (τ, Rischio GI)",
-                help="Attiva questa opzione se conosci i tuoi tassi di assorbimento intestinale o le tue soglie di tolleranza GI.",
+                help="Attiva questa opzione se conosci i tuoi tassi di assorbimento intestinale o le tue soglie di tolleranza GI. Utile per la calibrazione inversa.",
                 value=False
             )
             
