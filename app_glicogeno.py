@@ -734,18 +734,18 @@ with tab2:
             
             # Mappatura colori richiesta dall'utente
             color_map = {
-                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (4) - BASE
+                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - BASE
+                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (2) 
                 'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso (3)
-                'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
-                'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - CIMA
+                'Carboidrati Esogeni (g)': '#1976D2', # Blu (4) - CIMA
             }
             
-            # Ordine RICHIESTO (dal basso verso l'alto): Muscolare (4), Lipidi (3), Esogeni (2), Epatico (1)
+            # Ordine desiderato (dal basso verso l'alto): Epatico, Muscolare, Lipidi, Esogeni
             stack_order = [
-                'Glicogeno Muscolare (g)',   # 1. BASE (Posizione 4)
-                'Ossidazione Lipidica (g)',  # 2. Sopra 1 (Posizione 3)
-                'Carboidrati Esogeni (g)',   # 3. Sopra 2 (Posizione 2)
-                'Glicogeno Epatico (g)'      # 4. CIMA (Posizione 1)
+                'Glicogeno Epatico (g)',     # 1. BASE (indice 0)
+                'Glicogeno Muscolare (g)',   # 2. Sopra 1 (indice 1)
+                'Ossidazione Lipidica (g)',  # 3. Sopra 2 (indice 2)
+                'Carboidrati Esogeni (g)',   # 4. CIMA (indice 3)
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
@@ -753,12 +753,12 @@ with tab2:
                                   var_name='Source', value_name='Rate (g/h)')
             
             # TRUCCO: Mappatura dell'indice ordinale per forzare l'ordinamento
-            # Indice 0 = Base (Muscolare), Indice 3 = Cima (Epatico). Usiamo sort: ascending.
+            # Indice 0 = Base (Epatico), Indice 3 = Cima (Esogeni). Usiamo sort: ascending.
             sort_map = {
-                'Glicogeno Muscolare (g)': 0,
-                'Ossidazione Lipidica (g)': 1,
-                'Carboidrati Esogeni (g)': 2,
-                'Glicogeno Epatico (g)': 3
+                'Glicogeno Epatico (g)': 0,
+                'Glicogeno Muscolare (g)': 1,
+                'Ossidazione Lipidica (g)': 2,
+                'Carboidrati Esogeni (g)': 3
             }
             df_long['sort_index'] = df_long['Source'].map(sort_map)
             
@@ -773,7 +773,7 @@ with tab2:
                                 scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
                                                 range=color_range),
                                 # FORZA L'ORDINE SULL'INDICE NUMERICO IN MODO CRESCENTE (ascending)
-                                # L'indice 0 (Muscolare) va in fondo, l'indice 3 (Epatico) va in cima.
+                                # L'indice 0 (Epatico) va in fondo, l'indice 3 (Esogeni) va in cima.
                                 sort=alt.SortField(field='sort_index', order='ascending') 
                                ),
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
