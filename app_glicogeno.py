@@ -173,6 +173,38 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
+def find_crossover_from_data(known_power, known_cho_rate, ftp, efficiency):
+    """
+    Reverse engineering: Trova il Crossover Point che genera un certo consumo CHO a una certa potenza.
+    """
+    best_crossover = 70
+    min_error = float('inf')
+    
+    # Brute force search ottimizzato (veloce per questo scopo)
+    for co in range(50, 86): # Range slider 50-85
+        # Calcolo parametri puntuali (t=0, no drift)
+        intensity_factor = known_power / ftp if ftp > 0 else 0
+        
+        # Ricostruzione logica simulate_metabolism per singolo punto
+        standard_crossover_ref = 75.0
+        shift_factor = (standard_crossover_ref - co) / 100.0
+        effective_if = intensity_factor + shift_factor
+        if effective_if < 0.3: effective_if = 0.3
+        
+        rer = calculate_rer_polynomial(effective_if)
+        cho_ratio = (rer - 0.70) * 3.45
+        cho_ratio = max(0.0, min(1.0, cho_ratio))
+        
+        kcal_min = (known_power * 60) / 4184 / (efficiency / 100.0)
+        calc_cho_rate = (kcal_min * cho_ratio) / 4.1
+        
+        error = abs(calc_cho_rate - known_cho_rate)
+        if error < min_error:
+            min_error = error
+            best_crossover = co
+            
+    return best_crossover
+
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
@@ -257,10 +289,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
         else: 
-            # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
-                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -296,10 +326,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # --- SHIFT METABOLICO (King/Zanella: Deplezione Non Lineare) ---
+            # --- SHIFT METABOLICO DINAMICO (King/Zanella) ---
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                metabolic_shift = (t - 60) * (0.08 / 60.0) 
+                hours_past = (t - 60) / 60.0
+                metabolic_shift = 0.05 * (hours_past ** 1.2) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -311,7 +342,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
+        # Modello Coggan: Deplezione Muscolare
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
@@ -346,14 +377,14 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             
         status_label = "Ottimale"
         if current_liver_glycogen < 20: status_label = "CRITICO (Ipoglicemia)"
-        elif current_muscle_glycogen < 100: status_label = "Warning (Deplezione)"
+        elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": from_exogenous * 60,
-            "Ossidazione Lipidica (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -433,13 +464,13 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        with st.expander("Note Tecniche: Riferimenti Scientifici (Tank)"):
+        with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
             st.info("""
-            **Stima Glicogeno da VO2max**
-            Il modello applica una funzione lineare derivata dalla meta-analisi di *Areta & Hopkins (2018)*, che correla la capacità aerobica massima alla densità di stoccaggio del glicogeno muscolare (range 13-26 g/kg di muscolo umido).
-
-            **Quantità Totale vs Frequenza**
-            In accordo con *Costill et al. (1981)*, il modello assume che il determinante principale per il riempimento delle scorte nelle 24h pre-esercizio sia l'introito totale di carboidrati (g/kg) e non la frequenza dei pasti.
+            **1. Stima Glicogeno da VO2max:**
+            Basata sulla correlazione lineare osservata tra fitness aerobico e densità di stoccaggio (Areta & Hopkins, 2018).
+            
+            **2. Quantità Totale vs Frequenza (Costill et al., 1981):**
+            Per il riempimento del serbatoio (24h pre-gara), è la quantità totale (g/kg) a determinare il livello finale, non la frequenza dei pasti.
             """)
             
         with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
@@ -650,7 +681,27 @@ with tab2:
                 act_params['lab_fat_g_h'] = lab_fat
                 crossover = 75 
             else:
-                crossover = st.slider("Crossover Point (Soglia Aerobica) [% Soglia]", 50, 85, 70, 5,
+                # --- CALIBRAZIONE (Tuning) ---
+                st.subheader("Calibrazione Modello")
+                st.caption("Se hai un dato parziale da un test (es. a X watt ho consumato Y g/min di CHO), inseriscilo qui per tarare il Crossover Point.")
+                
+                with st.expander("Apri Calibrazione Avanzata"):
+                    calib_watts = st.number_input("Potenza Test (Watt)", 100, 600, 200, step=10)
+                    calib_cho = st.number_input("Consumo CHO Rilevato (g/min)", 0.0, 5.0, 1.5, 0.1)
+                    
+                    if st.button("Calibra Crossover"):
+                        if sport_mode != 'cycling':
+                            st.warning("La calibrazione automatica è ottimizzata per il Ciclismo (Watt).")
+                        else:
+                            # Esegui calibrazione inversa
+                            best_co = find_crossover_from_data(calib_watts, calib_cho, ftp, act_params['efficiency'])
+                            st.session_state['calibrated_crossover'] = best_co
+                            st.success(f"Crossover ottimizzato: **{best_co}%**")
+
+                # Usa valore calibrato se esiste, altrimenti default
+                default_co = st.session_state.get('calibrated_crossover', 75)
+                
+                crossover = st.slider("Crossover Point (Soglia Aerobica) [% Soglia]", 50, 85, default_co, 1,
                                       help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
                 if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
                 elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
@@ -695,7 +746,7 @@ with tab2:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
             # Stacked Area Chart per vedere le FONTI
-            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)'], 
+            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Fat Oxidation (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
@@ -707,15 +758,17 @@ with tab2:
             
             st.altair_chart(chart_stack, use_container_width=True)
             
-            with st.expander("Note Tecniche: Cinetica Deplezione & Sparing"):
+            # INSIGHT SCIENTIFICI BURN
+            with st.expander("📚 Insight: Fatigue Drift & Sparing"):
                 st.info("""
-                **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
+                **Modello di Coggan & Coyle (1991) / King (2018):**
                 
                 * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973).
                 * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
                 """)
                 
-            with st.expander("Note Metodologiche: Equazioni Metaboliche (Frayn)"):
+            # EXPANDER FRAYN RICHIESTO
+            with st.expander("🧪 Equazioni Metaboliche (Frayn, 1983)"):
                 st.info("""
                 **Calcolo Stechiometrico dei Substrati**
                 
@@ -743,12 +796,12 @@ with tab2:
             with st.expander("Note Tecniche: Tolleranza Gastrointestinale"):
                  st.info("""
                  **Limiti di Ossidazione e Distress GI**
-                 Come evidenziato da *Podlogar et al. (2025)*, la capacità di ossidazione esogena non è illimitata ed è correlata alla taglia corporea e alla potenza metabolica. L'ingestione superiore alla capacità di ossidazione porta ad accumulo intestinale, aumentando il rischio di disturbi gastrointestinali.
+                 Come evidenziato da *Podlogar et al. (2025)*, la capacità di ossidazione esogena non è illimitata ed è correlata alla taglia corporea e alla potenza metabolica. L'ingestione superiore alla capacità di ossidazione porta ad accumulo intestinale, aumentando il rischio di disturbi gastrointestinali (GI Distress).
                  """)
             
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Ossidazione Lipidica (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Fat Oxidation (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
