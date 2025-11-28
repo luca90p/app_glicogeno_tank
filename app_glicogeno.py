@@ -740,10 +740,10 @@ with tab2:
             
             # Ordine richiesto (dal basso verso l'alto): Epatico, Esogeni, Muscolare, Lipidi
             stack_order = [
-                'Glicogeno Epatico (g)',    # 1. Base (Sotto)
-                'Carboidrati Esogeni (g)',  # 2. Sopra 1
-                'Glicogeno Muscolare (g)',  # 3. Sopra 2
-                'Ossidazione Lipidica (g)'  # 4. Cima (Sopra 3)
+                'Ossidazione Lipidica (g)',    # 1. Base (Sotto)
+                'Glicogeno Muscolare (g)',  # 2. Sopra 1
+                'Carboidrati Esogeni (g)',  # 3. Sopra 2
+                'Glicogeno Epatico (g)'  # 4. Cima (Sopra 3)
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
@@ -908,3 +908,4 @@ with tab2:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
+
