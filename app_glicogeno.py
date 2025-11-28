@@ -260,6 +260,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
+                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -298,7 +299,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             # --- SHIFT METABOLICO (King/Zanella: Deplezione Non Lineare) ---
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                metabolic_shift = (t - 60) * (0.08 / 60.0) # Shift più marcato
+                metabolic_shift = (t - 60) * (0.08 / 60.0) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -352,7 +353,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": from_exogenous * 60,
-            "Lipidi Ossidati (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -559,10 +560,14 @@ with tab2:
         col_param, col_meta = st.columns([1, 1])
         
         act_params = {'mode': sport_mode}
+        
+        # Placeholder variabili durata
         duration = 120 # Default
+        
+        # INIZIALIZZAZIONE VARIABILI NUTRIZIONALI PRIMA DEL LAYOUT
         cho_per_unit = 25 # Default
         carb_intake = 60  # Default
-        
+
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
@@ -576,8 +581,10 @@ with tab2:
                 
             elif sport_mode == 'running':
                 run_input_mode = st.radio("Modalità Obiettivo:", ["Imposta Passo & Distanza", "Imposta Tempo & Distanza"], horizontal=True)
+                
                 c_dist, c_var = st.columns(2)
                 distance_km = c_dist.number_input("Distanza (km)", 1.0, 100.0, 21.1, 0.1)
+                
                 paces_options = []
                 for m in range(2, 16): 
                     for s in range(0, 60, 5):
@@ -602,6 +609,7 @@ with tab2:
                     st.info(f"🏃 Passo richiesto: **{p_min}:{p_sec:02d} /km**")
 
                 act_params['speed_kmh'] = speed_kmh
+                
                 c_hr1, c_hr2 = st.columns(2)
                 thr_hr = c_hr1.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
                 avg_hr = c_hr2.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
@@ -618,6 +626,7 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
+            # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
@@ -686,7 +695,7 @@ with tab2:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
             # Stacked Area Chart per vedere le FONTI
-            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Lipidi Ossidati (g)'], 
+            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Fat Oxidation (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
@@ -698,13 +707,22 @@ with tab2:
             
             st.altair_chart(chart_stack, use_container_width=True)
             
-            with st.expander("📘 Note Tecniche: Deplezione Selettiva & Sparing"):
+            # INSIGHT SCIENTIFICI BURN
+            with st.expander("📚 Insight: Fatigue Drift & Sparing"):
                 st.info("""
-                **1. Deplezione delle Fibre (Gollnick et al., 1973):**
-                La curva non è lineare perché, esaurendosi le fibre lente (ST), il corpo recluta fibre rapide (FT) meno efficienti, accelerando il costo metabolico nel tempo ("Fatigue Drift").
+                **Modello di Coggan & Coyle (1991) / King (2018):**
                 
-                **2. Modello Coggan & Coyle (1991):**
-                Il grafico mostra come l'ossidazione di carboidrati esogeni (blu) non sia immediata (lag di assorbimento) ma diventi cruciale nella seconda metà di gara per sostituire il glicogeno epatico in esaurimento.
+                * **Non-Linearità:** L'uso del glicogeno muscolare cala naturalmente nel tempo man mano che le scorte si svuotano, sostituito dal glucosio ematico e dai grassi.
+                * **Effetto Reintegro:** Mangiare carboidrati *protegge* il fegato e mantiene la glicemia, permettendo al muscolo di continuare a lavorare anche quando le scorte interne sono basse.
+                """)
+                
+            # EXPANDER FRAYN RICHIESTO
+            with st.expander("🧪 Equazioni Metaboliche (Frayn, 1983)"):
+                st.info("""
+                **Calcolo Substrati (Frayn, 1983)**
+                
+                L'app utilizza le equazioni stechiometriche di Frayn per derivare i tassi di ossidazione netta di carboidrati e grassi dai valori di RER (Quoziente Respiratorio) stimati.
+                Questo garantisce che il bilancio energetico rispetti la fisiologia della respirazione cellulare, tenendo conto anche (indirettamente) dei processi di gluconeogenesi che avvengono nelle attività di lunga durata.
                 """)
 
             st.caption("Confronto: Strategia vs Digiuno")
@@ -733,7 +751,7 @@ with tab2:
             
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Fat Oxidation (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
