@@ -176,7 +176,13 @@ def calculate_rer_polynomial(intensity_factor):
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
-    current_glycogen = tank_g
+    
+    # Dati Iniziali
+    initial_muscle_glycogen = subject_data['muscle_glycogen_g']
+    initial_liver_glycogen = subject_data['liver_glycogen_g']
+    
+    current_muscle_glycogen = initial_muscle_glycogen
+    current_liver_glycogen = initial_liver_glycogen
     
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
@@ -186,7 +192,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     intensity_factor = 0.7
     kcal_per_min_base = 10.0
     
-    # --- DETERMINAZIONE PARAMETRI SFORZO ---
     if mode == 'cycling':
         avg_power = activity_params['avg_watts']
         ftp_watts = activity_params['ftp_watts']
@@ -218,7 +223,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
     lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
     
-    # Parametri Generali
     crossover_if = crossover_pct / 100.0
     effective_if_for_rer = intensity_factor + ((75.0 - crossover_pct) / 100.0)
     if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
@@ -226,14 +230,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     max_exo_rate_g_min = estimate_max_exogenous_oxidation(subject_obj.height_cm, subject_obj.weight_kg, ftp_watts)
     oxidation_efficiency = 0.80 
     
-    # Stato Variabili
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
     tau_absorption = 20.0 
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
-    # Accumulatori per statistiche finali
+    # Accumulatori
     total_muscle_used = 0.0
     total_liver_used = 0.0
     total_exo_used = 0.0
@@ -252,7 +255,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             if t > 60: drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        # 2. Gestione Intake
+        # 2. Gestione Intake (Costante)
         current_intake_g_h = constant_carb_intake_g_h
         current_intake_g_min = current_intake_g_h / 60.0
         
@@ -268,21 +271,22 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
         
-        # 3. Ripartizione Substrati (Modello Coggan 1991)
-        # Calcolo RER e CHO Ratio Totale
+        # 3. Ripartizione Substrati
         if is_lab_data:
-            # ... Logica Lab esistente
-            rer = 0.85 # Dummy
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult
-            cho_ratio = 1.0 # Lab override
-            kcal_cho_demand = total_cho_demand * 4.1 # Reverse calc
+            glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
+            min_endo = total_cho_demand * 0.2 
+            if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
+            fat_burned_per_min = lab_fat_rate 
+            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
+            rer = 0.7 + (0.3 * cho_ratio) 
         else:
             rer = calculate_rer_polynomial(effective_if_for_rer)
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # Shift metabolico temporale (Coggan/Zanella)
+            # Shift metabolico
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 metabolic_shift = (t - 60) * (0.05 / 60.0) 
@@ -290,44 +294,37 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             
             cho_ratio = current_cho_ratio
             fat_ratio = 1.0 - cho_ratio
+            
             kcal_cho_demand = current_kcal_demand * cho_ratio
         
-        # DOMANDA CHO TOTALE (g/min)
+        # Bilancio
         total_cho_g_min = kcal_cho_demand / 4.1
+        kcal_from_exo = current_exo_oxidation_g_min * 3.75 # (Non usato per bilancio di massa ma per energia)
         
-        # RIPARTIZIONE FONTI CHO (Coggan 1991 - Fig 1.7 Model)
-        muscle_fill_state = current_muscle_glycogen / tank_g if tank_g > 0 else 0
+        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
+        # Più è vuoto, meno contribuisce (shift verso sangue)
+        muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
         
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
-        
-        # Cap se serbatoio vuoto
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
         
-        # Il resto deve venire dal Sangue (Blood Glucose)
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
-        # Soddisfazione Blood Glucose
-        # Prima priorità: Esogeno (dallo stomaco/intestino)
+        # Blood glucose coperto prima da Esogeno
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
-        # Se avanza richiesta, la prendiamo dal Fegato
+        # Poi da Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
-        from_liver = 0.0
+        max_liver_output = 1.2 
+        from_liver = min(remaining_blood_demand, max_liver_output)
+        if current_liver_glycogen <= 0: from_liver = 0
         
-        if remaining_blood_demand > 0:
-            # Il fegato ha un rate limitato (~1.0 - 1.2 g/min max gluconeogenesi/glicogenolisi)
-            max_liver_output = 1.2 
-            from_liver = min(remaining_blood_demand, max_liver_output)
-            # Se il fegato è vuoto, non dà nulla -> Bonk ipoglicemico
-            if current_liver_glycogen <= 0: from_liver = 0
-        
-        # Aggiornamento Serbatoi
+        # Aggiornamento
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
             
-            # Clamp a 0
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
             
@@ -340,41 +337,33 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             total_liver_used += from_liver
             total_exo_used += from_exogenous
             
-        # Status
         status_label = "Ottimale"
         if current_liver_glycogen < 20: status_label = "CRITICO (Ipoglicemia)"
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
         results.append({
             "Time (min)": t,
-            "Muscle Glycogen (g)": muscle_usage_g_min * 60, # Rate g/h per grafico stacked
+            "Muscle Glycogen (g)": muscle_usage_g_min * 60, 
             "Liver Glycogen (g)": from_liver * 60,
             "Exogenous CHO (g)": from_exogenous * 60,
             "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
-            
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
-            
             "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "Stato": status_label
         })
         
-    avg_intake = constant_carb_intake_g_h
-    
     total_kcal_final = current_kcal_demand * 60 
     
     stats = {
         "final_muscle": current_muscle_glycogen,
         "final_liver": current_liver_glycogen,
-        
         "total_muscle_used": total_muscle_used,
         "total_liver_used": total_liver_used,
         "total_exo_used": total_exo_used,
-        
         "fat_total_g": total_fat_burned_g,
         "kcal_total_h": total_kcal_final,
-        
         "gut_accumulation": (gut_accumulation_total / duration_min) * 60 if duration_min > 0 else 0,
         "max_exo_capacity": max_exo_rate_g_min * 60,
         "intensity_factor": intensity_factor,
@@ -530,17 +519,6 @@ with tab1:
         
         st.markdown("---")
         
-        # INSIGHT SCIENTIFICI TANK (Costill 1981)
-        with st.expander("📚 Insight: Ricarica Glicogeno (Costill et al., 1981)"):
-             st.info("""
-            **Quantità Totale vs Frequenza**
-            
-            La ricerca dimostra che il fattore determinante per la ricarica delle scorte nelle 24 ore pre-gara è la **quantità totale** di carboidrati ingeriti (g/kg), e non la frequenza dei pasti.
-            
-            * Mangiare 500g di carboidrati in 2 grandi pasti o in 7 piccoli spuntini produce lo stesso livello di glicogeno muscolare.
-            * **Consiglio Pratico:** Concentrati sul raggiungere il target totale giornaliero (es. >8 g/kg per il carico) piuttosto che ossessionarti sul timing perfetto dei pasti a riposo.
-            """)
-        
         factors_text = []
         if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         if combined_filling < 1.0 and s_diet != DietType.HIGH_CARB: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -630,6 +608,7 @@ with tab2:
         with col_meta:
             st.subheader("Profilo Metabolico & Nutrizione")
             
+            # NUTRIZIONE PRATICA: Definita QUI
             st.subheader("Gestione Nutrizione Pratica")
             cho_per_unit = st.number_input("Contenuto CHO per Gel/Barretta (g)", 10, 100, 25, 5, help="Es. Un gel isotonico standard ha circa 22g, uno 'high carb' 40g.")
             carb_intake = st.slider("Target Integrazione (g/h)", 0, 120, 60, step=10, help="Quantità media di CHO da assumere ogni ora.")
