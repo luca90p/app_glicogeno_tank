@@ -252,12 +252,15 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
+                # Fatigue Drift (meccanico) - Gollnick et al 1973:
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
         else: 
+            # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
+                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -311,6 +314,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
         # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
+        # Più è vuoto, meno contribuisce (shift verso sangue)
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
         
@@ -371,7 +375,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     stats = {
         "final_muscle": current_muscle_glycogen,
         "final_liver": current_liver_glycogen,
-        "final_glycogen": final_total_glycogen, # FIX KEYERROR
+        "final_glycogen": final_total_glycogen, 
         "total_muscle_used": total_muscle_used,
         "total_liver_used": total_liver_used,
         "total_exo_used": total_exo_used,
@@ -746,7 +750,7 @@ with tab2:
             
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Fat Oxidation (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
