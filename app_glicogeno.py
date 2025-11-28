@@ -304,21 +304,21 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         
         if intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
             # Assunzione discreta di un'unità
-            instantaneous_input_g_min = cho_per_unit_g / intake_interval_min # Assegnamo l'unità al minuto di assunzione
+            instantaneous_input_g_min = cho_per_unit_g # Assegniamo l'unità intera al minuto di assunzione
         
         # Ossidazione massima effettiva
         target_exo_g_min = min(instantaneous_input_g_min, max_exo_rate_g_min) * oxidation_efficiency
         
         # Cinetica assorbimento (non lineare)
         if t > 0:
-            # L'ossidazione in atto è limitata dal flusso di ossidazione cinetica
+            # L'accumulo è lo stato interno, l'ossidazione è il tasso di rilascio nel sangue.
+            # L'ossidazione in atto è limitata dal flusso di ossidazione cinetica (smussata)
             current_exo_oxidation_g_min += alpha * (target_exo_g_min - current_exo_oxidation_g_min)
         else:
             current_exo_oxidation_g_min = 0.0
             
         if t > 0:
-            # Accumulo = ciò che è stato ingerito nell'intervallo - ciò che è stato ossidato
-            # Per l'accumulo discreto, usiamo l'input istantaneo per il calcolo del delta
+            # Accumulo = ciò che entra - ciò che viene ossidato
             delta_gut = (instantaneous_input_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             gut_accumulation_total += delta_gut
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
@@ -405,11 +405,15 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         if current_liver_glycogen < 20: status_label = "CRITICO (Ipoglicemia)"
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
+        # Correzione del valore nel dizionario results per il grafico a pila (deve essere smussato)
+        exo_oxidation_g_h = current_exo_oxidation_g_min * 60
+            
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
-            "Carboidrati Esogeni (g)": from_exogenous * 60,
+            # Correzione: Uso il tasso di ossidazione cinetica (smussato)
+            "Carboidrati Esogeni (g)": exo_oxidation_g_h, 
             # Calcolo corretto dell'Ossidazione Lipidica (g/h)
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             "Residuo Muscolare": current_muscle_glycogen,
@@ -896,26 +900,35 @@ with tab2:
             max_gut_load_time = df_sim[df_sim['Gut Load'] == max_gut_load]['Time (min)'].iloc[0]
             max_df = pd.DataFrame([{'Time (min)': max_gut_load_time, 'Gut Load': max_gut_load}])
 
-            # 1. Grafico Area di Accumulo con Colorazione Condizionale
+            # 1. Grafico Area di Accumulo con Colorazione Condizionale (Asse Y Sinistro)
+            # Definiamo la scala Y per l'Accumulo
+            max_gut_y = df_sim['Gut Load'].max() * 1.2
+            
             gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
                 x='Time (min)', 
                 y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63')),
-                # Colorazione condizionale non sul colore, ma su un campo nascosto per non influenzare la legenda principale
                 tooltip=['Time (min)', 'Gut Load', 'Rischio']
             )
             
             # Linea di Soglia di Rischio (30g)
             risk_line = alt.Chart(pd.DataFrame({'y': [RISK_THRESHOLD]})).mark_rule(color='#F44336', strokeDash=[4,4], size=2).encode(
-                y=alt.Y('y', title='Soglia Rischio', axis=None)
+                y=alt.Y('y', axis=None)
             )
             
             # Punto di Massimo Accumulo
             max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
-                x='Time (min)',
+                x='Time (min)'),
                 y='Gut Load',
                 tooltip=[alt.Tooltip('Time (min)', title='Max Time'), alt.Tooltip('Gut Load', title='Max Accumulo')]
             )
             
+            # Layer Accumulo (Asse Sinistro)
+            gut_layer_combined = alt.layer(gut_area, risk_line, max_point).encode(
+                 y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63'))
+            ).properties(
+                height=250 # Imposta altezza per l'asse sinistro
+            )
+
             # --- Tracce Cumulative per il Secondo Asse Y ---
             
             # Trasformiamo il df_sim per il grafico dual-axis
@@ -924,7 +937,7 @@ with tab2:
 
             # 2. Linea Intake Cumulativo (asse secondario)
             intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
-                x='Time (min)',
+                x='Time (min)'),
                 y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
                 color=alt.Color('Flusso', 
                                 scale=alt.Scale(domain=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
@@ -934,19 +947,14 @@ with tab2:
                 tooltip=['Time (min)', 'Flusso', 'Grammi']
             )
 
-            # Combinazione del grafico principale (Accumulo) e delle tracce cumulative (asse secondario)
-            
-            # Layer Accumulo (Asse Sinistro)
-            gut_layer_combined = alt.layer(gut_area, risk_line, max_point).encode(
-                y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63'))
-            )
-            
             # Layer Cumulative (Asse Destro)
             cumulative_layer = intake_oxidation_lines.encode(
                 y=alt.Y('Grammi', 
                         axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2', orient='right'), # Aggiungo orient='right'
                         scale=alt.Scale(domain=[0, df_sim['Intake Cumulativo (g)'].max() * 1.1])
                         )
+            ).properties(
+                height=250 # Imposta altezza per l'asse destro
             )
             
             final_gut_chart = alt.layer(
