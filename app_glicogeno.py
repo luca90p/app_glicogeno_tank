@@ -733,22 +733,33 @@ with tab2:
             # Mappatura colori richiesta dall'utente
             color_map = {
                 'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso
+                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue
                 'Carboidrati Esogeni (g)': '#1976D2', # Blu
                 'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro
-                'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue
             }
             
-            # Stacked Area Chart per vedere le FONTI (con colori personalizzati)
-            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)'], 
+            # Definizione dell'ordine di stack (inverso rispetto all'ordine di visualizzazione)
+            # L'ordine di Altair è dal basso verso l'alto
+            stack_order = [
+                'Ossidazione Lipidica (g)', # 1. Base (Sotto)
+                'Glicogeno Muscolare (g)',  # 2. Sopra
+                'Carboidrati Esogeni (g)',  # 3. Sopra
+                'Glicogeno Epatico (g)'     # 4. Cima (Sopra)
+            ]
+            
+            # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
+            df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
                 x=alt.X('Time (min)'),
-                y=alt.Y('Rate (g/h)'),
+                y=alt.Y('Rate (g/h)', stack="normalize" if False else True), # Imposta stack a True
                 color=alt.Color('Source', 
                                 scale=alt.Scale(domain=list(color_map.keys()), 
                                                 range=list(color_map.values()))
                                ),
+                # IMPOSIZIONE DELL'ORDINE DI STACK
+                order=alt.Order('Source', sort=['ascending'], sortField=stack_order), 
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
             ).interactive()
             
