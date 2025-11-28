@@ -738,13 +738,12 @@ with tab2:
                 'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro
             }
             
-            # Definizione dell'ordine di stack (inverso rispetto all'ordine di visualizzazione)
-            # L'ordine di Altair è dal basso verso l'alto
+            # Ordine richiesto (dal basso verso l'alto): Epatico, Esogeni, Muscolare, Lipidi
             stack_order = [
-                'Ossidazione Lipidica (g)', # 1. Base (Sotto)
-                'Glicogeno Muscolare (g)',  # 2. Sopra
-                'Carboidrati Esogeni (g)',  # 3. Sopra
-                'Glicogeno Epatico (g)'     # 4. Cima (Sopra)
+                'Glicogeno Epatico (g)',    # 1. Base (Sotto)
+                'Carboidrati Esogeni (g)',  # 2. Sopra 1
+                'Glicogeno Muscolare (g)',  # 3. Sopra 2
+                'Ossidazione Lipidica (g)'  # 4. Cima (Sopra 3)
             ]
             
             # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
