@@ -242,7 +242,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     total_liver_used = 0.0
     total_exo_used = 0.0
     
-    # Variabili inizializzate per evitare errori di scope se il loop non parte o crasha
+    # Variabili inizializzate per evitare errori di scope
     cho_ratio = 0.0
     rer = 0.7
     
@@ -252,15 +252,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
-                # Fatigue Drift (meccanico) - Gollnick et al 1973:
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
         else: 
-            # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
-                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -296,12 +293,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # --- SHIFT METABOLICO DINAMICO (Zanella/Watt 2002) ---
-            # Riduzione progressiva %CHO se int < 85% per "difesa" scorte
+            # --- SHIFT METABOLICO (King/Zanella: Deplezione Non Lineare) ---
+            # Il consumo di CHO non è fisso. Più passa il tempo, più il corpo risparmia (se intensità < critical)
+            # Aggiungiamo un fattore di "Sparing" naturale progressivo dopo la prima ora
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                hours_past = (t - 60) / 60.0
-                metabolic_shift = 0.05 * (hours_past ** 1.2) 
+                metabolic_shift = (t - 60) * (0.08 / 60.0) # Shift più marcato (~8% in meno di CHO per ora extra)
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -314,9 +311,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
         # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
-        # Più è vuoto, meno contribuisce (shift verso sangue)
+        # Più è vuoto, meno contribuisce (shift verso sangue/fegato)
+        # Questa funzione di decadimento rende la curva CONVESSA (veloce all'inizio, lenta alla fine)
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
-        muscle_contribution_factor = math.pow(muscle_fill_state, 0.7) 
+        muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) # Esponente < 1 per curva convessa
         
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
@@ -723,11 +721,12 @@ with tab2:
             st.altair_chart(chart_stack, use_container_width=True)
             
             # INSIGHT SCIENTIFICI BURN (Gollnick 1973)
-            with st.expander("📚 Insight: Fatigue Drift (Gollnick et al., 1973)"):
+            with st.expander("📚 Insight: Fatigue Drift & Sparing"):
                 st.info("""
-                **Deplezione Selettiva delle Fibre**
+                **Modello di Coggan & Coyle (1991) / King (2018):**
                 
-                Gollnick et al. hanno dimostrato che le fibre lente (ST) si svuotano per prime. Quando queste sono esauste, il corpo recluta le fibre rapide (FT) anche a bassa intensità. Le fibre FT sono meno efficienti, aumentando il costo metabolico nel tempo (Fatigue Drift). Questo spiega perché la curva di consumo si inclina verso il basso dopo la prima ora.
+                * **Non-Linearità:** L'uso del glicogeno muscolare cala naturalmente nel tempo man mano che le scorte si svuotano, sostituito dal glucosio ematico e dai grassi.
+                * **Effetto Reintegro:** Mangiare carboidrati *protegge* il fegato e mantiene la glicemia, permettendo al muscolo di continuare a lavorare anche quando le scorte interne sono basse.
                 """)
 
             st.caption("Confronto: Strategia vs Digiuno")
