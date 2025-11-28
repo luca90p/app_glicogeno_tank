@@ -6,6 +6,39 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 
+# --- 0. SISTEMA DI PROTEZIONE (LOGIN) ---
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == "glicogeno2025": # <--- CAMBIA QUI LA TUA PASSWORD
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.text_input(
+            "🔐 Inserisci la Password per accedere al Simulatore", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input + error.
+        st.text_input(
+            "🔐 Inserisci la Password per accedere al Simulatore", type="password", on_change=password_entered, key="password"
+        )
+        st.error("😕 Password errata. Riprova.")
+        return False
+    else:
+        # Password correct.
+        return True
+
+# Se la password non è corretta, ferma tutto qui.
+if not check_password():
+    st.stop()
+
 # --- 1. PARAMETRI FISIOLOGICI ---
 
 class Sex(Enum):
@@ -173,38 +206,6 @@ def calculate_rer_polynomial(intensity_factor):
     )
     return max(0.70, min(1.15, rer))
 
-def find_crossover_from_data(known_power, known_cho_rate, ftp, efficiency):
-    """
-    Reverse engineering: Trova il Crossover Point che genera un certo consumo CHO a una certa potenza.
-    """
-    best_crossover = 70
-    min_error = float('inf')
-    
-    # Brute force search ottimizzato (veloce per questo scopo)
-    for co in range(50, 86): # Range slider 50-85
-        # Calcolo parametri puntuali (t=0, no drift)
-        intensity_factor = known_power / ftp if ftp > 0 else 0
-        
-        # Ricostruzione logica simulate_metabolism per singolo punto
-        standard_crossover_ref = 75.0
-        shift_factor = (standard_crossover_ref - co) / 100.0
-        effective_if = intensity_factor + shift_factor
-        if effective_if < 0.3: effective_if = 0.3
-        
-        rer = calculate_rer_polynomial(effective_if)
-        cho_ratio = (rer - 0.70) * 3.45
-        cho_ratio = max(0.0, min(1.0, cho_ratio))
-        
-        kcal_min = (known_power * 60) / 4184 / (efficiency / 100.0)
-        calc_cho_rate = (kcal_min * cho_ratio) / 4.1
-        
-        error = abs(calc_cho_rate - known_cho_rate)
-        if error < min_error:
-            min_error = error
-            best_crossover = co
-            
-    return best_crossover
-
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, crossover_pct, subject_obj, activity_params):
     tank_g = subject_data['actual_available_g']
     results = []
@@ -274,17 +275,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     total_liver_used = 0.0
     total_exo_used = 0.0
     
-    # Variabili inizializzate per evitare errori di scope
-    cho_ratio = 0.0
-    rer = 0.7
-    
     for t in range(int(duration_min) + 1):
         # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
         if mode == 'cycling':
             current_eff = gross_efficiency
             if t > 60: 
-                # Fatigue Drift (meccanico) - Gollnick et al 1973:
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
@@ -342,7 +338,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # Modello Coggan: Deplezione Muscolare
+        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
@@ -384,7 +380,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": from_exogenous * 60,
-            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            "Ossidazione Lipidica (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -591,14 +587,10 @@ with tab2:
         col_param, col_meta = st.columns([1, 1])
         
         act_params = {'mode': sport_mode}
-        
-        # Placeholder variabili durata
         duration = 120 # Default
-        
-        # INIZIALIZZAZIONE VARIABILI NUTRIZIONALI PRIMA DEL LAYOUT
         cho_per_unit = 25 # Default
         carb_intake = 60  # Default
-
+        
         with col_param:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
@@ -612,10 +604,8 @@ with tab2:
                 
             elif sport_mode == 'running':
                 run_input_mode = st.radio("Modalità Obiettivo:", ["Imposta Passo & Distanza", "Imposta Tempo & Distanza"], horizontal=True)
-                
                 c_dist, c_var = st.columns(2)
                 distance_km = c_dist.number_input("Distanza (km)", 1.0, 100.0, 21.1, 0.1)
-                
                 paces_options = []
                 for m in range(2, 16): 
                     for s in range(0, 60, 5):
@@ -640,7 +630,6 @@ with tab2:
                     st.info(f"Passo Richiesto: **{p_min}:{p_sec:02d} /km**")
 
                 act_params['speed_kmh'] = speed_kmh
-                
                 c_hr1, c_hr2 = st.columns(2)
                 thr_hr = c_hr1.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
                 avg_hr = c_hr2.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
@@ -681,27 +670,7 @@ with tab2:
                 act_params['lab_fat_g_h'] = lab_fat
                 crossover = 75 
             else:
-                # --- CALIBRAZIONE (Tuning) ---
-                st.subheader("Calibrazione Modello")
-                st.caption("Se hai un dato parziale da un test (es. a X watt ho consumato Y g/min di CHO), inseriscilo qui per tarare il Crossover Point.")
-                
-                with st.expander("Apri Calibrazione Avanzata"):
-                    calib_watts = st.number_input("Potenza Test (Watt)", 100, 600, 200, step=10)
-                    calib_cho = st.number_input("Consumo CHO Rilevato (g/min)", 0.0, 5.0, 1.5, 0.1)
-                    
-                    if st.button("Calibra Crossover"):
-                        if sport_mode != 'cycling':
-                            st.warning("La calibrazione automatica è ottimizzata per il Ciclismo (Watt).")
-                        else:
-                            # Esegui calibrazione inversa
-                            best_co = find_crossover_from_data(calib_watts, calib_cho, ftp, act_params['efficiency'])
-                            st.session_state['calibrated_crossover'] = best_co
-                            st.success(f"Crossover ottimizzato: **{best_co}%**")
-
-                # Usa valore calibrato se esiste, altrimenti default
-                default_co = st.session_state.get('calibrated_crossover', 75)
-                
-                crossover = st.slider("Crossover Point (Soglia Aerobica) [% Soglia]", 50, 85, default_co, 1,
+                crossover = st.slider("Crossover Point (Soglia Aerobica) [% Soglia]", 50, 85, 70, 5,
                                       help="Punto in cui il consumo di grassi e carboidrati è equivalente (RER ~0.85).")
                 if crossover > 75: st.caption("Profilo: Alta efficienza lipolitica (Diesel)")
                 elif crossover < 60: st.caption("Profilo: Prevalenza glicolitica (Turbo)")
@@ -746,7 +715,7 @@ with tab2:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
             # Stacked Area Chart per vedere le FONTI
-            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Fat Oxidation (g)'], 
+            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
@@ -759,16 +728,16 @@ with tab2:
             st.altair_chart(chart_stack, use_container_width=True)
             
             # INSIGHT SCIENTIFICI BURN
-            with st.expander("📚 Insight: Fatigue Drift & Sparing"):
+            with st.expander("Note Tecniche: Cinetica Deplezione & Sparing"):
                 st.info("""
-                **Modello di Coggan & Coyle (1991) / King (2018):**
+                **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
                 
                 * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973).
                 * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
                 """)
                 
             # EXPANDER FRAYN RICHIESTO
-            with st.expander("🧪 Equazioni Metaboliche (Frayn, 1983)"):
+            with st.expander("Note Metodologiche: Equazioni Metaboliche (Frayn)"):
                 st.info("""
                 **Calcolo Stechiometrico dei Substrati**
                 
@@ -776,7 +745,6 @@ with tab2:
                 """)
 
             st.caption("Confronto: Strategia vs Digiuno")
-            max_y = max(start_tank, 800)
             base = alt.Chart(combined_df).encode(x=alt.X('Time (min)', title='Durata (min)'))
             lines = base.mark_line(strokeWidth=3).encode(
                 y=alt.Y('Residuo Muscolare', title='Glicogeno Residuo (g)'),
@@ -801,7 +769,7 @@ with tab2:
             
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Fat Oxidation (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Ossidazione Lipidica (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
