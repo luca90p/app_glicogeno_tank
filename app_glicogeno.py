@@ -729,11 +729,39 @@ with tab2:
             
             st.markdown("---")
             st.subheader("Parametri Cinetici Avanzati")
+
+            # CHECKBOX PER PARAMETRI AVANZATI
+            use_custom_kinetic = st.checkbox(
+                "Usa parametri cinetici personalizzati (τ, Rischio GI)",
+                help="Attiva questa opzione se conosci i tuoi tassi di assorbimento intestinale o le tue soglie di tolleranza GI.",
+                value=False
+            )
             
-            # PARAMETRI CUSTOMIZZABILI
-            tau_absorption_input = st.slider("Tau (τ) Cinetica Assorbimento (min)", 5.0, 60.0, 20.0, 2.5, help="Tempo di 'smussamento' della disponibilità di CHO dopo l'ingestione. Minore è il valore, più veloce è l'assorbimento.")
-            risk_threshold_input = st.slider("Soglia di Rischio GI (g)", 10, 80, 30, 5, help="Massimo accumulo tollerabile prima che insorgano sintomi GI.")
-                
+            # VALORI DI DEFAULT
+            TAU_DEFAULT = 20.0
+            RISK_THRESHOLD_DEFAULT = 30
+            
+            tau_absorption_input = TAU_DEFAULT
+            risk_threshold_input = RISK_THRESHOLD_DEFAULT
+
+            if use_custom_kinetic:
+                col_tau, col_risk = st.columns(2)
+                with col_tau:
+                    tau_absorption_input = st.slider(
+                        "Tau (τ) Cinetica Assorbimento (min)", 
+                        5.0, 60.0, TAU_DEFAULT, 2.5, 
+                        help="Tempo di 'smussamento' della disponibilità di CHO dopo l'ingestione. Minore è il valore, più veloce è l'assorbimento."
+                    )
+                with col_risk:
+                    risk_threshold_input = st.slider(
+                        "Soglia di Rischio GI (g)", 
+                        10, 80, RISK_THRESHOLD_DEFAULT, 5, 
+                        help="Massimo accumulo tollerabile prima che insorgano sintomi GI."
+                    )
+            else:
+                 st.caption(f"Utilizzo dei valori standard: τ = **{TAU_DEFAULT:.1f} min** e Soglia Rischio GI = **{RISK_THRESHOLD_DEFAULT} g**.")
+
+
         h_cm = subj.height_cm 
         
         # Le due simulazioni devono usare gli stessi parametri di attività,
@@ -916,7 +944,7 @@ with tab2:
             
             **Area di Rischio (Asse Sinistro):**
             * L'area sottesa è l'**Accumulo Intestinale (Gut Load)**: $\\text{{Intake}} - \\text{{Ossidazione}}$.
-            * **τ Cinetica (Tempo di Smussamento):** {tau_absorption_input} min. Determina quanto velocemente la curva di Ossidazione (Verde) risponde all'Ingestione (Blu).
+            * **τ Cinetica (Tempo di Smussamento):** {tau_absorption_input:.1f} min. Determina quanto velocemente la curva di Ossidazione (Verde) risponde all'Ingestione (Blu).
             * **Soglia di Rischio GI:** {risk_threshold_input} g (Linea Rossa Tratteggiata). Superarla indica un alto rischio di sintomi GI.
             """)
         
