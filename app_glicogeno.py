@@ -740,8 +740,8 @@ with tab2:
             
             # Ordine RICHIESTO (dal basso verso l'alto): Lipidi (4), Muscolare (3), Esogeni (2), Epatico (1)
             stack_order = [
-                'pippo',  # 1. BASE (Posizione 4)
-                'pluto',   # 2. Sopra 1 (Posizione 3)
+                'Ossidazione Lipidica (g)',  # 1. BASE (Posizione 4)
+                'Glicogeno Muscolare (g)',   # 2. Sopra 1 (Posizione 3)
                 'Carboidrati Esogeni (g)',   # 3. Sopra 2 (Posizione 2)
                 'Glicogeno Epatico (g)'      # 4. CIMA (Posizione 1)
             ]
@@ -912,4 +912,3 @@ with tab2:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
-
