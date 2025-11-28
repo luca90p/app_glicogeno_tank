@@ -753,13 +753,13 @@ with tab2:
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
                 x=alt.X('Time (min)'),
-                y=alt.Y('Rate (g/h)', stack="normalize" if False else True), # Imposta stack a True
+                y=alt.Y('Rate (g/h)', stack=True), # Semplicifico lo stack a True
                 color=alt.Color('Source', 
                                 scale=alt.Scale(domain=list(color_map.keys()), 
-                                                range=list(color_map.values()))
+                                                range=list(color_map.values())),
+                                # IMPOSIZIONE DELL'ORDINE DI STACK (tramite sort)
+                                sort=stack_order
                                ),
-                # IMPOSIZIONE DELL'ORDINE DI STACK
-                order=alt.Order('Source', sort=['ascending'], sortField=stack_order), 
                 tooltip=['Time (min)', 'Source', 'Rate (g/h)']
             ).interactive()
             
