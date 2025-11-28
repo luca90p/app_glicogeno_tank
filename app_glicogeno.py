@@ -393,6 +393,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
+            "Residuo Totale": current_muscle_glycogen + current_liver_glycogen, # <--- MODIFICA 1
             "Target Intake (g/h)": current_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "Stato": status_label,
@@ -759,54 +760,55 @@ with tab2:
                 Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
                 """)
 
-            st.caption("Confronto: Deplezione Glicogeno Muscolare (Strategia vs Digiuno) ")
+            st.caption("Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno) ")
             
-            # --- NUOVA LOGICA PER GRAFICO CON BANDE DI RISCHIO ---
+            # --- NUOVA LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
             
-            # 1. Calcola i livelli in base al serbatoio muscolare iniziale (tank_data['muscle_glycogen_g'])
-            initial_muscle_glycogen = tank_data['muscle_glycogen_g']
-            max_muscle = initial_muscle_glycogen * 1.05 # L'asse Y può leggermente superare il valore iniziale
+            # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
+            initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
+            max_total = initial_total_glycogen * 1.05 # Max per l'asse Y
             
-            # Definizione delle soglie di rischio (percentuali sul serbatoio iniziale)
-            # Ad esempio: Verde > 75%; Giallo 35-75%; Rosso < 35%
-            zone_green_end = initial_muscle_glycogen * 1.05 # Max per l'asse
-            zone_yellow_end = initial_muscle_glycogen * 0.75 
-            zone_red_end = initial_muscle_glycogen * 0.35 
+            # Definizioni delle soglie di rischio sul TOTALE GLICOGENO INIZIALE
+            zone_green_end = initial_total_glycogen * 1.05 
+            zone_yellow_end = initial_total_glycogen * 0.65 # Sotto il 65% si entra in zona gialla
+            zone_red_end = initial_total_glycogen * 0.30 # Sotto il 30% si entra in zona critica
+            
+            # Si considerano 20g come limite minimo per la glicemia (rischio bonk)
+            MIN_GLUCEMIA_LIMIT = 20
             
             zones_df = pd.DataFrame({
-                'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)', 'Esaurimento'],
-                # L'ordinamento Y deve essere corretto: Start e End definiscono l'area verticale
-                'Start': [zone_yellow_end, zone_red_end, 20, 0], # 20g è il limite per l'esaurimento
-                'End': [zone_green_end, zone_yellow_end, zone_red_end, 20],
-                'Color': ['#4CAF50', '#FFC107', '#FF9800', '#F44336'] # Verde, Giallo, Arancione, Rosso Scuro
+                'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
+                # Gli intervalli sono definiti dal basso verso l'alto
+                'Start': [zone_yellow_end, MIN_GLUCEMIA_LIMIT, 0],
+                'End': [zone_green_end, zone_yellow_end, MIN_GLUCEMIA_LIMIT],
+                'Color': ['#4CAF50', '#FFC107', '#F44336'] # Verde, Giallo, Rosso Scuro
             })
 
             # 2. Layer 1: Sfondo colorato (Bande)
-            background = alt.Chart(zones_df).mark_rect(opacity=0.1).encode(
-                y=alt.Y('Start', axis=None, title='Glicogeno Muscolare Residuo (g)'), # Inizio della banda (dal basso)
-                y2=alt.Y2('End'),         # Fine della banda
-                color=alt.Color('Color', scale=None), # Usa il colore definito nel DF
+            background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
+                y=alt.Y('Start', axis=None), 
+                y2=alt.Y2('End'),         
+                color=alt.Color('Color', scale=None), 
                 tooltip=['Zone']
             )
 
-            # 3. Layer 2: Linee di Deplezione
+            # 3. Layer 2: Linee di Deplezione. Usa 'Residuo Totale'.
             lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
                 x=alt.X('Time (min)', title='Durata (min)'),
-                y=alt.Y('Residuo Muscolare', title='Glicogeno Muscolare Residuo (g)', scale=alt.Scale(domain=[0, max_muscle])),
-                # CORREZIONE 2: Assicuriamo che la mappatura del colore sia forte
+                y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), # <--- MODIFICA 2: Usa Residuo Totale
+                
                 color=alt.Color('Scenario', 
                                 scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
                                                 range=['#D32F2F', '#757575']
                                                 ),
-                                legend=alt.Legend(title="Scenario") # <--- CORREZIONE: Spostato legend fuori da scale
+                                legend=alt.Legend(title="Scenario")
                                ),
-                tooltip=['Time (min)', 'Residuo Muscolare', 'Stato', 'Scenario']
+                tooltip=['Time (min)', 'Residuo Totale', 'Stato', 'Scenario']
             ).interactive()
 
             # 4. Combinazione dei Layer
-            # CORREZIONE 3: Rimuoviamo il resolve_scale sul colore per evitare conflitti, mantenendo solo l'asse Y condiviso
             chart = (background + lines).properties(
-                title="Confronto: Deplezione Muscolare (Strategia vs Digiuno)"
+                title="Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno)"
             ).resolve_scale(
                 y='shared' 
             )
