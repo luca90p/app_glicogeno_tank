@@ -242,10 +242,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
     total_liver_used = 0.0
     total_exo_used = 0.0
     
-    # Variabili inizializzate per evitare errori di scope
-    cho_ratio = 0.0
-    rer = 0.7
-    
     for t in range(int(duration_min) + 1):
         # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
@@ -260,7 +256,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             # Running: Disaccoppiamento aerobico
             drift_factor = 1.0
             if t > 60:
-                # Aumento costo 0.05% al min dopo 60 min
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
@@ -296,10 +291,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # --- SHIFT METABOLICO (King/Zanella: Deplezione Non Lineare) ---
+            # --- SHIFT METABOLICO DINAMICO (Zanella/Watt 2002) ---
+            # Riduzione progressiva %CHO se int < 85% per "difesa" scorte
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
-                metabolic_shift = (t - 60) * (0.08 / 60.0) 
+                # Shift non-lineare (accelerato)
+                hours_past = (t - 60) / 60.0
+                metabolic_shift = 0.05 * (hours_past ** 1.2) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
             
             cho_ratio = current_cho_ratio
@@ -311,7 +309,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # Modello Coggan: Deplezione Muscolare
+        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
@@ -320,8 +318,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
+        # Blood glucose coperto prima da Esogeno
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
+        # Poi da Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
         max_liver_output = 1.2 
         from_liver = min(remaining_blood_demand, max_liver_output)
@@ -353,7 +353,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": from_exogenous * 60,
-            "Fat Oxidation (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
+            "Lipidi Ossidati (g)": ((current_kcal_demand * fat_ratio) / 9.0) * 60 if not is_lab_data else lab_fat_rate * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Target Intake (g/h)": current_intake_g_h, 
@@ -364,6 +364,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         
     total_kcal_final = current_kcal_demand * 60 
     
+    # Calcolo del totale residuo per stats
     final_total_glycogen = current_muscle_glycogen + current_liver_glycogen
 
     stats = {
@@ -381,7 +382,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cr
         "avg_rer": rer,
         "gross_efficiency": gross_efficiency,
         "intake_g_h": constant_carb_intake_g_h,
-        "cho_pct": cho_ratio * 100
+        "cho_pct": cho_ratio * 100,
+        "fat_rate_g_h": (total_fat_burned_g / duration_min) * 60 if duration_min > 0 else 0
     }
 
     return pd.DataFrame(results), stats
@@ -695,7 +697,7 @@ with tab2:
             st.caption("Cinetica di Deplezione (Muscolo + Fegato)")
             
             # Stacked Area Chart per vedere le FONTI
-            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Fat Oxidation (g)'], 
+            df_long = df_sim.melt('Time (min)', value_vars=['Glicogeno Muscolare (g)', 'Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Lipidi Ossidati (g)'], 
                                   var_name='Source', value_name='Rate (g/h)')
             
             chart_stack = alt.Chart(df_long).mark_area().encode(
@@ -751,7 +753,7 @@ with tab2:
             
             st.markdown("---")
             st.caption("Ossidazione Lipidica")
-            st.line_chart(df_sim.set_index("Time (min)")["Fat Oxidation (g)"], color="#FFA500")
+            st.line_chart(df_sim.set_index("Time (min)")["Lipidi Ossidati (g)"], color="#FFA500")
         
         st.subheader("Strategia & Timing")
         
