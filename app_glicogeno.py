@@ -149,6 +149,9 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
     CHO_MIN_GK = 2.5
     
     # Conversione da Grammi Totali a Grammi/Kg
+    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0) # Protezione da divisione per zero
+    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0) # Protezione da divisione per zero
+    
     cho_day_minus_1_gk = cho_day_minus_1_g / weight_kg
     cho_day_minus_2_gk = cho_day_minus_2_g / weight_kg
     
@@ -512,6 +515,23 @@ st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("Strumento di stima delle riserve energetiche e simulazione del metabolismo sotto sforzo.")
 
+# --- NOTE TECNICHE REINTRODOTTE ---
+with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
+    st.info("""
+    **1. Stima Riserve & Capacità di Stoccaggio**
+    * **Stima della Concentrazione (g/kg):** Si basa sulla correlazione tra il fitness aerobico (VO2max) e la densità di stoccaggio muscolare, riflettendo la capacità di adattamento cellulare (Burke et al., 2017).
+    * **Capacità Massima (Fattore 1.25):** La supercompensazione del glicogeno si ottiene con carichi di CHO $>8 \text{ g/kg/die}$ in $36-48$ ore, portando le riserve totali oltre i livelli basali (Bergström et al., 1967; Burke et al., 2017).
+    * **Creatina:** La supplementazione di creatina (tipicamente con protocolli di carico acuto di $20 \text{ g/die}$ per $5-6$ giorni) è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, probabilmente a causa di un aumento dell'osmolarità cellulare (Roberts et al., 2016; Burke et al., 2017).
+    
+    ---
+    
+    **2. Prossimi Sviluppi (In Lavorazione)**
+    
+    * **A) Coingestione Proteine:** Valutazione dell'effetto dell'aggiunta di proteine al $\text{CHO}$ quando l'apporto di $\text{CHO}$ è sub-ottimale (es. sotto $60 \text{ g/h}$), un meccanismo che potenzia la risintesi del glicogeno (Burke et al., 2017).
+    * **B) Impatto del GI/Tipo di CHO:** Implementazione della logica secondo cui $\text{CHO}$ ad alto indice glicemico (GI) può accelerare il ripristino delle riserve nelle prime ore post-esercizio.
+    """)
+# --- FINE NOTE TECNICHE REINTRODOTTE ---
+
 tab1, tab2 = st.tabs(["Analisi Riserve (Tank)", "Simulazione Metabolica (Burn)"])
 
 # --- TAB 1: CALCOLO SERBATOIO ---
@@ -563,23 +583,6 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        # --- NOTE TECNICHE REINTRODOTTE ---
-        with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
-            st.info("""
-            **1. Stima Riserve & Capacità di Stoccaggio**
-            * **Stima della Concentrazione (g/kg):** Si basa sulla correlazione tra il fitness aerobico (VO2max) e la densità di stoccaggio muscolare, riflettendo la capacità di adattamento cellulare (Burke et al., 2017).
-            * **Capacità Massima (Fattore 1.25):** La supercompensazione del glicogeno si ottiene con carichi di CHO $>8 \text{ g/kg/die}$ in $36-48$ ore, portando le riserve totali oltre i livelli basali (Bergström et al., 1967; Burke et al., 2017).
-            * **Creatina:** La supplementazione di creatina (tipicamente con protocolli di carico acuto di $20 \text{ g/die}$ per $5-6$ giorni) è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, probabilmente a causa di un aumento dell'osmolarità cellulare (Roberts et al., 2016; Burke et al., 2017).
-            
-            ---
-            
-            **2. Prossimi Sviluppi (In Lavorazione)**
-            
-            * **A) Coingestione Proteine:** Valutazione dell'effetto dell'aggiunta di proteine al $\text{CHO}$ quando l'apporto di $\text{CHO}$ è sub-ottimale (es. sotto $60 \text{ g/h}$), un meccanismo che potenzia la risintesi del glicogeno (Burke et al., 2017).
-            * **B) Impatto del GI/Tipo di CHO:** Implementazione della logica secondo cui $\text{CHO}$ ad alto indice glicemico (GI) può accelerare il ripristino delle riserve nelle prime ore post-esercizio.
-            """)
-        # --- FINE NOTE TECNICHE REINTRODOTTE ---
-
         # =========================================================================
         # SEZIONE 3: FATTORI AVANZATI DI CAPACITÀ
         # =========================================================================
