@@ -119,6 +119,7 @@ class Subject:
     menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
     glucose_mg_dl: float = None
     vo2max_absolute_l_min: float = 3.5 
+    muscle_mass_kg: float = None # Nuovo campo per l'input reale
 
     @property
     def lean_body_mass(self) -> float:
@@ -187,8 +188,16 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
 
 
 def calculate_tank(subject: Subject):
-    lbm = subject.lean_body_mass
-    total_muscle = lbm * subject.muscle_fraction
+    # Nuova logica: Se muscle_mass_kg è fornito, usiamo quello per la massa muscolare totale.
+    if subject.muscle_mass_kg is not None and subject.muscle_mass_kg > 0:
+        total_muscle = subject.muscle_mass_kg
+        muscle_source_note = "Massa Muscolare Totale (SMM) fornita dall'utente."
+    else:
+        # Calcolo standard basato su LBM e frazione muscolare stimata
+        lbm = subject.lean_body_mass
+        total_muscle = lbm * subject.muscle_fraction
+        muscle_source_note = "Massa Muscolare Totale stimata da Peso/BF/Sesso."
+
     active_muscle = total_muscle * subject.sport.val
     
     creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
@@ -228,7 +237,8 @@ def calculate_tank(subject: Subject):
         "concentration_used": subject.glycogen_conc_g_kg,
         "fill_pct": (total_actual_glycogen / max_total_capacity) * 100 if max_total_capacity > 0 else 0,
         "creatine_bonus": subject.uses_creatine,
-        "liver_note": liver_correction_note
+        "liver_note": liver_correction_note,
+        "muscle_source_note": muscle_source_note
     }
 
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
@@ -550,6 +560,18 @@ with tab1:
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
+        # --- NUOVO INPUT PER MASSA MUSCOLARE REALE ---
+        use_smm = st.checkbox("Usa Massa Muscolare (SMM) da esame strumentale (Impedenziometria/DEXA)",
+                              help="Seleziona questa opzione per sostituire la stima interna (basata su Peso/BF/Sesso) con un valore misurato direttamente.")
+        muscle_mass_input = None
+        if use_smm:
+            muscle_mass_input = st.number_input(
+                "Massa Muscolare Totale (SMM) [kg]",
+                min_value=10.0, max_value=60.0, value=weight * 0.45, step=0.1,
+                help="Inserire la massa muscolare scheletrica totale misurata (es. da DEXA o BIA)."
+            )
+        # --- FINE NUOVO INPUT ---
+        
         st.markdown("---")
         
         # =========================================================================
@@ -727,7 +749,8 @@ with tab1:
             uses_creatine=use_creatine,
             menstrual_phase=s_menstrual,
             glucose_mg_dl=glucose_val,
-            vo2max_absolute_l_min=vo2_abs
+            vo2max_absolute_l_min=vo2_abs,
+            muscle_mass_kg=muscle_mass_input # Passa il nuovo input qui
         )
         
         tank_data = calculate_tank(subject)
@@ -785,6 +808,9 @@ with tab1:
         if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5% filling)")
         if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
         
+        # Nuova nota per la fonte della Massa Muscolare Totale
+        factors_text.append(f"Fonte Massa Muscolare: {tank_data['muscle_source_note']}")
+
         if factors_text:
             st.caption(f"**Fattori correttivi applicati:** {'; '.join(factors_text)}")
 
