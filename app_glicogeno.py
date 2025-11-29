@@ -139,44 +139,48 @@ def get_concentration_from_vo2max(vo2_max):
     if conc > 26.0: conc = 26.0
     return conc
 
-def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1, cho_day_minus_2, s_fatigue, s_sleep):
+def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_minus_2_g, s_fatigue, s_sleep):
     # Logica ispirata agli studi Bergström/Sherman: il riempimento è dettato
     # dall'introito degli ultimi 2 giorni.
     
     # Range di assunzione CHO (g/kg/die)
-    CHO_BASE = 5.0
-    CHO_MAX = 10.0
+    CHO_BASE_GK = 5.0
+    CHO_MAX_GK = 10.0
+    CHO_MIN_GK = 2.5
+    
+    # Conversione da Grammi Totali a Grammi/Kg
+    cho_day_minus_1_gk = cho_day_minus_1_g / weight_kg
+    cho_day_minus_2_gk = cho_day_minus_2_g / weight_kg
     
     # 1. Calcolo del fattore di riempimento muscolare basato sul CHO ingerito (g/kg)
     
     # Peso dell'introito: Day -1 ha un impatto maggiore di Day -2
-    # Utilizziamo una media pesata semplice per i 2 giorni in relazione al CHO_BASE
-    # Se il CHO è >= CHO_MAX, si raggiunge la supercompensazione (fattore 1.25)
-    
-    avg_cho_gk = (cho_day_minus_1 * 0.7) + (cho_day_minus_2 * 0.3)
+    avg_cho_gk = (cho_day_minus_1_gk * 0.7) + (cho_day_minus_2_gk * 0.3)
     
     # Mappatura lineare semplice: 
-    # < 2.5 g/kg/die (Low Carb) -> Factor 0.5
-    # 5.0 g/kg/die (Normal) -> Factor 1.0
-    # 10.0 g/kg/die (High Carb) -> Factor 1.25
+    # CHO_MIN_GK (Low Carb) -> Factor 0.5
+    # CHO_BASE_GK (Normal) -> Factor 1.0
+    # CHO_MAX_GK (High Carb) -> Factor 1.25
     
-    if avg_cho_gk >= CHO_MAX:
+    if avg_cho_gk >= CHO_MAX_GK:
         diet_factor = 1.25
-    elif avg_cho_gk >= CHO_BASE:
+    elif avg_cho_gk >= CHO_BASE_GK:
         # Interpolazione tra 1.0 (a 5g/kg) e 1.25 (a 10g/kg)
-        diet_factor = 1.0 + (avg_cho_gk - CHO_BASE) * (0.25 / (CHO_MAX - CHO_BASE))
-    elif avg_cho_gk < CHO_BASE:
+        diet_factor = 1.0 + (avg_cho_gk - CHO_BASE_GK) * (0.25 / (CHO_MAX_GK - CHO_BASE_GK))
+    elif avg_cho_gk > CHO_MIN_GK:
         # Interpolazione tra 0.5 (a 2.5g/kg) e 1.0 (a 5g/kg)
-        diet_factor = 0.5 + (avg_cho_gk - 2.5) * (0.5 / (CHO_BASE - 2.5))
+        diet_factor = 0.5 + (avg_cho_gk - CHO_MIN_GK) * (0.5 / (CHO_BASE_GK - CHO_MIN_GK))
         diet_factor = max(0.5, diet_factor)
-    else:
-        diet_factor = 1.0
+    else: # Sotto CHO_MIN_GK o 2.5 g/kg
+        diet_factor = 0.5
+    
+    diet_factor = min(1.25, max(0.5, diet_factor)) # Clamp tra 0.5 e 1.25
 
     # 2. Applicazione dei fattori di recupero
     combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
     
-    # Restituiamo anche il fattore dieta non corretto per mostrarlo all'utente
-    return combined_filling, diet_factor
+    # Restituiamo il fattore combinato e il fattore dieta base calcolato e il ratio g/kg effettivo
+    return combined_filling, diet_factor, avg_cho_gk
 
 
 def calculate_tank(subject: Subject):
@@ -584,7 +588,7 @@ with tab1:
         # --- SCELTA METODO CALCOLO DIETA ---
         diet_method = st.radio(
             "Metodo di Calcolo Ripristino Glicogeno:", 
-            ["1. Seleziona Tipo di Dieta (Veloce)", "2. Inserisci CHO (g/kg) dei 2 giorni precedenti"], 
+            ["1. Seleziona Tipo di Dieta (Veloce)", "2. Inserisci CHO Totale (g) dei 2 giorni precedenti"], 
             key='diet_calc_method'
         )
         
@@ -592,6 +596,11 @@ with tab1:
         fatigue_map = {f.label: f for f in FatigueState}
         sleep_map = {s.label: s for s in SleepQuality}
         
+        # Variabili necessarie per il calcolo finale
+        combined_filling = 1.0 
+        diet_factor = 1.0
+        avg_cho_gk = 5.0
+
         # --- METODO 1: TIPO DI DIETA ---
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
             diet_options_map = {}
@@ -609,40 +618,40 @@ with tab1:
             s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_quick')]
             
             combined_filling = s_diet.factor * s_fatigue.factor * s_sleep.factor
-            diet_factor = s_diet.factor # Definisco diet_factor per l'output metrico
+            diet_factor = s_diet.factor 
             
             st.caption(f"Fattore di Riempimento base: **{s_diet.factor:.2f}**")
         
-        # --- METODO 2: INPUT DI CHO (g/kg) ---
+        # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
-            st.markdown("#### Input Glicogeno (g/kg/die)")
+            st.markdown("#### Input Glicogeno Totale (g/die)")
             col_d2, col_d1 = st.columns(2)
             
-            cho_day_minus_2 = col_d2.number_input(
-                "Giorno -2 (g/kg/die)", 
-                min_value=1.0, max_value=12.0, value=5.0, step=0.5,
-                help="Apporto di CHO del penultimo giorno. Influisce meno sul riempimento finale."
+            cho_day_minus_2_g = col_d2.number_input(
+                "Grammi CHO Giorno -2 (g)", 
+                min_value=50, max_value=800, value=int(weight * 5.0), step=10,
+                help="Apporto totale di CHO del penultimo giorno."
             )
             
-            cho_day_minus_1 = col_d1.number_input(
-                "Giorno -1 (g/kg/die)", 
-                min_value=1.0, max_value=12.0, value=5.0, step=0.5,
-                help="Apporto di CHO del giorno precedente. Ha l'impatto maggiore."
+            cho_day_minus_1_g = col_d1.number_input(
+                "Grammi CHO Giorno -1 (g)", 
+                min_value=50, max_value=800, value=int(weight * 5.0), step=10,
+                help="Apporto totale di CHO del giorno precedente."
             )
             
             # Selezione Fatica e Sonno per Metodo 2
             s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_custom')]
             s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_custom')]
             
-            combined_filling, diet_factor = calculate_filling_factor_from_diet(
+            combined_filling, diet_factor, avg_cho_gk = calculate_filling_factor_from_diet(
                 weight_kg=weight,
-                cho_day_minus_1=cho_day_minus_1,
-                cho_day_minus_2=cho_day_minus_2,
+                cho_day_minus_1_g=cho_day_minus_1_g,
+                cho_day_minus_2_g=cho_day_minus_2_g,
                 s_fatigue=s_fatigue,
                 s_sleep=s_sleep
             )
             
-            st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}**")
+            st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
 
         is_fasted = False
@@ -706,8 +715,8 @@ with tab1:
         st.markdown("---")
         
         factors_text = []
-        if 's_diet' in locals() and s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
-        elif diet_method == "2. Inserisci CHO (g/kg) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f}")
+        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)" and s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+        elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
         if use_creatine: factors_text.append("Bonus volume plasmatico/creatina (+10% Cap)")
