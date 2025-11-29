@@ -587,8 +587,10 @@ with tab1:
             ["1. Seleziona Tipo di Dieta (Veloce)", "2. Inserisci CHO (g/kg) dei 2 giorni precedenti"], 
             key='diet_calc_method'
         )
-
-        s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0)]
+        
+        # Inizializza i dizionari per la selezione
+        fatigue_map = {f.label: f for f in FatigueState}
+        sleep_map = {s.label: s for s in SleepQuality}
         
         # --- METODO 1: TIPO DI DIETA ---
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
@@ -601,8 +603,13 @@ with tab1:
             
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
             s_diet = diet_options_map[selected_diet_label]
+
+            # Selezione Fatica e Sonno per Metodo 1
+            s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_quick')]
+            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_quick')]
             
             combined_filling = s_diet.factor * s_fatigue.factor * s_sleep.factor
+            diet_factor = s_diet.factor # Definisco diet_factor per l'output metrico
             
             st.caption(f"Fattore di Riempimento base: **{s_diet.factor:.2f}**")
         
@@ -623,8 +630,9 @@ with tab1:
                 help="Apporto di CHO del giorno precedente. Ha l'impatto maggiore."
             )
             
-            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_custom')]
+            # Selezione Fatica e Sonno per Metodo 2
             s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_custom')]
+            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_custom')]
             
             combined_filling, diet_factor = calculate_filling_factor_from_diet(
                 weight_kg=weight,
@@ -641,11 +649,6 @@ with tab1:
         if not has_glucose:
             is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
         
-        # L'oggetto s_sleep viene definito qui nel caso custom, ma non nel metodo 1.
-        # Ci assicuriamo di usare la variabile corretta per il calcolo finale se è stata usata la selezione rapida.
-        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
-             s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_quick')]
-             
         
         liver_val = 100.0
         if is_fasted:
