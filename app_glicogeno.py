@@ -616,13 +616,17 @@ with tab1:
         st.write("**Stima Concentrazione Glicogeno Muscolare**")
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
+        # Inizializzazione vo2_input
         vo2_input = 55.0 
+        
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
             s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2, key='lvl_status')]
             calculated_conc = s_status.val
+            # Se basato su Livello, calcoliamo il vo2_input come proxy per la visualizzazione
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
+            # Se basato su VO2max, prendiamo il valore dallo slider
             vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
             calculated_conc = get_concentration_from_vo2max(vo2_input)
             
@@ -654,10 +658,11 @@ with tab1:
         fatigue_map = {f.label: f for f in FatigueState}
         sleep_map = {s.label: s for s in SleepQuality}
         
-        # Variabili necessarie per il calcolo finale
+        # Variabili necessarie per il calcolo finale (inizializzate)
         combined_filling = 1.0 
         diet_factor = 1.0
         avg_cho_gk = 5.0
+        steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0 # Inizializzazione per l'attività
 
         # =========================================================================
         # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta)
@@ -688,9 +693,6 @@ with tab1:
             st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
             s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
             s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
-            
-            # Parametri attività fittizi per la funzione di calcolo
-            steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0
         
         # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
@@ -718,7 +720,6 @@ with tab1:
             col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
             
             # Parametri attività fittizi per la funzione di calcolo
-            steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0
             
             # Usiamo valori neutri per s_fatigue/s_sleep nel calcolo intermedio.
             temp_fatigue = FatigueState.RESTED
@@ -731,7 +732,7 @@ with tab1:
                 cho_day_minus_2_g=cho_day_minus_2_g,
                 s_fatigue=temp_fatigue, # Neutro
                 s_sleep=temp_sleep,     # Neutro
-                steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
             )
             s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
             s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
@@ -766,29 +767,29 @@ with tab1:
             st.caption("Nota: Se l'attività è inserita, il fattore di deplezione (Carico di Lavoro) sarà calcolato oggettivamente. Altrimenti, viene usato il valore qualitativo selezionato sopra.")
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
-        # Se l'utente ha inserito dati di attività, ricalcoliamo il combined_filling
-        if steps_m1 > 0 or steps_m2 > 0 or min_act_m1 > 0 or min_act_m2 > 0:
-            if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
-                cho_g1 = weight * s_diet.ref_value
-                cho_g2 = weight * s_diet.ref_value
-            else:
-                cho_g1 = cho_day_minus_1_g
-                cho_g2 = cho_day_minus_2_g
-            
-            combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
-                weight_kg=weight,
-                cho_day_minus_1_g=cho_g1,
-                cho_day_minus_2_g=cho_g2,
-                s_fatigue=s_fatigue, # Usato come fallback se l'attività è 0
-                s_sleep=s_sleep,
-                steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
-            )
         
-        # Calcolo finale del combined_filling (fattore dieta * fattore recupero)
-        # combined_filling è già stato calcolato correttamente sopra.
-        # Ricalcoliamo il fattore finale con solo il fattore sonno (per visualizzazione)
-        combined_filling_sleep_adj = diet_factor * s_fatigue.factor * s_sleep.factor # Usa il fattore fatica qualitativo se non c'è attività oggettiva
-
+        # Determina i CHO da utilizzare per il ricalcolo
+        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
+            s_diet_label = st.session_state.get('diet_type_select', list(DietType.__members__.keys())[1])
+            s_diet_enum = [d for d in DietType if d.label == s_diet_label][0] if isinstance(s_diet_label, str) else DietType.NORMAL
+            cho_g1 = weight * s_diet_enum.ref_value
+            cho_g2 = weight * s_diet_enum.ref_value
+        else:
+            # Per Metodo 2, i CHO sono già in cho_day_minus_1_g/2_g
+            # Usiamo i valori degli input diretti
+            cho_g1 = cho_day_minus_1_g
+            cho_g2 = cho_day_minus_2_g
+        
+        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
+        combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
+            weight_kg=weight,
+            cho_day_minus_1_g=cho_g1,
+            cho_day_minus_2_g=cho_g2,
+            s_fatigue=s_fatigue, 
+            s_sleep=s_sleep,
+            steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
+        )
+        
         st.markdown("---")
         
         # =========================================================================
