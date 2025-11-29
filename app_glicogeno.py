@@ -563,6 +563,23 @@ with tab1:
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
+        # --- NOTE TECNICHE REINTRODOTTE ---
+        with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
+            st.info("""
+            **1. Stima Riserve & Capacità di Stoccaggio**
+            * **Stima della Concentrazione (g/kg):** Si basa sulla correlazione tra il fitness aerobico (VO2max) e la densità di stoccaggio muscolare, riflettendo la capacità di adattamento cellulare (Burke et al., 2017).
+            * **Capacità Massima (Fattore 1.25):** La supercompensazione del glicogeno si ottiene con carichi di CHO $>8 \text{ g/kg/die}$ in $36-48$ ore, portando le riserve totali oltre i livelli basali (Bergström et al., 1967; Burke et al., 2017).
+            * **Creatina:** La supplementazione di creatina (tipicamente con protocolli di carico acuto di $20 \text{ g/die}$ per $5-6$ giorni) è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, probabilmente a causa di un aumento dell'osmolarità cellulare (Roberts et al., 2016; Burke et al., 2017).
+            
+            ---
+            
+            **2. Prossimi Sviluppi (In Lavorazione)**
+            
+            * **A) Coingestione Proteine:** Valutazione dell'effetto dell'aggiunta di proteine al $\text{CHO}$ quando l'apporto di $\text{CHO}$ è sub-ottimale (es. sotto $60 \text{ g/h}$), un meccanismo che potenzia la risintesi del glicogeno (Burke et al., 2017).
+            * **B) Impatto del GI/Tipo di CHO:** Implementazione della logica secondo cui $\text{CHO}$ ad alto indice glicemico (GI) può accelerare il ripristino delle riserve nelle prime ore post-esercizio.
+            """)
+        # --- FINE NOTE TECNICHE REINTRODOTTE ---
+
         # =========================================================================
         # SEZIONE 3: FATTORI AVANZATI DI CAPACITÀ
         # =========================================================================
@@ -607,7 +624,6 @@ with tab1:
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
             s_diet = diet_options_map[selected_diet_label]
 
-            # Selezione Fatica e Sonno per Metodo 1 (Solo se necessario, ma i fattori di recupero sono al punto 5)
             # Qui usiamo solo il fattore dieta
             diet_factor = s_diet.factor 
             
@@ -677,14 +693,16 @@ with tab1:
         # =========================================================================
         st.subheader("5. Stato Metabolico Acuto (Fegato/Glicemia)")
         
-        glucose_val = None
+        # Correzione: has_glucose deve essere definito PRIMA di essere usato fuori dall'expander
         has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
+        
+        glucose_val = None
+        is_fasted = False
         
         with st.expander("Dettagli Fegato/Glicemia"):
             if has_glucose:
                 glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
 
-            is_fasted = False
             if not has_glucose:
                 is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
         
