@@ -675,8 +675,12 @@ with tab1:
         # =========================================================================
         # SEZIONE 6: PARAMETRI EPATICI/BIOMARKER (Acuti)
         # =========================================================================
-        with st.expander("5. Stato Metabolico Acuto (Fegato/Glicemia)"):
-            glucose_val = None
+        st.subheader("5. Stato Metabolico Acuto (Fegato/Glicemia)")
+        
+        glucose_val = None
+        has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
+        
+        with st.expander("Dettagli Fegato/Glicemia"):
             if has_glucose:
                 glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
 
