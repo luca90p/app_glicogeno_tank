@@ -519,7 +519,10 @@ with tab1:
     col_in, col_res = st.columns([1, 2])
     
     with col_in:
-        st.subheader("Parametri Antropometrici")
+        # =========================================================================
+        # SEZIONE 1: DATI ANTROPOMETRICI E BASE
+        # =========================================================================
+        st.subheader("1. Dati Antropometrici")
         weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 70.0, 0.5)
         height = st.slider("Altezza (cm)", 150, 210, 175, 1)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 15.0, 0.5) / 100.0
@@ -528,13 +531,20 @@ with tab1:
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
         st.markdown("---")
-        st.write("**Stima Glicogeno Muscolare**")
+        
+        # =========================================================================
+        # SEZIONE 2: CAPACITÀ MASSIMA DI STOCCAGGIO (Tank Max)
+        # =========================================================================
+        st.subheader("2. Capacità di Stoccaggio Massima (Tank)")
+        
+        # 2a. Metodo di calcolo della concentrazione
+        st.write("**Stima Concentrazione Glicogeno Muscolare**")
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
         vo2_input = 55.0 
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
-            s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2)]
+            s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2, key='lvl_status')]
             calculated_conc = s_status.val
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
@@ -549,46 +559,21 @@ with tab1:
             else: lvl = "Elite"
             st.caption(f"Concentrazione stimata: **{calculated_conc:.1f} g/kg** ({lvl})")
 
+        # 2b. Disciplina Sportiva
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
-            st.info("""
-            **1. Stima Riserve & Capacità di Stoccaggio**
-            * **Stima della Concentrazione (g/kg):** Si basa sulla correlazione tra il fitness aerobico (VO2max) e la densità di stoccaggio muscolare, riflettendo la capacità di adattamento cellulare (Burke et al., 2017).
-            * **Capacità Massima (Fattore 1.25):** La supercompensazione del glicogeno si ottiene con carichi di CHO $>8 \text{ g/kg/die}$ in $36-48$ ore, portando le riserve totali oltre i livelli basali (Bergström et al., 1967; Burke et al., 2017).
-            * **Creatina:** La supplementazione di creatina è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, probabilmente a causa di un aumento dell'osmolarità cellulare (Roberts et al., 2016).
-            
-            ---
-            
-            **2. Prossimi Sviluppi (In Lavorazione)**
-            
-            * **A) Coingestione Proteine:** Valutazione dell'effetto dell'aggiunta di proteine al $\text{CHO}$ quando l'apporto di $\text{CHO}$ è sub-ottimale (es. sotto $60 \text{ g/h}$), un meccanismo che potenzia la risintesi del glicogeno (Burke et al., 2017).
-            * **B) Impatto del GI/Tipo di CHO:** Implementazione della logica secondo cui $\text{CHO}$ ad alto indice glicemico (GI) può accelerare il ripristino delle riserve nelle prime ore post-esercizio.
-            """)
-            
-        with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
+        # =========================================================================
+        # SEZIONE 3: FATTORI AVANZATI DI CAPACITÀ
+        # =========================================================================
+        with st.expander("Fattori Avanzati di Capacità (Aumento potenziale Max)"):
             use_creatine = st.checkbox("Supplementazione Creatina", help="Aumento volume cellulare e capacità di stoccaggio stimata (+10%).")
             s_menstrual = MenstrualPhase.NONE
             if s_sex == Sex.FEMALE:
                 menstrual_map = {m.label: m for m in MenstrualPhase}
                 s_menstrual = menstrual_map[st.selectbox("Fase Ciclo Mestruale", list(menstrual_map.keys()), index=0)]
-            st.markdown("---")
-            st.write("**Biomarker (Glicemia)**")
-            has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
-            glucose_val = None
-            if has_glucose:
-                glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
-
-        st.markdown("---")
-        st.subheader("Stato Nutrizionale e di Recupero")
         
-        # --- SCELTA METODO CALCOLO DIETA ---
-        diet_method = st.radio(
-            "Metodo di Calcolo Ripristino Glicogeno:", 
-            ["1. Seleziona Tipo di Dieta (Veloce)", "2. Inserisci CHO Totale (g) dei 2 giorni precedenti"], 
-            key='diet_calc_method'
-        )
+        st.markdown("---")
         
         # Inizializza i dizionari per la selezione
         fatigue_map = {f.label: f for f in FatigueState}
@@ -599,6 +584,17 @@ with tab1:
         diet_factor = 1.0
         avg_cho_gk = 5.0
 
+        # =========================================================================
+        # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta)
+        # =========================================================================
+        st.subheader("3. Stato Nutrizionale (Introito CHO 48h)")
+        
+        diet_method = st.radio(
+            "Metodo di Calcolo Ripristino Glicogeno:", 
+            ["1. Seleziona Tipo di Dieta (Veloce)", "2. Inserisci CHO Totale (g) dei 2 giorni precedenti"], 
+            key='diet_calc_method'
+        )
+        
         # --- METODO 1: TIPO DI DIETA ---
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
             diet_options_map = {}
@@ -611,14 +607,13 @@ with tab1:
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
             s_diet = diet_options_map[selected_diet_label]
 
-            # Selezione Fatica e Sonno per Metodo 1
-            s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_quick')]
-            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_quick')]
-            
-            combined_filling = s_diet.factor * s_fatigue.factor * s_sleep.factor
+            # Selezione Fatica e Sonno per Metodo 1 (Solo se necessario, ma i fattori di recupero sono al punto 5)
+            # Qui usiamo solo il fattore dieta
             diet_factor = s_diet.factor 
             
-            st.caption(f"Fattore di Riempimento base: **{s_diet.factor:.2f}**")
+            st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
+            s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
+            s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
         
         # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
@@ -645,30 +640,56 @@ with tab1:
             col_d2.caption(f"$\sim$ **{cho_day_minus_2_gk:.1f} g/kg/die**")
             col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
             
-            # Selezione Fatica e Sonno per Metodo 2
-            s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_custom')]
-            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_custom')]
+            # Calcoliamo solo il diet_factor qui, i fattori di recupero verranno aggiunti dopo.
+            # Usiamo valori neutri per s_fatigue/s_sleep nel calcolo intermedio.
+            temp_fatigue = FatigueState.RESTED
+            temp_sleep = SleepQuality.GOOD
             
-            combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
+            _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
-                s_fatigue=s_fatigue,
-                s_sleep=s_sleep
+                s_fatigue=temp_fatigue, # Neutro
+                s_sleep=temp_sleep      # Neutro
             )
+            s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
+            s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
             
             st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
+        st.markdown("---")
+        
+        # =========================================================================
+        # SEZIONE 5: FATTORI DI RECUPERO (FATICA E SONNO)
+        # =========================================================================
+        st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
+        
+        s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
+        s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_final')]
+        
+        # Calcolo finale del combined_filling (fattore dieta * fattore recupero)
+        combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
 
-        is_fasted = False
-        if not has_glucose:
-            is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
+        st.markdown("---")
         
+        # =========================================================================
+        # SEZIONE 6: PARAMETRI EPATICI/BIOMARKER (Acuti)
+        # =========================================================================
+        with st.expander("5. Stato Metabolico Acuto (Fegato/Glicemia)"):
+            glucose_val = None
+            if has_glucose:
+                glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
+
+            is_fasted = False
+            if not has_glucose:
+                is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
         
+        # Logica Fegato
         liver_val = 100.0
         if is_fasted:
             liver_val = 40.0 
         
+        # Creazione Struttura Subject e Calcolo finale del Tank
         vo2_abs = (vo2_input * weight) / 1000
         
         subject = Subject(
@@ -721,7 +742,17 @@ with tab1:
         st.markdown("---")
         
         factors_text = []
-        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)" and 's_diet' in locals() and s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+        
+        # Logica di visualizzazione dei fattori
+        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)": 
+            # Dobbiamo riottenere s_diet in questo contesto di visualizzazione se il metodo 1 è attivo
+            # Uso una variabile temporanea per s_diet solo per la visualizzazione dei fattori
+            temp_diet_map = {d.label: d for d in DietType}
+            s_diet_label = st.session_state.get('diet_type_select', list(temp_diet_map.keys())[1])
+            s_diet = temp_diet_map.get(s_diet_label, DietType.NORMAL)
+
+            if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+            
         elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
