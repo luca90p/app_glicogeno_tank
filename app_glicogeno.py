@@ -569,8 +569,6 @@ with tab1:
             
         with st.expander("Parametri Avanzati (Supplementazione, Sonno, Ciclo, Biomarker)"):
             use_creatine = st.checkbox("Supplementazione Creatina", help="Aumento volume cellulare e capacità di stoccaggio stimata (+10%).")
-            sleep_map = {s.label: s for s in SleepQuality}
-            s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0)]
             s_menstrual = MenstrualPhase.NONE
             if s_sex == Sex.FEMALE:
                 menstrual_map = {m.label: m for m in MenstrualPhase}
