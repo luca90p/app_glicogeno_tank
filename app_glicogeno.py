@@ -134,13 +134,39 @@ class Subject:
 
 # --- 2. LOGICA DI CALCOLO ---
 
-def get_concentration_from_vo2max(vo2_max):
-    conc = 13.0 + (vo2_max - 30.0) * 0.24
-    if conc < 12.0: conc = 12.0
-    if conc > 26.0: conc = 26.0
-    return conc
+# Nuova funzione di calcolo del fattore di deplezione da attività motoria
+def calculate_depletion_factor(steps, activity_min, s_fatigue):
+    # Passi: 10k passi = neutro (0.0). Ogni 5k in più/meno -> +/- 0.1 di fattore.
+    # Attività: 60 min intensi = neutro (0.0). Ogni 60 min in più -> -0.1.
+    
+    # Fattore basato sui passi (peso 0.4)
+    # 5k passi -> -0.1, 15k passi -> 0.1, 20k passi -> 0.2
+    steps_base = 10000 
+    steps_factor = (steps - steps_base) / 5000 * 0.1 * 0.4
+    
+    # Fattore basato sull'attività (peso 0.6)
+    # 0 min -> -0.1, 120 min -> 0.0, 180 min -> -0.1
+    activity_base = 120 # min/die
+    if activity_min < 60: # Se l'attività è molto bassa, c'è un piccolo bonus di recupero
+        activity_factor = (1 - (activity_min / 60)) * 0.05 * 0.6
+    else:
+        activity_factor = (activity_min - activity_base) / 60 * -0.1 * 0.6
+        
+    depletion_impact = steps_factor + activity_factor
+    
+    # Mappiamo l'impatto sul fattore di fatica qualitativo
+    # Base 1.0 (RESTED) + impatto
+    estimated_depletion_factor = max(0.6, min(1.0, 1.0 + depletion_impact))
+    
+    # Usiamo il fattore qualitativo s_fatigue se l'utente non ha inserito dati precisi
+    if steps == 0 and activity_min == 0:
+        return s_fatigue.factor
+    else:
+        return estimated_depletion_factor
+    
 
-def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_minus_2_g, s_fatigue, s_sleep):
+def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_minus_2_g, s_fatigue, s_sleep, steps_m1, min_act_m1, steps_m2, min_act_m2):
+    
     # Logica ispirata agli studi Bergström/Sherman: il riempimento è dettato
     # dall'introito degli ultimi 2 giorni.
     
@@ -156,35 +182,42 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
     cho_day_minus_1_gk = cho_day_minus_1_g / weight_kg
     cho_day_minus_2_gk = cho_day_minus_2_g / weight_kg
     
+    # --- NUOVA LOGICA: FATTORI DI DEPLEZIONE QUANTITATIVI ---
+    
+    # Calcola il fattore di deplezione (che viene applicato come sottrazione dal riempimento teorico)
+    # Se l'utente non ha inserito passi/minuti, il risultato è 1.0 (RESTED) o il fattore qualitativo di default.
+    depletion_m1_factor = calculate_depletion_factor(steps_m1, min_act_m1, s_fatigue)
+    depletion_m2_factor = calculate_depletion_factor(steps_m2, min_act_m2, s_fatigue)
+    
+    # Per il fattore combinato, pesiamo l'effetto recupero/fatica
+    recovery_factor = (depletion_m1_factor * 0.7) + (depletion_m2_factor * 0.3)
+    
     # 1. Calcolo del fattore di riempimento muscolare basato sul CHO ingerito (g/kg)
     
     # Peso dell'introito: Day -1 ha un impatto maggiore di Day -2
     avg_cho_gk = (cho_day_minus_1_gk * 0.7) + (cho_day_minus_2_gk * 0.3)
     
-    # Mappatura lineare semplice: 
-    # CHO_MIN_GK (Low Carb) -> Factor 0.5
-    # CHO_BASE_GK (Normal) -> Factor 1.0
-    # CHO_MAX_GK (High Carb) -> Factor 1.25
-    
     if avg_cho_gk >= CHO_MAX_GK:
-        diet_factor = 1.25
+        diet_factor_base = 1.25
     elif avg_cho_gk >= CHO_BASE_GK:
-        # Interpolazione tra 1.0 (a 5g/kg) e 1.25 (a 10g/kg)
-        diet_factor = 1.0 + (avg_cho_gk - CHO_BASE_GK) * (0.25 / (CHO_MAX_GK - CHO_BASE_GK))
+        diet_factor_base = 1.0 + (avg_cho_gk - CHO_BASE_GK) * (0.25 / (CHO_MAX_GK - CHO_BASE_GK))
     elif avg_cho_gk > CHO_MIN_GK:
-        # Interpolazione tra 0.5 (a 2.5g/kg) e 1.0 (a 5g/kg)
-        diet_factor = 0.5 + (avg_cho_gk - CHO_MIN_GK) * (0.5 / (CHO_BASE_GK - CHO_MIN_GK))
-        diet_factor = max(0.5, diet_factor)
+        diet_factor_base = 0.5 + (avg_cho_gk - CHO_MIN_GK) * (0.5 / (CHO_BASE_GK - CHO_MIN_GK))
+        diet_factor_base = max(0.5, diet_factor_base)
     else: # Sotto CHO_MIN_GK o 2.5 g/kg
-        diet_factor = 0.5
+        diet_factor_base = 0.5
     
-    diet_factor = min(1.25, max(0.5, diet_factor)) # Clamp tra 0.5 e 1.25
+    diet_factor_base = min(1.25, max(0.5, diet_factor_base)) # Clamp tra 0.5 e 1.25
+    
+    # Calcolo finale: Il fattore di riempimento viene moderato dal fattore di recupero/deplezione (recovery_factor)
+    # L'impatto di s_sleep è gestito separatamente nel combined_filling finale.
+    final_diet_depletion_factor = diet_factor_base * recovery_factor 
 
     # 2. Applicazione dei fattori di recupero
-    combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
+    combined_filling = final_diet_depletion_factor * s_sleep.factor
     
     # Restituiamo il fattore combinato e il fattore dieta base calcolato e il rateo g/kg effettivo
-    return combined_filling, diet_factor, avg_cho_gk, cho_day_minus_1_gk, cho_day_minus_2_gk
+    return combined_filling, final_diet_depletion_factor, avg_cho_gk, cho_day_minus_1_gk, cho_day_minus_2_gk
 
 
 def calculate_tank(subject: Subject):
@@ -655,6 +688,9 @@ with tab1:
             st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
             s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
             s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
+            
+            # Parametri attività fittizi per la funzione di calcolo
+            steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0
         
         # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
@@ -681,17 +717,21 @@ with tab1:
             col_d2.caption(f"$\sim$ **{cho_day_minus_2_gk:.1f} g/kg/die**")
             col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
             
-            # Calcoliamo solo il diet_factor qui, i fattori di recupero verranno aggiunti dopo.
+            # Parametri attività fittizi per la funzione di calcolo
+            steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0
+            
             # Usiamo valori neutri per s_fatigue/s_sleep nel calcolo intermedio.
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
             
+            # Calcoliamo solo il diet_factor qui
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
                 s_fatigue=temp_fatigue, # Neutro
-                s_sleep=temp_sleep      # Neutro
+                s_sleep=temp_sleep,     # Neutro
+                steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
             )
             s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
             s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
@@ -705,11 +745,49 @@ with tab1:
         # =========================================================================
         st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
         
+        # Selezione qualitativa per default
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_final')]
         
+        
+        # --- INPUT ATTIVITÀ MOTORIA SPECIFICA (Opzionale) ---
+        with st.expander("Attività Motorio/Sportiva Effettuata (Giorno -1 e -2)"):
+            st.markdown("#### Fornisci dati oggettivi per calibrare il Fattore Fatica:")
+            
+            col_m2_steps, col_m2_act = st.columns(2)
+            steps_m2 = col_m2_steps.number_input("Passi Giorno -2", min_value=0, value=10000, step=500)
+            min_act_m2 = col_m2_act.number_input("Minuti Attività Sportiva Giorno -2", min_value=0, value=60, step=10)
+
+            col_m1_steps, col_m1_act = st.columns(2)
+            steps_m1 = col_m1_steps.number_input("Passi Giorno -1", min_value=0, value=5000, step=500)
+            min_act_m1 = col_m1_act.number_input("Minuti Attività Sportiva Giorno -1", min_value=0, value=30, step=10)
+            
+            # Nota sul calcolo
+            st.caption("Nota: Se l'attività è inserita, il fattore di deplezione (Carico di Lavoro) sarà calcolato oggettivamente. Altrimenti, viene usato il valore qualitativo selezionato sopra.")
+
+        # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
+        # Se l'utente ha inserito dati di attività, ricalcoliamo il combined_filling
+        if steps_m1 > 0 or steps_m2 > 0 or min_act_m1 > 0 or min_act_m2 > 0:
+            if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
+                cho_g1 = weight * s_diet.ref_value
+                cho_g2 = weight * s_diet.ref_value
+            else:
+                cho_g1 = cho_day_minus_1_g
+                cho_g2 = cho_day_minus_2_g
+            
+            combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
+                weight_kg=weight,
+                cho_day_minus_1_g=cho_g1,
+                cho_day_minus_2_g=cho_g2,
+                s_fatigue=s_fatigue, # Usato come fallback se l'attività è 0
+                s_sleep=s_sleep,
+                steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
+            )
+        
         # Calcolo finale del combined_filling (fattore dieta * fattore recupero)
-        combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
+        # combined_filling è già stato calcolato correttamente sopra.
+        # Ricalcoliamo il fattore finale con solo il fattore sonno (per visualizzazione)
+        combined_filling_sleep_adj = diet_factor * s_fatigue.factor * s_sleep.factor # Usa il fattore fatica qualitativo se non c'è attività oggettiva
 
         st.markdown("---")
         
@@ -745,7 +823,7 @@ with tab1:
             body_fat_pct=bf, sex=s_sex, 
             glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
             liver_glycogen_g=liver_val,
-            filling_factor=combined_filling,
+            filling_factor=combined_filling, # Usa il fattore che include la deplezione oggettiva/qualitativa
             uses_creatine=use_creatine,
             menstrual_phase=s_menstrual,
             glucose_mg_dl=glucose_val,
