@@ -179,8 +179,8 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
     # 2. Applicazione dei fattori di recupero
     combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
     
-    # Restituiamo il fattore combinato e il fattore dieta base calcolato e il ratio g/kg effettivo
-    return combined_filling, diet_factor, avg_cho_gk
+    # Restituiamo il fattore combinato e il fattore dieta base calcolato e il rateo g/kg effettivo
+    return combined_filling, diet_factor, avg_cho_gk, cho_day_minus_1_gk, cho_day_minus_2_gk
 
 
 def calculate_tank(subject: Subject):
@@ -639,11 +639,19 @@ with tab1:
                 help="Apporto totale di CHO del giorno precedente."
             )
             
+            # Calcolo dei ratei intermedi per la visualizzazione
+            cho_day_minus_2_gk = cho_day_minus_2_g / weight
+            cho_day_minus_1_gk = cho_day_minus_1_g / weight
+
+            # Visualizzazione dei ratei g/kg/die
+            col_d2.caption(f"$\sim$ **{cho_day_minus_2_gk:.1f} g/kg/die**")
+            col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
+            
             # Selezione Fatica e Sonno per Metodo 2
             s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_custom')]
             s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_custom')]
             
-            combined_filling, diet_factor, avg_cho_gk = calculate_filling_factor_from_diet(
+            combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
@@ -715,7 +723,7 @@ with tab1:
         st.markdown("---")
         
         factors_text = []
-        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)" and s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)" and 's_diet' in locals() and s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
         elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
@@ -973,7 +981,7 @@ with tab2:
             st.info("""
             **Calcolo Stechiometrico dei Substrati**
             
-            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
+            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano dal consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
             """)
 
         st.markdown("---")
