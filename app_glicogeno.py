@@ -119,7 +119,7 @@ class Subject:
     menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
     glucose_mg_dl: float = None
     vo2max_absolute_l_min: float = 3.5 
-    muscle_mass_kg: float = None # Nuovo campo per l'input reale
+    muscle_mass_kg: float = None 
 
     @property
     def lean_body_mass(self) -> float:
@@ -134,67 +134,49 @@ class Subject:
 
 # --- 2. LOGICA DI CALCOLO ---
 
-# Nuova funzione di calcolo del fattore di deplezione da attività motoria
+def get_concentration_from_vo2max(vo2_max):
+    # Funzione helper definita a livello globale
+    conc = 13.0 + (vo2_max - 30.0) * 0.24
+    if conc < 12.0: conc = 12.0
+    if conc > 26.0: conc = 26.0
+    return conc
+
 def calculate_depletion_factor(steps, activity_min, s_fatigue):
-    # Passi: 10k passi = neutro (0.0). Ogni 5k in più/meno -> +/- 0.1 di fattore.
-    # Attività: 60 min intensi = neutro (0.0). Ogni 60 min in più -> -0.1.
-    
-    # Fattore basato sui passi (peso 0.4)
-    # 5k passi -> -0.1, 15k passi -> 0.1, 20k passi -> 0.2
+    # 10k passi = neutro. Ogni 5k -> +/- 0.1
+    # 60 min intensi = neutro. Ogni 60 min extra -> -0.1
     steps_base = 10000 
     steps_factor = (steps - steps_base) / 5000 * 0.1 * 0.4
     
-    # Fattore basato sull'attività (peso 0.6)
-    # 0 min -> -0.1, 120 min -> 0.0, 180 min -> -0.1
-    activity_base = 120 # min/die
-    if activity_min < 60: # Se l'attività è molto bassa, c'è un piccolo bonus di recupero
+    activity_base = 120 
+    if activity_min < 60: 
         activity_factor = (1 - (activity_min / 60)) * 0.05 * 0.6
     else:
         activity_factor = (activity_min - activity_base) / 60 * -0.1 * 0.6
         
     depletion_impact = steps_factor + activity_factor
-    
-    # Mappiamo l'impatto sul fattore di fatica qualitativo
-    # Base 1.0 (RESTED) + impatto
     estimated_depletion_factor = max(0.6, min(1.0, 1.0 + depletion_impact))
     
-    # Usiamo il fattore qualitativo s_fatigue se l'utente non ha inserito dati precisi
     if steps == 0 and activity_min == 0:
         return s_fatigue.factor
     else:
         return estimated_depletion_factor
-    
 
 def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_minus_2_g, s_fatigue, s_sleep, steps_m1, min_act_m1, steps_m2, min_act_m2):
-    
-    # Logica ispirata agli studi Bergström/Sherman: il riempimento è dettato
-    # dall'introito degli ultimi 2 giorni.
-    
-    # Range di assunzione CHO (g/kg/die)
     CHO_BASE_GK = 5.0
     CHO_MAX_GK = 10.0
     CHO_MIN_GK = 2.5
     
-    # Conversione da Grammi Totali a Grammi/Kg
-    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0) # Protezione da divisione per zero
-    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0) # Protezione da divisione per zero
+    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0)
+    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0)
     
     cho_day_minus_1_gk = cho_day_minus_1_g / weight_kg
     cho_day_minus_2_gk = cho_day_minus_2_g / weight_kg
     
-    # --- NUOVA LOGICA: FATTORI DI DEPLEZIONE QUANTITATIVI ---
-    
-    # Calcola il fattore di deplezione (che viene applicato come sottrazione dal riempimento teorico)
-    # Se l'utente non ha inserito passi/minuti, il risultato è 1.0 (RESTED) o il fattore qualitativo di default.
     depletion_m1_factor = calculate_depletion_factor(steps_m1, min_act_m1, s_fatigue)
     depletion_m2_factor = calculate_depletion_factor(steps_m2, min_act_m2, s_fatigue)
     
-    # Per il fattore combinato, pesiamo l'effetto recupero/fatica
     recovery_factor = (depletion_m1_factor * 0.7) + (depletion_m2_factor * 0.3)
     
-    # 1. Calcolo del fattore di riempimento muscolare basato sul CHO ingerito (g/kg)
-    
-    # Peso dell'introito: Day -1 ha un impatto maggiore di Day -2
     avg_cho_gk = (cho_day_minus_1_gk * 0.7) + (cho_day_minus_2_gk * 0.3)
     
     if avg_cho_gk >= CHO_MAX_GK:
@@ -204,29 +186,21 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
     elif avg_cho_gk > CHO_MIN_GK:
         diet_factor_base = 0.5 + (avg_cho_gk - CHO_MIN_GK) * (0.5 / (CHO_BASE_GK - CHO_MIN_GK))
         diet_factor_base = max(0.5, diet_factor_base)
-    else: # Sotto CHO_MIN_GK o 2.5 g/kg
+    else: 
         diet_factor_base = 0.5
     
-    diet_factor_base = min(1.25, max(0.5, diet_factor_base)) # Clamp tra 0.5 e 1.25
+    diet_factor_base = min(1.25, max(0.5, diet_factor_base)) 
     
-    # Calcolo finale: Il fattore di riempimento viene moderato dal fattore di recupero/deplezione (recovery_factor)
-    # L'impatto di s_sleep è gestito separatamente nel combined_filling finale.
     final_diet_depletion_factor = diet_factor_base * recovery_factor 
-
-    # 2. Applicazione dei fattori di recupero
     combined_filling = final_diet_depletion_factor * s_sleep.factor
     
-    # Restituiamo il fattore combinato e il fattore dieta base calcolato e il rateo g/kg effettivo
     return combined_filling, final_diet_depletion_factor, avg_cho_gk, cho_day_minus_1_gk, cho_day_minus_2_gk
 
-
 def calculate_tank(subject: Subject):
-    # Nuova logica: Se muscle_mass_kg è fornito, usiamo quello per la massa muscolare totale.
     if subject.muscle_mass_kg is not None and subject.muscle_mass_kg > 0:
         total_muscle = subject.muscle_mass_kg
         muscle_source_note = "Massa Muscolare Totale (SMM) fornita dall'utente."
     else:
-        # Calcolo standard basato su LBM e frazione muscolare stimata
         lbm = subject.lean_body_mass
         total_muscle = lbm * subject.muscle_fraction
         muscle_source_note = "Massa Muscolare Totale stimata da Peso/BF/Sesso."
@@ -616,33 +590,29 @@ with tab1:
         st.write("**Stima Concentrazione Glicogeno Muscolare**")
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
-        # Inizializzazione vo2_input e calculated_conc (valori sicuri di default)
+        # Inizializzazione variabili per sicurezza scope
         vo2_input = 55.0 
-        calculated_conc = get_concentration_from_vo2max(vo2_input)
+        calculated_conc = 15.0 # Valore di default sicuro
         
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
             s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2, key='lvl_status')]
             calculated_conc = s_status.val
-            # Calcoliamo il vo2_input come proxy per la struttura Subject
+            # Calcoliamo il vo2_input come proxy per la visualizzazione (non usato per il calcolo ma utile per la UI)
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
-            
-            # Nota sul livello stimato
-            lvl = s_status.label 
-            st.caption(f"Concentrazione stimata: **{calculated_conc:.1f} g/kg** ({lvl})")
-
         else:
             # Se basato su VO2max, prendiamo il valore dallo slider
             vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
             calculated_conc = get_concentration_from_vo2max(vo2_input)
             
-            lvl = ""
-            if calculated_conc < 15: lvl = "Sedentario"
-            elif calculated_conc < 18: lvl = "Amatore"
-            elif calculated_conc < 22: lvl = "Allenato"
-            elif calculated_conc < 24: lvl = "Avanzato"
-            else: lvl = "Elite"
-            st.caption(f"Concentrazione stimata: **{calculated_conc:.1f} g/kg** ({lvl})")
+        # Mostra il risultato della stima
+        lvl_desc = ""
+        if calculated_conc < 15: lvl_desc = "Sedentario"
+        elif calculated_conc < 18: lvl_desc = "Amatore"
+        elif calculated_conc < 22: lvl_desc = "Allenato"
+        elif calculated_conc < 24: lvl_desc = "Avanzato"
+        else: lvl_desc = "Elite"
+        st.caption(f"Concentrazione stimata: **{calculated_conc:.1f} g/kg** ({lvl_desc})")
 
         # 2b. Disciplina Sportiva
         sport_map = {s.label: s for s in SportType}
@@ -1146,7 +1116,7 @@ with tab2:
             st.info("""
             **Calcolo Stechiometrico dei Substrati**
             
-            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano dal consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
+            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
             """)
 
         st.markdown("---")
