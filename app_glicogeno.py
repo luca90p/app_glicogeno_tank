@@ -616,14 +616,15 @@ with tab1:
         st.write("**Stima Concentrazione Glicogeno Muscolare**")
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
-        # Inizializzazione vo2_input
+        # Inizializzazione vo2_input e calculated_conc (valori sicuri di default)
         vo2_input = 55.0 
+        calculated_conc = get_concentration_from_vo2max(vo2_input)
         
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
             s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2, key='lvl_status')]
             calculated_conc = s_status.val
-            # Se basato su Livello, calcoliamo il vo2_input come proxy per la visualizzazione
+            # Calcoliamo il vo2_input come proxy per la struttura Subject
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
             # Se basato su VO2max, prendiamo il valore dallo slider
