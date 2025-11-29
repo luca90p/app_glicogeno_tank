@@ -521,7 +521,7 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     **1. Stima Riserve & Capacità di Stoccaggio**
     * **Stima della Concentrazione (g/kg):** Si basa sulla correlazione tra il fitness aerobico (VO2max) e la densità di stoccaggio muscolare, riflettendo la capacità di adattamento cellulare (Burke et al., 2017).
     * **Capacità Massima (Fattore 1.25):** La supercompensazione del glicogeno si ottiene con carichi di CHO $>8 \text{ g/kg/die}$ in $36-48$ ore, portando le riserve totali oltre i livelli basali (Bergström et al., 1967; Burke et al., 2017).
-    * **Creatina:** La supplementazione di creatina (tipicamente con protocolli di carico acuto di $20 \text{ g/die}$ per $5-6$ giorni) è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, probabilmente a causa di un aumento dell'osmolarità cellulare (Roberts et al., 2016; Burke et al., 2017).
+    * **Creatina:** La supplementazione di creatina (tipicamente con protocolli di carico acuto di $20 \text{ g/die}$ per $5-6$ giorni o mantenimento di $3-5 \text{ g/die}$) è associata a un aumento aggiuntivo ($\sim 10\%$) nella capacità totale di stoccaggio del glicogeno, a condizione che la saturazione muscolare sia stata raggiunta (Roberts et al., 2016; Burke et al., 2017).
     
     ---
     
