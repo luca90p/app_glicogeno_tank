@@ -626,6 +626,11 @@ with tab1:
             calculated_conc = s_status.val
             # Calcoliamo il vo2_input come proxy per la struttura Subject
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
+            
+            # Nota sul livello stimato
+            lvl = s_status.label 
+            st.caption(f"Concentrazione stimata: **{calculated_conc:.1f} g/kg** ({lvl})")
+
         else:
             # Se basato su VO2max, prendiamo il valore dallo slider
             vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
