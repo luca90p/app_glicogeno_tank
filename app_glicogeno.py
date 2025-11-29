@@ -105,6 +105,17 @@ class MenstrualPhase(Enum):
         self.factor = factor
         self.label = label
 
+# --- NUOVO ENUM: TIPO DI MIX CARBOIDRATI ---
+class ChoMixType(Enum):
+    GLUCOSE_ONLY = (1.0, 60.0, "Solo Glucosio/Maltodestrine (Standard)")
+    MIX_2_1 = (1.5, 90.0, "Mix 2:1 (Maltodestrine:Fruttosio)")
+    MIX_1_08 = (1.7, 105.0, "Mix 1:0.8 (High Fructose)")
+
+    def __init__(self, ox_factor, max_rate_gh, label):
+        self.ox_factor = ox_factor # Fattore moltiplicativo rispetto al glucosio
+        self.max_rate_gh = max_rate_gh # Tasso massimo teorico g/h
+        self.label = label
+
 @dataclass
 class Subject:
     weight_kg: float
@@ -141,59 +152,40 @@ def get_concentration_from_vo2max(vo2_max):
     return conc
 
 def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_minus_2_g, s_fatigue, s_sleep):
-    # Logica ispirata agli studi Bergström/Sherman: il riempimento è dettato
-    # dall'introito degli ultimi 2 giorni.
-    
-    # Range di assunzione CHO (g/kg/die)
     CHO_BASE_GK = 5.0
     CHO_MAX_GK = 10.0
     CHO_MIN_GK = 2.5
     
-    # Conversione da Grammi Totali a Grammi/Kg
-    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0) # Protezione da divisione per zero
-    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0) # Protezione da divisione per zero
+    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0)
+    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0)
     
     cho_day_minus_1_gk = cho_day_minus_1_g / weight_kg
     cho_day_minus_2_gk = cho_day_minus_2_g / weight_kg
     
-    # 1. Calcolo del fattore di riempimento muscolare basato sul CHO ingerito (g/kg)
-    
-    # Peso dell'introito: Day -1 ha un impatto maggiore di Day -2
     avg_cho_gk = (cho_day_minus_1_gk * 0.7) + (cho_day_minus_2_gk * 0.3)
-    
-    # Mappatura lineare semplice: 
-    # CHO_MIN_GK (Low Carb) -> Factor 0.5
-    # CHO_BASE_GK (Normal) -> Factor 1.0
-    # CHO_MAX_GK (High Carb) -> Factor 1.25
     
     if avg_cho_gk >= CHO_MAX_GK:
         diet_factor = 1.25
     elif avg_cho_gk >= CHO_BASE_GK:
-        # Interpolazione tra 1.0 (a 5g/kg) e 1.25 (a 10g/kg)
         diet_factor = 1.0 + (avg_cho_gk - CHO_BASE_GK) * (0.25 / (CHO_MAX_GK - CHO_BASE_GK))
     elif avg_cho_gk > CHO_MIN_GK:
-        # Interpolazione tra 0.5 (a 2.5g/kg) e 1.0 (a 5g/kg)
         diet_factor = 0.5 + (avg_cho_gk - CHO_MIN_GK) * (0.5 / (CHO_BASE_GK - CHO_MIN_GK))
         diet_factor = max(0.5, diet_factor)
-    else: # Sotto CHO_MIN_GK o 2.5 g/kg
+    else: 
         diet_factor = 0.5
     
-    diet_factor = min(1.25, max(0.5, diet_factor)) # Clamp tra 0.5 e 1.25
+    diet_factor = min(1.25, max(0.5, diet_factor)) 
 
-    # 2. Applicazione dei fattori di recupero
     combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
     
-    # Restituiamo il fattore combinato e il fattore dieta base calcolato e il rateo g/kg effettivo
     return combined_filling, diet_factor, avg_cho_gk, cho_day_minus_1_gk, cho_day_minus_2_gk
 
 
 def calculate_tank(subject: Subject):
-    # Nuova logica: Se muscle_mass_kg è fornito, usiamo quello per la massa muscolare totale.
     if subject.muscle_mass_kg is not None and subject.muscle_mass_kg > 0:
         total_muscle = subject.muscle_mass_kg
         muscle_source_note = "Massa Muscolare Totale (SMM) fornita dall'utente."
     else:
-        # Calcolo standard basato su LBM e frazione muscolare stimata
         lbm = subject.lean_body_mass
         total_muscle = lbm * subject.muscle_fraction
         muscle_source_note = "Massa Muscolare Totale stimata da Peso/BF/Sesso."
@@ -241,14 +233,30 @@ def calculate_tank(subject: Subject):
         "muscle_source_note": muscle_source_note
     }
 
-def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts):
-    base_rate = 0.8 
-    if height_cm > 170:
-        base_rate += (height_cm - 170) * 0.015
-    if ftp_watts > 200:
-        base_rate += (ftp_watts - 200) * 0.0015
-    limit = 1.6 
-    return min(base_rate, limit)
+# Aggiornato per accettare il mix type
+def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: ChoMixType):
+    # Base rate per GLUCOSIO
+    base_rate_glucose = 1.0 # g/min (ca 60 g/h) standard per glucosio
+    
+    # Aggiustamenti individuali fini (come da Podlogar et al.)
+    if height_cm > 175:
+        base_rate_glucose += 0.1
+    if ftp_watts > 250:
+        base_rate_glucose += 0.1
+        
+    # Limite fisiologico per il solo glucosio (SGLT1 saturo)
+    limit_glucose = 1.1 
+    estimated_glucose_rate = min(base_rate_glucose, limit_glucose)
+    
+    # Se usiamo un mix, il limite si alza grazie a GLUT5 (fruttosio)
+    if mix_type == ChoMixType.MIX_2_1:
+        # Mix 2:1 permette fino a ~90g/h (1.5 g/min)
+        return min(estimated_glucose_rate * 1.5, 1.5)
+    elif mix_type == ChoMixType.MIX_1_08:
+        # Mix 1:0.8 permette fino a ~105g/h (1.75 g/min)
+        return min(estimated_glucose_rate * 1.75, 1.75)
+    else:
+        return estimated_glucose_rate
 
 def calculate_rer_polynomial(intensity_factor):
     if_val = intensity_factor
@@ -272,14 +280,13 @@ def simulate_metabolism(
     tau_absorption, 
     subject_obj, 
     activity_params,
-    # Nuovi parametri esperti (opzionali)
     oxidation_efficiency_input=0.80, 
-    custom_max_exo_rate=None 
+    custom_max_exo_rate=None,
+    mix_type_input=ChoMixType.GLUCOSE_ONLY # Nuovo parametro
 ):
     tank_g = subject_data['actual_available_g']
     results = []
     
-    # Dati Iniziali
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
     initial_liver_glycogen = subject_data['liver_glycogen_g']
     
@@ -294,7 +301,6 @@ def simulate_metabolism(
     intensity_factor = 0.7
     kcal_per_min_base = 10.0
     
-    # --- DETERMINAZIONE PARAMETRI SFORZO ---
     if mode == 'cycling':
         avg_power = activity_params['avg_watts']
         ftp_watts = activity_params['ftp_watts']
@@ -332,38 +338,37 @@ def simulate_metabolism(
     
     # --- STIMA O USO DEL TASSO MASSIMO DI OSSIDAZIONE ESOGENA ---
     if custom_max_exo_rate is not None:
-        max_exo_rate_g_min = custom_max_exo_rate # Uso valore manuale esperto
+        max_exo_rate_g_min = custom_max_exo_rate 
     else:
-        max_exo_rate_g_min = estimate_max_exogenous_oxidation(subject_obj.height_cm, subject_obj.weight_kg, ftp_watts)
+        # Passiamo il mix_type alla funzione di stima
+        max_exo_rate_g_min = estimate_max_exogenous_oxidation(
+            subject_obj.height_cm, 
+            subject_obj.weight_kg, 
+            ftp_watts,
+            mix_type_input
+        )
     
-    # --- USO EFFICIENZA OSSIDAZIONE ESPERTA ---
     oxidation_efficiency = oxidation_efficiency_input
     
     total_fat_burned_g = 0.0
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0 
     
-    # PARAMETRO DINAMICO
     alpha = 1 - np.exp(-1.0 / tau_absorption)
     
-    # Accumulatori per statistiche finali
     total_muscle_used = 0.0
     total_liver_used = 0.0
     total_exo_used = 0.0
     
-    # Nuovi accumulatori per il grafico GI
     total_intake_cumulative = 0.0
     total_exo_oxidation_cumulative = 0.0
     
-    # Logica di assunzione discreta (impulsi)
     units_per_hour = constant_carb_intake_g_h / cho_per_unit_g if cho_per_unit_g > 0 else 0
     intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0 else duration_min + 1
     
-    # --- NUOVA VARIABILE DI CONTROLLO PER AZZERAMENTO INPUT ---
     is_input_zero = constant_carb_intake_g_h == 0
     
     for t in range(int(duration_min) + 1):
-        # 1. Costo Energetico con Drift
         current_kcal_demand = 0.0
         if mode == 'cycling':
             current_eff = gross_efficiency
@@ -377,19 +382,16 @@ def simulate_metabolism(
                 drift_factor += (t - 60) * 0.0005 
             current_kcal_demand = kcal_per_min_base * drift_factor
 
-        # 2. Gestione Intake (DISCRETA - IMPULSO)
         instantaneous_input_g_min = 0.0 
         
         if not is_input_zero and intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
-            instantaneous_input_g_min = cho_per_unit_g # Assegniamo l'unità intera al minuto di assunzione
+            instantaneous_input_g_min = cho_per_unit_g 
         
-        # Ossidazione massima effettiva
         target_exo_oxidation_limit_g_min = max_exo_rate_g_min * oxidation_efficiency
         
-        # Cinetica assorbimento (non lineare)
         if t > 0:
             if is_input_zero:
-                current_exo_oxidation_g_min *= (1 - alpha) # Decay
+                current_exo_oxidation_g_min *= (1 - alpha) 
             else:
                 current_exo_oxidation_g_min += alpha * (target_exo_oxidation_limit_g_min - current_exo_oxidation_g_min)
             
@@ -399,18 +401,15 @@ def simulate_metabolism(
             current_exo_oxidation_g_min = 0.0
             
         if t > 0:
-            # 2a. Aggiornamento Accumulatori GI/Input Discreto
             gut_accumulation_total += (instantaneous_input_g_min * oxidation_efficiency) - current_exo_oxidation_g_min
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
 
-            # Aggiornamento Cumulativo (per grafico GI)
             total_intake_cumulative += instantaneous_input_g_min 
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
-        # 3. Ripartizione Substrati
         if is_lab_data:
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
-            total_cho_demand = lab_cho_rate * fatigue_mult # Questa è g/min
+            total_cho_demand = lab_cho_rate * fatigue_mult 
 
             kcal_cho_demand = total_cho_demand * 4.1
             
@@ -426,7 +425,6 @@ def simulate_metabolism(
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
-            # --- SHIFT METABOLICO DINAMICO (King/Zanella) ---
             current_cho_ratio = base_cho_ratio
             if intensity_factor < 0.85 and t > 60:
                 hours_past = (t - 60) / 60.0
@@ -438,11 +436,9 @@ def simulate_metabolism(
             
             kcal_cho_demand = current_kcal_demand * cho_ratio
         
-        # Bilancio
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # Modello Coggan: Deplezione Muscolare dipendente da stato riempimento
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
@@ -458,7 +454,6 @@ def simulate_metabolism(
         from_liver = min(remaining_blood_demand, max_liver_output)
         if current_liver_glycogen <= 0: from_liver = 0
         
-        # Aggiornamento
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
@@ -490,7 +485,7 @@ def simulate_metabolism(
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
-            "Residuo Totale": current_muscle_glycogen + current_liver_glycogen,
+            "Residuo Totale": current_muscle_glycogen + current_liver_glycogen, 
             "Target Intake (g/h)": constant_carb_intake_g_h, 
             "Gut Load": gut_accumulation_total,
             "Stato": status_label,
@@ -544,6 +539,7 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     
     * **A) Efficienza Metabolica Individuale:** Studi recenti (Podlogar et al., 2025) evidenziano un'alta variabilità nell'ossidazione dei CHO esogeni ($0.5-1.5 \text{ g/min}$). L'app permette ora di personalizzare questo parametro.
     * **B) Rischio Gastrointestinale:** L'accumulo di CHO non ossidati è il predittore principale di distress GI. Il modello stima questo rischio calcolando il delta tra assunzione e ossidazione (Podlogar et al., 2025).
+    * **C) Mix di Carboidrati:** L'uso di miscele Glucosio:Fruttosio (es. 2:1 o 1:0.8) sfrutta trasportatori multipli (SGLT1 e GLUT5), aumentando il limite di ossidazione fino a $1.5-1.7 \text{ g/min}$ (Jeukendrup, 2004).
     """)
 # --- FINE NOTE TECNICHE REINTRODOTTE ---
 
@@ -554,9 +550,6 @@ with tab1:
     col_in, col_res = st.columns([1, 2])
     
     with col_in:
-        # =========================================================================
-        # SEZIONE 1: DATI ANTROPOMETRICI E BASE
-        # =========================================================================
         st.subheader("1. Dati Antropometrici")
         weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 70.0, 0.5)
         height = st.slider("Altezza (cm)", 150, 210, 175, 1)
@@ -565,7 +558,6 @@ with tab1:
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
-        # --- NUOVO INPUT PER MASSA MUSCOLARE REALE ---
         use_smm = st.checkbox("Usa Massa Muscolare (SMM) da esame strumentale (Impedenziometria/DEXA)",
                               help="Seleziona questa opzione per sostituire la stima interna (basata su Peso/BF/Sesso) con un valore misurato direttamente.")
         muscle_mass_input = None
@@ -575,35 +567,25 @@ with tab1:
                 min_value=10.0, max_value=60.0, value=weight * 0.45, step=0.1,
                 help="Inserire la massa muscolare scheletrica totale misurata (es. da DEXA o BIA)."
             )
-        # --- FINE NUOVO INPUT ---
         
         st.markdown("---")
-        
-        # =========================================================================
-        # SEZIONE 2: CAPACITÀ MASSIMA DI STOCCAGGIO (Tank Max)
-        # =========================================================================
         st.subheader("2. Capacità di Stoccaggio Massima (Tank)")
         
-        # 2a. Metodo di calcolo della concentrazione
         st.write("**Stima Concentrazione Glicogeno Muscolare**")
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
-        # Inizializzazione variabili per sicurezza scope
         vo2_input = 55.0 
-        calculated_conc = 15.0 # Valore di default sicuro
+        calculated_conc = 15.0 
         
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
             s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2, key='lvl_status')]
             calculated_conc = s_status.val
-            # Calcoliamo il vo2_input come proxy per la visualizzazione
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
-            # Se basato su VO2max, prendiamo il valore dallo slider
             vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
             calculated_conc = get_concentration_from_vo2max(vo2_input)
             
-        # Mostra il risultato della stima
         lvl_desc = ""
         if calculated_conc < 15: lvl_desc = "Sedentario"
         elif calculated_conc < 18: lvl_desc = "Amatore"
@@ -612,13 +594,9 @@ with tab1:
         else: lvl_desc = "Elite"
         st.caption(f"Concentrazione stimata: **{calculated_conc:.1f} g/kg** ({lvl_desc})")
 
-        # 2b. Disciplina Sportiva
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
         
-        # =========================================================================
-        # SEZIONE 3: FATTORI AVANZATI DI CAPACITÀ
-        # =========================================================================
         with st.expander("Fattori Avanzati di Capacità (Aumento potenziale Max)"):
             use_creatine = st.checkbox("Supplementazione Creatina", help="Aumento volume cellulare e capacità di stoccaggio stimata (+10%).")
             s_menstrual = MenstrualPhase.NONE
@@ -628,18 +606,14 @@ with tab1:
         
         st.markdown("---")
         
-        # Inizializza i dizionari per la selezione
         fatigue_map = {f.label: f for f in FatigueState}
         sleep_map = {s.label: s for s in SleepQuality}
         
-        # Variabili necessarie per il calcolo finale (inizializzate)
         combined_filling = 1.0 
         diet_factor = 1.0
         avg_cho_gk = 5.0
+        steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0 
 
-        # =========================================================================
-        # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta)
-        # =========================================================================
         st.subheader("3. Stato Nutrizionale (Introito CHO 48h)")
         
         diet_method = st.radio(
@@ -648,7 +622,6 @@ with tab1:
             key='diet_calc_method'
         )
         
-        # --- METODO 1: TIPO DI DIETA ---
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
             diet_options_map = {}
             for d in DietType:
@@ -660,14 +633,11 @@ with tab1:
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
             s_diet = diet_options_map[selected_diet_label]
 
-            # Qui usiamo solo il fattore dieta
             diet_factor = s_diet.factor 
-            
             st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
-            s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
-            s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
+            s_fatigue = FatigueState.RESTED 
+            s_sleep = SleepQuality.GOOD    
         
-        # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
             st.markdown("#### Input Glicogeno Totale (g/die)")
             col_d2, col_d1 = st.columns(2)
@@ -684,57 +654,72 @@ with tab1:
                 help="Apporto totale di CHO del giorno precedente."
             )
             
-            # Calcolo dei ratei intermedi per la visualizzazione
             cho_day_minus_2_gk = cho_day_minus_2_g / weight
             cho_day_minus_1_gk = cho_day_minus_1_g / weight
 
-            # Visualizzazione dei ratei g/kg/die
             col_d2.caption(f"$\sim$ **{cho_day_minus_2_gk:.1f} g/kg/die**")
             col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
             
-            # Parametri attività fittizi per la funzione di calcolo
-            
-            # Usiamo valori neutri per s_fatigue/s_sleep nel calcolo intermedio.
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
             
-            # Calcoliamo solo il diet_factor qui
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
-                s_fatigue=temp_fatigue, # Neutro
-                s_sleep=temp_sleep,     # Neutro
+                s_fatigue=temp_fatigue, 
+                s_sleep=temp_sleep,    
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
             )
-            s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
-            s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
+            s_fatigue = FatigueState.RESTED 
+            s_sleep = SleepQuality.GOOD     
             
             st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         st.markdown("---")
         
-        # =========================================================================
-        # SEZIONE 5: FATTORI DI RECUPERO (FATICA E SONNO)
-        # =========================================================================
         st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
         
-        # Selezione qualitativa per default
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_final')]
         
-        # Calcolo finale del combined_filling (fattore dieta * fattore recupero)
-        combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
+        with st.expander("Attività Motorio/Sportiva Effettuata (Giorno -1 e -2)"):
+            st.markdown("#### Fornisci dati oggettivi per calibrare il Fattore Fatica:")
+            col_m2_steps, col_m2_act = st.columns(2)
+            steps_m2 = col_m2_steps.number_input("Passi Giorno -2", min_value=0, value=10000, step=500)
+            min_act_m2 = col_m2_act.number_input("Minuti Attività Sportiva Giorno -2", min_value=0, value=60, step=10)
+
+            col_m1_steps, col_m1_act = st.columns(2)
+            steps_m1 = col_m1_steps.number_input("Passi Giorno -1", min_value=0, value=5000, step=500)
+            min_act_m1 = col_m1_act.number_input("Minuti Attività Sportiva Giorno -1", min_value=0, value=30, step=10)
+            
+            st.caption("Nota: Se l'attività è inserita, il fattore di deplezione (Carico di Lavoro) sarà calcolato oggettivamente. Altrimenti, viene usato il valore qualitativo selezionato sopra.")
+
+        if steps_m1 > 0 or steps_m2 > 0 or min_act_m1 > 0 or min_act_m2 > 0:
+            if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
+                s_diet_label = st.session_state.get('diet_type_select', list(DietType.__members__.keys())[1])
+                s_diet_enum = [d for d in DietType if d.label == s_diet_label][0] if isinstance(s_diet_label, str) else DietType.NORMAL
+                cho_g1 = weight * s_diet_enum.ref_value
+                cho_g2 = weight * s_diet_enum.ref_value
+            else:
+                cho_g1 = cho_day_minus_1_g
+                cho_g2 = cho_day_minus_2_g
+            
+            combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
+                weight_kg=weight,
+                cho_day_minus_1_g=cho_g1,
+                cho_day_minus_2_g=cho_g2,
+                s_fatigue=s_fatigue, 
+                s_sleep=s_sleep,
+                steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
+            )
+        else:
+            combined_filling = diet_factor * s_fatigue.factor * s_sleep.factor
 
         st.markdown("---")
-        
-        # =========================================================================
-        # SEZIONE 6: PARAMETRI EPATICI/BIOMARKER (Acuti)
-        # =========================================================================
         st.subheader("5. Stato Metabolico Acuto (Fegato/Glicemia)")
         
-        # Correzione: has_glucose deve essere definito PRIMA di essere usato fuori dall'expander
         has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
-        
         glucose_val = None
         is_fasted = False
         
@@ -745,12 +730,10 @@ with tab1:
             if not has_glucose:
                 is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
         
-        # Logica Fegato
         liver_val = 100.0
         if is_fasted:
             liver_val = 40.0 
         
-        # Creazione Struttura Subject e Calcolo finale del Tank
         vo2_abs = (vo2_input * weight) / 1000
         
         subject = Subject(
@@ -759,16 +742,16 @@ with tab1:
             body_fat_pct=bf, sex=s_sex, 
             glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
             liver_glycogen_g=liver_val,
-            filling_factor=combined_filling, # Usa il fattore che include la deplezione oggettiva/qualitativa
+            filling_factor=combined_filling, 
             uses_creatine=use_creatine,
             menstrual_phase=s_menstrual,
             glucose_mg_dl=glucose_val,
             vo2max_absolute_l_min=vo2_abs,
-            muscle_mass_kg=muscle_mass_input # Passa il nuovo input qui
+            muscle_mass_kg=muscle_mass_input 
         )
         
         tank_data = calculate_tank(subject)
-        st.session_state['tank_data'] = tank_data # Salvo tank_data completo
+        st.session_state['tank_data'] = tank_data 
         st.session_state['tank_g'] = tank_data['actual_available_g']
         st.session_state['subject_struct'] = subject 
 
@@ -805,24 +788,20 @@ with tab1:
         
         factors_text = []
         
-        # Logica di visualizzazione dei fattori
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)": 
-            # Dobbiamo riottenere s_diet in questo contesto di visualizzazione se il metodo 1 è attivo
-            # Uso una variabile temporanea per s_diet solo per la visualizzazione dei fattori
             temp_diet_map = {d.label: d for d in DietType}
             s_diet_label = st.session_state.get('diet_type_select', list(temp_diet_map.keys())[1])
-            s_diet = temp_diet_map.get(s_diet_label, DietType.NORMAL)
-
-            if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+            s_diet_val = temp_diet_map.get(s_diet_label, DietType.NORMAL)
+            if s_diet_val == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
             
-        elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
+        elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": 
+             factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
         if use_creatine: factors_text.append("Bonus volume plasmatico/creatina (+10% Cap)")
         if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5% filling)")
         if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
         
-        # Nuova nota per la fonte della Massa Muscolare Totale
         factors_text.append(f"Fonte Massa Muscolare: {tank_data['muscle_source_note']}")
 
         if factors_text:
@@ -917,6 +896,16 @@ with tab2:
                     interval_min = 60 / units_per_hour
                     st.caption(f"Protocollo: {units_per_hour:.1f} unità/h (1 ogni **{int(interval_min)} min**)")
             
+            # NUOVO SELETTORE MIX CHO
+            mix_type_options = list(ChoMixType)
+            selected_mix_type = st.selectbox(
+                "Tipologia Mix Carboidrati", 
+                options=mix_type_options, 
+                format_func=lambda x: x.label,
+                index=0,
+                help="Il tipo di carboidrati influenza il tasso massimo di ossidazione esogena."
+            )
+
             st.markdown("---")
 
             use_lab = st.checkbox("Usa Dati Reali da Metabolimetro (Test)", help="Se hai fatto un test del gas in laboratorio, inserisci i dati reali per la massima precisione.")
@@ -939,26 +928,23 @@ with tab2:
             st.markdown("---")
             st.subheader("Parametri Cinetici Avanzati")
 
-            # CHECKBOX PER PARAMETRI AVANZATI E OPZIONI ESPERTO (Modifica 1)
+            # CHECKBOX PER PARAMETRI AVANZATI
             use_custom_kinetic = st.checkbox(
                 "Usa parametri cinetici/fisiologici personalizzati (Utenti Esperti)",
                 help="Attiva questa opzione per calibrare τ (assorbimento), Rischio GI, Efficienza Ossidativa e Picco Ossidazione.",
                 value=False
             )
             
-            # VALORI DI DEFAULT
             TAU_DEFAULT = 20.0
             RISK_THRESHOLD_DEFAULT = 30
             EFFICIENCY_DEFAULT = 0.80
             
-            # Inizializzazione variabili esperto con default
             tau_absorption_input = TAU_DEFAULT
             risk_threshold_input = RISK_THRESHOLD_DEFAULT
             oxidation_efficiency_input = EFFICIENCY_DEFAULT
-            custom_max_exo_rate = None # Se None, viene calcolato standard
+            custom_max_exo_rate = None 
 
             if use_custom_kinetic:
-                # Colonna 1: Cinetica e Rischio GI
                 col_tau, col_risk = st.columns(2)
                 with col_tau:
                     tau_absorption_input = st.slider(
@@ -974,7 +960,6 @@ with tab2:
                     )
                 
                 st.markdown("#### Fisiologia Ossidativa")
-                # Slider Efficienza (Modifica 1)
                 oxidation_efficiency_input = st.slider(
                     "Efficienza di Ossidazione (%)",
                     0.50, 1.00, EFFICIENCY_DEFAULT, 0.01,
@@ -982,7 +967,6 @@ with tab2:
                     help="Percentuale di CHO ingeriti che viene effettivamente ossidata (Podlogar et al., 2025: 58-83%)."
                 )
                 
-                # Checkbox e Slider Picco Ossidazione (Modifica 1)
                 use_manual_peak = st.checkbox("Inserisci manualmente il Picco Ossidazione Esogena (g/min)")
                 if use_manual_peak:
                     custom_max_exo_rate = st.slider(
@@ -997,14 +981,12 @@ with tab2:
 
         h_cm = subj.height_cm 
         
-        # Le due simulazioni devono usare gli stessi parametri di attività,
-        # ma la simulazione "No Cho" ha intake=0.
-        # Passiamo i nuovi parametri esperti alla funzione simulate_metabolism (Modifica 2)
         df_sim, stats = simulate_metabolism(
             tank_data, duration, carb_intake, cho_per_unit, crossover, 
             tau_absorption_input, subj, act_params,
             oxidation_efficiency_input=oxidation_efficiency_input,
-            custom_max_exo_rate=custom_max_exo_rate
+            custom_max_exo_rate=custom_max_exo_rate,
+            mix_type_input=selected_mix_type 
         )
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
@@ -1012,7 +994,8 @@ with tab2:
             tank_data, duration, 0, cho_per_unit, crossover, 
             tau_absorption_input, subj, act_params,
             oxidation_efficiency_input=oxidation_efficiency_input,
-            custom_max_exo_rate=custom_max_exo_rate
+            custom_max_exo_rate=custom_max_exo_rate,
+            mix_type_input=selected_mix_type
         )
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
@@ -1043,30 +1026,25 @@ with tab2:
         m3.metric("Uso CHO Esogeno", f"{int(stats['total_exo_used'])} g", help="Totale energia da integrazione")
 
         
-        # --- GRAFICO CINETICA DI DEPLEZIONE (PIENA PAGINA) ---
         st.markdown("### 📊 Cinetica di Deplezione (Muscolo + Fegato)")
         
-        # Mappatura colori richiesta dall'utente
         color_map = {
-            'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - BASE
-            'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
-            'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso (3)
-            'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (4) - CIMA
+            'Glicogeno Epatico (g)': '#B71C1C',    
+            'Carboidrati Esogeni (g)': '#1976D2', 
+            'Ossidazione Lipidica (g)': '#FFC107', 
+            'Glicogeno Muscolare (g)': '#E57373', 
         }
         
-        # Ordine RICHIESTO (dal basso verso l'alto): Epatico, Esogeni, Lipidi, Muscolare
         stack_order = [
-            'Glicogeno Epatico (g)',     # 1. BASE (indice 0)
-            'Carboidrati Esogeni (g)',   # 2. Sopra 1 (indice 1)
-            'Ossidazione Lipidica (g)',  # 3. Sopra 2 (indice 2)
-            'Glicogeno Muscolare (g)'      # 4. CIMA (indice 3)
+            'Glicogeno Epatico (g)',     
+            'Carboidrati Esogeni (g)',   
+            'Ossidazione Lipidica (g)',  
+            'Glicogeno Muscolare (g)'      
         ]
         
-        # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
         df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                               var_name='Source', value_name='Rate (g/h)')
         
-        # TRUCCO: Mappatura dell'indice ordinale per forzare l'ordinamento
         sort_map = {
             'Glicogeno Epatico (g)': 0,
             'Carboidrati Esogeni (g)': 1,
@@ -1075,7 +1053,6 @@ with tab2:
         }
         df_long['sort_index'] = df_long['Source'].map(sort_map)
         
-        # Creazione del domain/range personalizzato basato sull'ordine di stack
         color_domain = stack_order
         color_range = [color_map[source] for source in stack_order]
 
@@ -1083,19 +1060,17 @@ with tab2:
             x=alt.X('Time (min)'),
             y=alt.Y('Rate (g/h)', stack=True), 
             color=alt.Color('Source', 
-                            scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
+                            scale=alt.Scale(domain=color_domain,  
                                             range=color_range),
-                            # FORZA L'ORDINE SULL'INDICE NUMERICO IN MODO CRESCENTE (ascending)
                             sort=alt.SortField(field='sort_index', order='ascending') 
                            ),
             tooltip=['Time (min)', 'Source', 'Rate (g/h)']
         ).properties(
-            title="Cinetica di Deplezione (Muscolo + Fegato)" # Aggiungo titolo al grafico stack
+            title="Cinetica di Deplezione (Muscolo + Fegato)" 
         ).interactive()
         
         st.altair_chart(chart_stack, use_container_width=True)
         
-        # INSIGHT SCIENTIFICI BURN
         with st.expander("Note Tecniche: Cinetica Deplezione & Sparing"):
             st.info("""
             **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
@@ -1104,12 +1079,11 @@ with tab2:
             * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
             """)
             
-        # EXPANDER FRAYN RICHIESTO
         with st.expander("Note Metodologiche: Equazioni Metaboliche (Frayn)"):
             st.info("""
             **Calcolo Stechiometrico dei Substrati**
             
-            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano dal consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
+            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
             """)
 
         st.markdown("---")
@@ -1117,29 +1091,22 @@ with tab2:
         
         st.caption("Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno) ")
         
-        # --- LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
-        
-        # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
         initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
-        max_total = initial_total_glycogen * 1.05 # Max per l'asse Y
+        max_total = initial_total_glycogen * 1.05 
         
-        # Definizioni delle soglie di rischio sul TOTALE GLICOGENO INIZIALE
         zone_green_end = initial_total_glycogen * 1.05 
-        zone_yellow_end = initial_total_glycogen * 0.65 # Sotto il 65% si entra in zona gialla
-        zone_red_end = initial_total_glycogen * 0.30 # Sotto il 30% si entra in zona critica
+        zone_yellow_end = initial_total_glycogen * 0.65 
+        zone_red_end = initial_total_glycogen * 0.30 
         
-        # Si considerano 20g come limite minimo per la glicemia (rischio bonk)
         MIN_GLUCEMIA_LIMIT = 20
         
         zones_df = pd.DataFrame({
             'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
-            # Gli intervalli sono definiti dal basso verso l'alto
             'Start': [zone_yellow_end, MIN_GLUCEMIA_LIMIT, 0],
             'End': [zone_green_end, zone_yellow_end, MIN_GLUCEMIA_LIMIT],
-            'Color': ['#4CAF50', '#FFC107', '#F44336'] # Verde, Giallo, Rosso Scuro
+            'Color': ['#4CAF50', '#FFC107', '#F44336'] 
         })
 
-        # 2. Layer 1: Sfondo colorato (Bande)
         background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
             y=alt.Y('Start', axis=None), 
             y2=alt.Y2('End'),         
@@ -1147,10 +1114,9 @@ with tab2:
             tooltip=['Zone']
         )
 
-        # 3. Layer 2: Linee di Deplezione. Usa 'Residuo Totale'.
         lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
             x=alt.X('Time (min)', title='Durata (min)'),
-            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), # <--- MODIFICA 2: Usa Residuo Totale
+            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), 
             
             color=alt.Color('Scenario', 
                             scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
@@ -1161,7 +1127,6 @@ with tab2:
             tooltip=['Time (min)', 'Residuo Totale', 'Stato', 'Scenario']
         ).interactive()
 
-        # 4. Combinazione dei Layer
         chart = (background + lines).properties(
             title="Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno)"
         ).resolve_scale(
@@ -1169,19 +1134,15 @@ with tab2:
         )
 
         st.altair_chart(chart, use_container_width=True)
-        # --- FINE NUOVA LOGICA GRAFICO ---
         
         st.markdown("---")
         
-        # --- BLOCCO ACCUMULO INTESTINALE (PIENA PAGINA) ---
         st.markdown("### ⚠️ Accumulo Intestinale (Rischio GI) & Flusso CHO")
         
-        # TESTO INTERPRETATIVO AGGIUNTO
         st.caption(f"""
         **Interpretazione:** La distanza verticale tra la Linea Blu (Ingerito) e la Linea Verde (Ossidato) crea l'**Accumulo CHO (g)**, ovvero il carico intestinale istantaneo. Se l'area supera la Soglia di Rischio GI ({risk_threshold_input} g), la strategia di assunzione è troppo aggressiva.
         """)
 
-        # Spiegazione per l'utente, resa più chiara e sintetica
         with st.expander("Dettagli Modello Flusso CHO e Rischio GI"):
             st.markdown(f"""
             Questo grafico visualizza il **bilancio dinamico** tra ciò che ingerisci e ciò che il tuo corpo riesce ad ossidare (bruciare), indicando il rischio di *Distress Gastrointestinale (GI)*.
@@ -1196,30 +1157,24 @@ with tab2:
             * **Soglia di Rischio GI:** {risk_threshold_input} g (Linea Rossa Tratteggiata). Superarla indica un alto rischio di sintomi GI.
             """)
         
-        # PARAMETRO DINAMICO
         RISK_THRESHOLD = risk_threshold_input
         
-        # Calcolo del colore condizionale per l'area
         df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio', 'Basso Rischio')
         
-        # Crea un punto per evidenziare il massimo carico
         max_gut_load = df_sim['Gut Load'].max()
         max_gut_load_time = df_sim[df_sim['Gut Load'] == max_gut_load]['Time (min)'].iloc[0] if max_gut_load > 0 else 0
         max_df = pd.DataFrame([{'Time (min)': max_gut_load_time, 'Gut Load': max_gut_load}])
 
-        # 1. Grafico Area di Accumulo (Asse Y Sinistro)
         gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63')),
             tooltip=['Time (min)', 'Gut Load', 'Rischio']
         )
         
-        # Linea di Soglia di Rischio (30g)
         risk_line = alt.Chart(pd.DataFrame({'y': [RISK_THRESHOLD]})).mark_rule(color='#F44336', strokeDash=[4,4], size=2).encode(
             y=alt.Y('y', axis=None)
         )
         
-        # Punto di Massimo Accumulo
         max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Gut Load'),
@@ -1228,13 +1183,9 @@ with tab2:
         
         gut_layer_base = alt.layer(gut_area, risk_line, max_point)
 
-        # --- Tracce Cumulative per il Secondo Asse Y ---
-        
-        # Trasformiamo il df_sim per il grafico dual-axis
         df_cumulative = df_sim.melt('Time (min)', value_vars=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
                                    var_name='Flusso', value_name='Grammi')
 
-        # 2. Linea Intake Cumulativo (asse secondario)
         intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
@@ -1246,7 +1197,6 @@ with tab2:
             tooltip=['Time (min)', 'Flusso', 'Grammi']
         )
 
-        # Layer Cumulative (Asse Destro)
         cumulative_layer = intake_oxidation_lines.encode(
             y=alt.Y('Grammi', 
                     axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2', orient='right'), 
@@ -1254,7 +1204,6 @@ with tab2:
                     )
         )
         
-        # Combinazione Finale
         final_gut_chart = alt.layer(
             gut_layer_base,
             cumulative_layer
