@@ -532,13 +532,31 @@ def simulate_metabolism(
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
             
         exo_oxidation_g_h = from_exogenous * 60
-            
+        
+        # --- CALCOLO % TOTALE ENERGIA FORNITA (per tooltip) ---
+        # Calcoliamo i grammi totali usati in questo minuto da tutte le fonti
+        g_muscle = muscle_usage_g_min
+        g_liver = from_liver
+        g_exo = from_exogenous
+        g_fat = (current_kcal_demand * fat_ratio_used / 9.0) if not is_lab_data else lab_fat_rate
+        
+        total_g_min = g_muscle + g_liver + g_exo + g_fat
+        if total_g_min == 0: total_g_min = 1.0 # Evita divisione per zero
+        
+        # Aggiungiamo le percentuali al dizionario results
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
             "Carboidrati Esogeni (g)": exo_oxidation_g_h, 
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
+            
+            # Campi Percentuali per Tooltip
+            "Pct_Muscle": f"{(g_muscle / total_g_min * 100):.1f}%",
+            "Pct_Liver": f"{(g_liver / total_g_min * 100):.1f}%",
+            "Pct_Exo": f"{(g_exo / total_g_min * 100):.1f}%",
+            "Pct_Fat": f"{(g_fat / total_g_min * 100):.1f}%",
+
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Residuo Totale": current_muscle_glycogen + current_liver_glycogen, 
@@ -581,7 +599,7 @@ st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("Strumento di stima delle riserve energetiche e simulazione del metabolismo sotto sforzo.")
 
-# --- NOTE TECNICHE REINTRODOTTE ---
+# --- NOTE TECNICHE ---
 with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     st.info("""
     **1. Stima Riserve & Capacità di Stoccaggio**
@@ -597,7 +615,7 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     * **B) Rischio Gastrointestinale:** L'accumulo di CHO non ossidati è il predittore principale di distress GI. Il modello stima questo rischio calcolando il delta tra assunzione e ossidazione (Podlogar et al., 2025).
     * **C) Mix di Carboidrati:** L'uso di miscele Glucosio:Fruttosio (es. 2:1 o 1:0.8) sfrutta trasportatori multipli (SGLT1 e GLUT5), aumentando il limite di ossidazione fino a $1.5-1.7 \text{ g/min}$ (Jeukendrup, 2004).
     """)
-# --- FINE NOTE TECNICHE REINTRODOTTE ---
+# --- FINE NOTE TECNICHE ---
 
 tab1, tab2 = st.tabs(["Analisi Riserve (Tank)", "Simulazione Metabolica (Burn)"])
 
@@ -1138,87 +1156,133 @@ with tab2:
         m3.metric("Uso CHO Esogeno", f"{int(stats['total_exo_used'])} g", help="Totale energia da integrazione")
 
         
-        st.markdown("### 📊 Cinetica di Deplezione (Muscolo + Fegato)")
+        # --- GRAFICO CINETICA DI DEPLEZIONE (PIENA PAGINA) ---
+        st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
         
+        # Mappatura colori richiesta dall'utente
         color_map = {
-            'Glicogeno Epatico (g)': '#B71C1C',    
-            'Carboidrati Esogeni (g)': '#1976D2', 
-            'Ossidazione Lipidica (g)': '#FFC107', 
-            'Glicogeno Muscolare (g)': '#E57373', 
+            'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - BASE
+            'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
+            'Ossidazione Lipidica (g)': '#FFC107', # Giallo Intenso (3)
+            'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (4) - CIMA
         }
         
+        # Ordine RICHIESTO (dal basso verso l'alto): Epatico, Esogeni, Lipidi, Muscolare
         stack_order = [
-            'Glicogeno Epatico (g)',     
-            'Carboidrati Esogeni (g)',   
-            'Ossidazione Lipidica (g)',  
-            'Glicogeno Muscolare (g)'      
+            'Glicogeno Epatico (g)',     # 1. BASE (indice 0)
+            'Carboidrati Esogeni (g)',   # 2. Sopra 1 (indice 1)
+            'Ossidazione Lipidica (g)',  # 3. Sopra 2 (indice 2)
+            'Glicogeno Muscolare (g)'      # 4. CIMA (indice 3)
         ]
         
+        # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
         df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                               var_name='Source', value_name='Rate (g/h)')
         
+        # Aggiungo colonne calcolate per i tooltip avanzati
+        # Per farlo in modo efficiente in Altair, è meglio unire i dati originali
+        # Ma per semplicità qui usiamo le colonne Pct_... già calcolate in results e le mettiamo nel df long se necessario
+        # In questo caso specifico, il melt perde le altre colonne.
+        # Ricostruiamo un df_long più ricco unendo con df_sim originale su Time (min)
+        
+        df_long_rich = pd.merge(df_long, df_sim[['Time (min)', 'Pct_Muscle', 'Pct_Liver', 'Pct_Exo', 'Pct_Fat', 'Scenario']], on='Time (min)')
+        
+        # Creiamo una colonna dinamica per il tooltip percentuale basata sulla source
+        conditions = [
+            (df_long_rich['Source'] == 'Glicogeno Muscolare (g)'),
+            (df_long_rich['Source'] == 'Glicogeno Epatico (g)'),
+            (df_long_rich['Source'] == 'Carboidrati Esogeni (g)'),
+            (df_long_rich['Source'] == 'Ossidazione Lipidica (g)')
+        ]
+        choices = [df_long_rich['Pct_Muscle'], df_long_rich['Pct_Liver'], df_long_rich['Pct_Exo'], df_long_rich['Pct_Fat']]
+        df_long_rich['Percentuale'] = np.select(conditions, choices, default='0%')
+
+        
+        # TRUCCO: Mappatura dell'indice ordinale per forzare l'ordinamento
         sort_map = {
             'Glicogeno Epatico (g)': 0,
             'Carboidrati Esogeni (g)': 1,
             'Ossidazione Lipidica (g)': 2,
             'Glicogeno Muscolare (g)': 3
         }
-        df_long['sort_index'] = df_long['Source'].map(sort_map)
+        df_long_rich['sort_index'] = df_long_rich['Source'].map(sort_map)
         
+        # Creazione del domain/range personalizzato basato sull'ordine di stack
         color_domain = stack_order
         color_range = [color_map[source] for source in stack_order]
+        
+        # Linea di Fabbisogno Totale (che corrisponde alla somma delle aree)
+        # Calcoliamo la somma per ogni minuto per disegnare la linea sopra
+        df_total_demand = df_sim.copy()
+        df_total_demand['Total Demand'] = df_total_demand['Glicogeno Muscolare (g)'] + df_total_demand['Glicogeno Epatico (g)'] + df_total_demand['Carboidrati Esogeni (g)'] + df_total_demand['Ossidazione Lipidica (g)']
 
-        chart_stack = alt.Chart(df_long).mark_area().encode(
+        # Base Chart (Area)
+        chart_stack = alt.Chart(df_long_rich).mark_area().encode(
             x=alt.X('Time (min)'),
             y=alt.Y('Rate (g/h)', stack=True), 
             color=alt.Color('Source', 
-                            scale=alt.Scale(domain=color_domain,  
+                            scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
                                             range=color_range),
+                            # FORZA L'ORDINE SULL'INDICE NUMERICO IN MODO CRESCENTE (ascending)
                             sort=alt.SortField(field='sort_index', order='ascending') 
                            ),
-            tooltip=['Time (min)', 'Source', 'Rate (g/h)']
-        ).properties(
-            title="Cinetica di Deplezione (Muscolo + Fegato)" 
+            tooltip=[
+                alt.Tooltip('Time (min)', title='Minuto'), 
+                alt.Tooltip('Source', title='Fonte'), 
+                alt.Tooltip('Rate (g/h)', title='Contributo (g/h)', format='.1f'),
+                alt.Tooltip('Percentuale', title='% del Totale')
+            ]
+        )
+        
+        # Linea Fabbisogno Totale
+        line_demand = alt.Chart(df_total_demand).mark_line(color='black', strokeDash=[5,5], size=2).encode(
+            x='Time (min)',
+            y='Total Demand'
+        )
+
+        # Combinazione
+        final_combo_chart = (chart_stack + line_demand).properties(
+            title="Bilancio Energetico: Richiesta vs. Fonti di Ossidazione" # Titolo esplicito
         ).interactive()
         
-        st.altair_chart(chart_stack, use_container_width=True)
+        st.altair_chart(final_combo_chart, use_container_width=True)
         
-        with st.expander("Note Tecniche: Cinetica Deplezione & Sparing"):
-            st.info("""
-            **Modello Fisiologico di Riferimento (Coggan & Coyle 1991; King 2018)**
-            
-            * **Non-Linearità (Fatigue Drift):** L'utilizzo del glicogeno muscolare non è costante, ma decade progressivamente man mano che le scorte intramuscolari diminuiscono, richiedendo un maggiore contributo dal glucosio ematico e dai lipidi (Gollnick et al., 1973). 
-            * **Effetto Sparing:** L'ingestione di carboidrati esogeni non riduce significativamente l'uso del glicogeno muscolare nelle fasi iniziali, ma diventa critica per proteggere il glicogeno epatico e sostenere l'ossidazione dei carboidrati nelle fasi avanzate (King et al., 2018).
-            """)
-            
-        with st.expander("Note Metodologiche: Equazioni Metaboliche (Frayn)"):
-            st.info("""
-            **Calcolo Stechiometrico dei Substrati**
-            
-            Le stime dei tassi di ossidazione di carboidrati e lipidi si basano sulle equazioni standardizzate di *Frayn (1983)*, che derivano il consumo netto dei substrati dal Quoziente Respiratorio (RER/RQ) stimato. Questo approccio assume un modello di "ossidazione netta" che incorpora implicitamente i flussi gluconeogenici epatici nel bilancio complessivo.
-            """)
-
+        # Didascalia Esplicativa
+        st.caption("""
+        **Guida alla Lettura:**
+        * **Altezza Totale:** Rappresenta il consumo energetico orario (g/h) richiesto dallo sforzo in quel momento (linea tratteggiata nera).
+        * **Aree Colorate:** Mostrano come il corpo "pesca" dalle diverse riserve per soddisfare quella richiesta.
+        * **Obiettivo:** Vedere l'area Blu (Esogeni) crescere per risparmiare le aree Rosse (Glicogeno).
+        """)
+        
         st.markdown("---")
         st.markdown("### 📉 Confronto Riserve Nette")
         
         st.caption("Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno) ")
         
+        # --- LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
+        
+        # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
         initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
-        max_total = initial_total_glycogen * 1.05 
+        max_total = initial_total_glycogen * 1.05 # Max per l'asse Y
         
+        # Definizioni delle soglie di rischio sul TOTALE GLICOGENO INIZIALE
         zone_green_end = initial_total_glycogen * 1.05 
-        zone_yellow_end = initial_total_glycogen * 0.65 
-        zone_red_end = initial_total_glycogen * 0.30 
+        zone_yellow_end = initial_total_glycogen * 0.65 # Sotto il 65% si entra in zona gialla
+        zone_red_end = initial_total_glycogen * 0.30 # Sotto il 30% si entra in zona critica
         
+        # Si considerano 20g come limite minimo per la glicemia (rischio bonk)
         MIN_GLUCEMIA_LIMIT = 20
         
         zones_df = pd.DataFrame({
             'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
+            # Gli intervalli sono definiti dal basso verso l'alto
             'Start': [zone_yellow_end, MIN_GLUCEMIA_LIMIT, 0],
             'End': [zone_green_end, zone_yellow_end, MIN_GLUCEMIA_LIMIT],
-            'Color': ['#4CAF50', '#FFC107', '#F44336'] 
+            'Color': ['#4CAF50', '#FFC107', '#F44336'] # Verde, Giallo, Rosso Scuro
         })
 
+        # 2. Layer 1: Sfondo colorato (Bande)
         background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
             y=alt.Y('Start', axis=None), 
             y2=alt.Y2('End'),         
@@ -1226,9 +1290,10 @@ with tab2:
             tooltip=['Zone']
         )
 
+        # 3. Layer 2: Linee di Deplezione. Usa 'Residuo Totale'.
         lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
             x=alt.X('Time (min)', title='Durata (min)'),
-            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), 
+            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), # <--- MODIFICA 2: Usa Residuo Totale
             
             color=alt.Color('Scenario', 
                             scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
@@ -1239,6 +1304,7 @@ with tab2:
             tooltip=['Time (min)', 'Residuo Totale', 'Stato', 'Scenario']
         ).interactive()
 
+        # 4. Combinazione dei Layer
         chart = (background + lines).properties(
             title="Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno)"
         ).resolve_scale(
@@ -1246,15 +1312,19 @@ with tab2:
         )
 
         st.altair_chart(chart, use_container_width=True)
+        # --- FINE NUOVA LOGICA GRAFICO ---
         
         st.markdown("---")
         
+        # --- BLOCCO ACCUMULO INTESTINALE (PIENA PAGINA) ---
         st.markdown("### ⚠️ Accumulo Intestinale (Rischio GI) & Flusso CHO")
         
+        # TESTO INTERPRETATIVO AGGIUNTO
         st.caption(f"""
         **Interpretazione:** La distanza verticale tra la Linea Blu (Ingerito) e la Linea Verde (Ossidato) crea l'**Accumulo CHO (g)**, ovvero il carico intestinale istantaneo. Se l'area supera la Soglia di Rischio GI ({risk_threshold_input} g), la strategia di assunzione è troppo aggressiva.
         """)
 
+        # Spiegazione per l'utente, resa più chiara e sintetica
         with st.expander("Dettagli Modello Flusso CHO e Rischio GI"):
             st.markdown(f"""
             Questo grafico visualizza il **bilancio dinamico** tra ciò che ingerisci e ciò che il tuo corpo riesce ad ossidare (bruciare), indicando il rischio di *Distress Gastrointestinale (GI)*.
@@ -1269,24 +1339,30 @@ with tab2:
             * **Soglia di Rischio GI:** {risk_threshold_input} g (Linea Rossa Tratteggiata). Superarla indica un alto rischio di sintomi GI.
             """)
         
+        # PARAMETRO DINAMICO
         RISK_THRESHOLD = risk_threshold_input
         
+        # Calcolo del colore condizionale per l'area
         df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio', 'Basso Rischio')
         
+        # Crea un punto per evidenziare il massimo carico
         max_gut_load = df_sim['Gut Load'].max()
         max_gut_load_time = df_sim[df_sim['Gut Load'] == max_gut_load]['Time (min)'].iloc[0] if max_gut_load > 0 else 0
         max_df = pd.DataFrame([{'Time (min)': max_gut_load_time, 'Gut Load': max_gut_load}])
 
+        # 1. Grafico Area di Accumulo (Asse Y Sinistro)
         gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63')),
             tooltip=['Time (min)', 'Gut Load', 'Rischio']
         )
         
+        # Linea di Soglia di Rischio (30g)
         risk_line = alt.Chart(pd.DataFrame({'y': [RISK_THRESHOLD]})).mark_rule(color='#F44336', strokeDash=[4,4], size=2).encode(
             y=alt.Y('y', axis=None)
         )
         
+        # Punto di Massimo Accumulo
         max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Gut Load'),
@@ -1295,9 +1371,13 @@ with tab2:
         
         gut_layer_base = alt.layer(gut_area, risk_line, max_point)
 
+        # --- Tracce Cumulative per il Secondo Asse Y ---
+        
+        # Trasformiamo il df_sim per il grafico dual-axis
         df_cumulative = df_sim.melt('Time (min)', value_vars=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
                                    var_name='Flusso', value_name='Grammi')
 
+        # 2. Linea Intake Cumulativo (asse secondario)
         intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
@@ -1309,6 +1389,7 @@ with tab2:
             tooltip=['Time (min)', 'Flusso', 'Grammi']
         )
 
+        # Layer Cumulative (Asse Destro)
         cumulative_layer = intake_oxidation_lines.encode(
             y=alt.Y('Grammi', 
                     axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2', orient='right'), 
@@ -1316,6 +1397,7 @@ with tab2:
                     )
         )
         
+        # Combinazione Finale
         final_gut_chart = alt.layer(
             gut_layer_base,
             cumulative_layer
