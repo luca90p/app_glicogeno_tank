@@ -292,27 +292,24 @@ def calculate_tank(subject: Subject):
 # Aggiornato per accettare il mix type
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: ChoMixType):
     # Base rate per GLUCOSIO
-    base_rate_glucose = 1.0 # g/min (ca 60 g/h) standard per glucosio
+    # Iniziamo con la stima individuale (Podlogar/Body Size/Potenza)
+    base_rate = 0.8 
     
-    # Aggiustamenti individuali fini (come da Podlogar et al.)
-    if height_cm > 175:
-        base_rate_glucose += 0.1
-    if ftp_watts > 250:
-        base_rate_glucose += 0.1
-        
-    # Limite fisiologico per il solo glucosio (SGLT1 saturo)
-    limit_glucose = 1.1 
-    estimated_glucose_rate = min(base_rate_glucose, limit_glucose)
+    if height_cm > 170:
+        base_rate += (height_cm - 170) * 0.015
+    if ftp_watts > 200:
+        base_rate += (ftp_watts - 200) * 0.0015
     
-    # Se usiamo un mix, il limite si alza grazie a GLUT5 (fruttosio)
-    if mix_type == ChoMixType.MIX_2_1:
-        # Mix 2:1 permette fino a ~90g/h (1.5 g/min)
-        return min(estimated_glucose_rate * 1.5, 1.5)
-    elif mix_type == ChoMixType.MIX_1_08:
-        # Mix 1:0.8 permette fino a ~105g/h (1.75 g/min)
-        return min(estimated_glucose_rate * 1.75, 1.75)
-    else:
-        return estimated_glucose_rate
+    # Applichiamo il fattore moltiplicativo basato sul tipo di mix
+    ox_factor = mix_type.ox_factor
+    max_rate_gh = mix_type.max_rate_gh
+    
+    estimated_rate_gh = base_rate * 60 * ox_factor
+    
+    # Tasso finale limitato dal limite fisiologico del mix (es. 1.7 g/min per 1:0.8)
+    final_rate_g_min = min(estimated_rate_gh / 60, max_rate_gh / 60)
+    
+    return final_rate_g_min
 
 def calculate_rer_polynomial(intensity_factor):
     if_val = intensity_factor
@@ -630,9 +627,9 @@ with tab1:
         # SEZIONE 1: DATI ANTROPOMETRICI E BASE
         # =========================================================================
         st.subheader("1. Dati Antropometrici")
-        weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 70.0, 0.5)
-        height = st.slider("Altezza (cm)", 150, 210, 175, 1)
-        bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 15.0, 0.5) / 100.0
+        weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 74.0, 0.5) # DEFAULT: 74.0 kg
+        height = st.slider("Altezza (cm)", 150, 210, 187, 1) # DEFAULT: 187 cm
+        bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 11.0, 0.5) / 100.0 # DEFAULT: 11.0%
         
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
@@ -644,7 +641,7 @@ with tab1:
         if use_smm:
             muscle_mass_input = st.number_input(
                 "Massa Muscolare Totale (SMM) [kg]",
-                min_value=10.0, max_value=60.0, value=weight * 0.45, step=0.1,
+                min_value=10.0, max_value=60.0, value=37.4, step=0.1, # DEFAULT: 37.4 kg
                 help="Inserire la massa muscolare scheletrica totale misurata (es. da DEXA o BIA)."
             )
         # --- FINE NUOVO INPUT ---
@@ -661,18 +658,23 @@ with tab1:
         estimation_method = st.radio("Metodo di calcolo:", ["Basato su Livello", "Basato su VO2max"], label_visibility="collapsed")
         
         # Inizializzazione variabili per sicurezza scope
-        vo2_input = 55.0 
-        calculated_conc = 15.0 
+        vo2_input = 60.0 # DEFAULT: 60
+        calculated_conc = get_concentration_from_vo2max(vo2_input) # DEFAULT: basato su 60
+
+        # Mappa dei livelli per trovare l'indice corretto per il default
+        status_map = {s.label: s for s in TrainingStatus}
+        default_status_label = "Avanzato / Competitivo" # Corrisponde a ~22.0 g/kg (~60 VO2max)
+        default_status_index = list(status_map.keys()).index(default_status_label)
+
         
         if estimation_method == "Basato su Livello":
-            status_map = {s.label: s for s in TrainingStatus}
-            s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=2, key='lvl_status')]
+            s_status = status_map[st.selectbox("Livello Atletico", list(status_map.keys()), index=default_status_index, key='lvl_status')]
             calculated_conc = s_status.val
             # Calcoliamo il vo2_input come proxy per la visualizzazione (non usato per il calcolo ma utile per la UI)
             vo2_input = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
             # Se basato su VO2max, prendiamo il valore dallo slider
-            vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 55, step=1)
+            vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 60, step=1) # DEFAULT: 60
             calculated_conc = get_concentration_from_vo2max(vo2_input)
             
         # Mostra il risultato della stima
@@ -686,7 +688,9 @@ with tab1:
 
         # 2b. Disciplina Sportiva
         sport_map = {s.label: s for s in SportType}
-        s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()))]
+        default_sport_label = "Ciclismo (Prevalenza arti inferiori)"
+        default_sport_index = list(sport_map.keys()).index(default_sport_label)
+        s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()), index=default_sport_index)]
         
         # =========================================================================
         # SEZIONE 3: FATTORI AVANZATI DI CAPACITÀ
@@ -770,15 +774,17 @@ with tab1:
             st.markdown("#### Input Glicogeno Totale (g/die)")
             col_d2, col_d1 = st.columns(2)
             
+            # DEFAULT CHO DAY -2 (74kg * 5 g/kg = 370g)
             cho_day_minus_2_g = col_d2.number_input(
                 "Grammi CHO Giorno -2 (g)", 
-                min_value=50, max_value=800, value=int(weight * 5.0), step=10,
+                min_value=50, max_value=800, value=370, step=10,
                 help="Apporto totale di CHO del penultimo giorno."
             )
             
+            # DEFAULT CHO DAY -1 (74kg * 5 g/kg = 370g)
             cho_day_minus_1_g = col_d1.number_input(
                 "Grammi CHO Giorno -1 (g)", 
-                min_value=50, max_value=800, value=int(weight * 5.0), step=10,
+                min_value=50, max_value=800, value=370, step=10,
                 help="Apporto totale di CHO del giorno precedente."
             )
             
@@ -815,9 +821,13 @@ with tab1:
         # =========================================================================
         st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
         
+        # Mappa per l'indice di default del Sonno (Sufficiente)
+        default_sleep_label = "Sufficiente (6-7h)"
+        default_sleep_index = list(sleep_map.keys()).index(default_sleep_label)
+
         # Selezione qualitativa per default
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
-        s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_final')]
+        s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=default_sleep_index, key='sleep_final')] # DEFAULT: Sufficiente
         
         
         # --- INPUT ATTIVITÀ MOTORIA SPECIFICA (Opzionale) ---
@@ -979,7 +989,7 @@ with tab2:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
             if sport_mode == 'cycling':
-                ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 250, step=5)
+                ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5) # DEFAULT: 265 W
                 avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
                 act_params['ftp_watts'] = ftp
                 act_params['avg_watts'] = avg_w
@@ -1302,7 +1312,7 @@ with tab2:
             # Layer Area Accatastata
             area_chart = alt.Chart(df_data).mark_area().encode(
                 x=alt.X('Time (min)', title='Durata (min)'),
-                y=alt.Y('Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
+                y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
                 color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
                 order=alt.Order('Tipo Glicogeno', sort='ascending'), # Epatico in basso, Muscolare sopra
                 tooltip=['Time (min)', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
