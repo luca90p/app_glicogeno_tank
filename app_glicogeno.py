@@ -1283,46 +1283,52 @@ with tab2:
             'Color': ['#4CAF50', '#FFC107', '#F44336'], 
         })
         
-        # Creiamo un DataFrame per lo sfondo con la colonna 'Scenario' duplicata
-        scenarios_df = pd.DataFrame({'Scenario': combined_df['Scenario'].unique()})
-        zones_with_scenario_df = pd.merge(zones_df.assign(key=1), scenarios_df.assign(key=1), on='key').drop('key', axis=1)
-
-        # Background sfaccettato
-        background_facet = alt.Chart(zones_with_scenario_df).mark_rect(opacity=0.15).encode(
-            x=alt.X('Time (min)', title='Durata (min)'), # Aggiunto x encoding per faceting
-            y=alt.Y('Start', title='Glicogeno Residuo (g)', axis=None), 
-            y2=alt.Y2('End'),         
-            color=alt.Color('Color', scale=None), 
-            tooltip=['Zone']
-        ).properties(
-             height=350 # Altezza fissa per i rettangoli
-        )
-
-        # Grafico ad area accatastata (Stacked Area Chart) per ogni Scenario
-        area_chart = alt.Chart(df_reserve_long).mark_area().encode(
-            x=alt.X('Time (min)', title='Durata (min)'),
-            y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
-            color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
-            order=alt.Order('Tipo Glicogeno', sort='ascending'), # Epatico in basso, Muscolare sopra
-            tooltip=['Time (min)', 'Scenario', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
-        ).interactive()
+        # Creazione dei grafici affiancati utilizzando la divisione dei dati e la combinazione dei layer
         
-        # Layering (Sfondo + Aree Accatastate)
-        # Qui uniamo background_facet e area_chart e poi sfaccettiamo.
-        
-        final_reserve_chart = alt.layer(background_facet, area_chart).facet(
-            column=alt.Column('Scenario', header=alt.Header(titleOrient="bottom", labelOrient="bottom"))
-        ).resolve_scale(
-            y='shared' # Risoluzione della scala Y condivisa
-        ).properties(
-            title="Confronto: Deplezione del Serbatoio (Muscolo vs Fegato) per Strategia"
-        ).configure_facet(
-            spacing=20
-        ).configure_title(
-            anchor='start'
-        ).interactive()
+        col_strat, col_digi = st.columns(2)
 
-        st.altair_chart(final_reserve_chart, use_container_width=True)
+        def create_reserve_chart(df_data, title, background_df):
+            
+            # Layer Sfondo
+            background = alt.Chart(background_df).mark_rect(opacity=0.15).encode(
+                y=alt.Y('Start', title='Glicogeno Residuo (g)', axis=None),
+                y2=alt.Y2('End'),         
+                color=alt.Color('Color', scale=None), 
+                tooltip=['Zone']
+            ).properties(
+                title=title
+            )
+
+            # Layer Area Accatastata
+            area_chart = alt.Chart(df_data).mark_area().encode(
+                x=alt.X('Time (min)', title='Durata (min)'),
+                y=alt.Y('Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
+                color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
+                order=alt.Order('Tipo Glicogeno', sort='ascending'), # Epatico in basso, Muscolare sopra
+                tooltip=['Time (min)', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
+            ).interactive()
+            
+            return alt.layer(background, area_chart).properties(height=350)
+            
+        # Grafico 1: Strategia con Integrazione
+        df_strat = df_reserve_long[df_reserve_long['Scenario'] == 'Con Integrazione (Strategia)']
+        chart_strat = create_reserve_chart(df_strat, 'Con Integrazione (Strategia)', zones_df)
+        
+        with col_strat:
+            st.altair_chart(chart_strat, use_container_width=True)
+
+        # Grafico 2: Senza Integrazione
+        df_digi = df_reserve_long[df_reserve_long['Scenario'] == 'Senza Integrazione (Digiuno)']
+        chart_digi = create_reserve_chart(df_digi, 'Senza Integrazione (Digiuno)', zones_df)
+        
+        with col_digi:
+            st.altair_chart(chart_digi, use_container_width=True)
+            
+        st.markdown(f"""
+        <p style='text-align: center; font-size: small; color: #666;'>
+        Il Glicogeno Epatico (<span style='color: #B71C1C;'>Rosso Scuro</span>) è alla base per evidenziare il rischio di Ipoglicemia (crisi del fegato).
+        </p>
+        """, unsafe_allow_html=True)
         # --- FINE LOGICA GRAFICO RISERVE NETTE ---
         
         st.markdown("---")
