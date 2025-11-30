@@ -660,7 +660,7 @@ with tab1:
         
         # Inizializzazione variabili per sicurezza scope
         vo2_input = 55.0 
-        calculated_conc = 15.0 # Valore di default sicuro
+        calculated_conc = 15.0 
         
         if estimation_method == "Basato su Livello":
             status_map = {s.label: s for s in TrainingStatus}
@@ -706,7 +706,7 @@ with tab1:
         combined_filling = 1.0 
         diet_factor = 1.0
         avg_cho_gk = 5.0
-        steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0 # Inizializzazione per l'attività
+        steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0 
 
         # =========================================================================
         # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta)
@@ -729,14 +729,38 @@ with tab1:
                 diet_options_map[label] = d
             
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
-            s_diet = diet_options_map[selected_diet_label]
-
-            # Qui usiamo solo il fattore dieta
-            diet_factor = s_diet.factor 
+            
+            # Recupera l'enum corretto dal label completo
+            # La soluzione precedente falliva perché selected_diet_label conteneva la stringa [~...g tot]
+            # Cerchiamo l'Enum in base al label base (sperando che sia unico)
+            # Troviamo l'enum corretto in modo sicuro
+            s_diet = DietType.NORMAL
+            for d in DietType:
+                if selected_diet_label.startswith(d.label):
+                    s_diet = d
+                    break
+            
+            # Ora calcoliamo i CHO fittizi per la funzione di calcolo
+            cho_day_minus_1_g = weight * s_diet.ref_value
+            cho_day_minus_2_g = weight * s_diet.ref_value # Assumiamo coerenza nei due giorni
+            
+            # I fattori di recupero sono gestiti più avanti (Punto 5)
+            temp_fatigue = FatigueState.RESTED
+            temp_sleep = SleepQuality.GOOD
+            
+            # Calcoliamo il diet_factor in base ai CHO fittizi (per la visualizzazione)
+            _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
+                weight_kg=weight,
+                cho_day_minus_1_g=cho_day_minus_1_g,
+                cho_day_minus_2_g=cho_day_minus_2_g,
+                s_fatigue=temp_fatigue, # Neutro
+                s_sleep=temp_sleep,     # Neutro
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
+            )
             
             st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
-            s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
-            s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
+            s_fatigue = FatigueState.RESTED 
+            s_sleep = SleepQuality.GOOD     
         
         # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
@@ -755,21 +779,15 @@ with tab1:
                 help="Apporto totale di CHO del giorno precedente."
             )
             
-            # Calcolo dei ratei intermedi per la visualizzazione
             cho_day_minus_2_gk = cho_day_minus_2_g / weight
             cho_day_minus_1_gk = cho_day_minus_1_g / weight
 
-            # Visualizzazione dei ratei g/kg/die
             col_d2.caption(f"$\sim$ **{cho_day_minus_2_gk:.1f} g/kg/die**")
             col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
             
-            # Parametri attività fittizi per la funzione di calcolo
-            
-            # Usiamo valori neutri per s_fatigue/s_sleep nel calcolo intermedio.
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
             
-            # Calcoliamo solo il diet_factor qui
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
@@ -778,8 +796,8 @@ with tab1:
                 s_sleep=temp_sleep,     # Neutro
                 steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
             )
-            s_fatigue = FatigueState.RESTED # Default fittizio, sovrascritto al punto 5
-            s_sleep = SleepQuality.GOOD     # Default fittizio, sovrascritto al punto 5
+            s_fatigue = FatigueState.RESTED 
+            s_sleep = SleepQuality.GOOD     
             
             st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
@@ -790,7 +808,6 @@ with tab1:
         # =========================================================================
         st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
         
-        # Selezione qualitativa per default
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_final')]
         
@@ -807,24 +824,12 @@ with tab1:
             steps_m1 = col_m1_steps.number_input("Passi Giorno -1", min_value=0, value=5000, step=500)
             min_act_m1 = col_m1_act.number_input("Minuti Attività Sportiva Giorno -1", min_value=0, value=30, step=10)
             
-            # Nota sul calcolo
             st.caption("Nota: Se l'attività è inserita, il fattore di deplezione (Carico di Lavoro) sarà calcolato oggettivamente. Altrimenti, viene usato il valore qualitativo selezionato sopra.")
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
         
-        # Determina i CHO da utilizzare per il ricalcolo
-        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
-            s_diet_label = st.session_state.get('diet_type_select', list(DietType.__members__.keys())[1])
-            s_diet_enum = [d for d in DietType if d.label == s_diet_label][0] if isinstance(s_diet_label, str) else DietType.NORMAL
-            cho_g1 = weight * s_diet_enum.ref_value
-            cho_g2 = weight * s_diet_enum.ref_value
-        else:
-            # Per Metodo 2, i CHO sono già in cho_day_minus_1_g/2_g
-            # Usiamo i valori degli input diretti
-            cho_g1 = cho_day_minus_1_g
-            cho_g2 = cho_day_minus_2_g
-        
-        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
+        # Determina i CHO da utilizzare per il ricalcolo (cho_g1/g2 sono definiti sopra in entrambi i rami)
+        # Ricalcoliamo il combined_filling, utilizzando i CHO fittizi (Metodo 1) o reali (Metodo 2)
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -841,7 +846,6 @@ with tab1:
         # =========================================================================
         st.subheader("5. Stato Metabolico Acuto (Fegato/Glicemia)")
         
-        # Correzione: has_glucose deve essere definito PRIMA di essere usato fuori dall'expander
         has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
         
         glucose_val = None
@@ -916,11 +920,15 @@ with tab1:
         
         # Logica di visualizzazione dei fattori
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)": 
-            # Dobbiamo riottenere s_diet in questo contesto di visualizzazione se il metodo 1 è attivo
-            # Uso una variabile temporanea per s_diet solo per la visualizzazione dei fattori
             temp_diet_map = {d.label: d for d in DietType}
             s_diet_label = st.session_state.get('diet_type_select', list(temp_diet_map.keys())[1])
-            s_diet = temp_diet_map.get(s_diet_label, DietType.NORMAL)
+            
+            # Recupera l'enum corretto (qui si usano i cho fittizi)
+            s_diet = DietType.NORMAL
+            for d in DietType:
+                if selected_diet_label.startswith(d.label):
+                    s_diet = d
+                    break
 
             if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
             
@@ -931,7 +939,6 @@ with tab1:
         if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5% filling)")
         if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
         
-        # Nuova nota per la fonte della Massa Muscolare Totale
         factors_text.append(f"Fonte Massa Muscolare: {tank_data['muscle_source_note']}")
 
         if factors_text:
@@ -1156,10 +1163,8 @@ with tab2:
         m3.metric("Uso CHO Esogeno", f"{int(stats['total_exo_used'])} g", help="Totale energia da integrazione")
 
         
-        # --- GRAFICO CINETICA DI DEPLEZIONE (PIENA PAGINA) ---
         st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
         
-        # Mappatura colori richiesta dall'utente
         color_map = {
             'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - BASE
             'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
@@ -1167,7 +1172,6 @@ with tab2:
             'Glicogeno Muscolare (g)': '#E57373', # Rosso Tenue (4) - CIMA
         }
         
-        # Ordine RICHIESTO (dal basso verso l'alto): Epatico, Esogeni, Lipidi, Muscolare
         stack_order = [
             'Glicogeno Epatico (g)',     # 1. BASE (indice 0)
             'Carboidrati Esogeni (g)',   # 2. Sopra 1 (indice 1)
@@ -1175,19 +1179,11 @@ with tab2:
             'Glicogeno Muscolare (g)'      # 4. CIMA (indice 3)
         ]
         
-        # Stacked Area Chart per vedere le FONTI (con colori e ordine personalizzati)
         df_long = df_sim.melt('Time (min)', value_vars=stack_order, 
                               var_name='Source', value_name='Rate (g/h)')
         
-        # Aggiungo colonne calcolate per i tooltip avanzati
-        # Per farlo in modo efficiente in Altair, è meglio unire i dati originali
-        # Ma per semplicità qui usiamo le colonne Pct_... già calcolate in results e le mettiamo nel df long se necessario
-        # In questo caso specifico, il melt perde le altre colonne.
-        # Ricostruiamo un df_long più ricco unendo con df_sim originale su Time (min)
-        
         df_long_rich = pd.merge(df_long, df_sim[['Time (min)', 'Pct_Muscle', 'Pct_Liver', 'Pct_Exo', 'Pct_Fat', 'Scenario']], on='Time (min)')
         
-        # Creiamo una colonna dinamica per il tooltip percentuale basata sulla source
         conditions = [
             (df_long_rich['Source'] == 'Glicogeno Muscolare (g)'),
             (df_long_rich['Source'] == 'Glicogeno Epatico (g)'),
@@ -1198,7 +1194,6 @@ with tab2:
         df_long_rich['Percentuale'] = np.select(conditions, choices, default='0%')
 
         
-        # TRUCCO: Mappatura dell'indice ordinale per forzare l'ordinamento
         sort_map = {
             'Glicogeno Epatico (g)': 0,
             'Carboidrati Esogeni (g)': 1,
@@ -1207,23 +1202,18 @@ with tab2:
         }
         df_long_rich['sort_index'] = df_long_rich['Source'].map(sort_map)
         
-        # Creazione del domain/range personalizzato basato sull'ordine di stack
         color_domain = stack_order
         color_range = [color_map[source] for source in stack_order]
         
-        # Linea di Fabbisogno Totale (che corrisponde alla somma delle aree)
-        # Calcoliamo la somma per ogni minuto per disegnare la linea sopra
         df_total_demand = df_sim.copy()
         df_total_demand['Total Demand'] = df_total_demand['Glicogeno Muscolare (g)'] + df_total_demand['Glicogeno Epatico (g)'] + df_total_demand['Carboidrati Esogeni (g)'] + df_total_demand['Ossidazione Lipidica (g)']
 
-        # Base Chart (Area)
         chart_stack = alt.Chart(df_long_rich).mark_area().encode(
             x=alt.X('Time (min)'),
             y=alt.Y('Rate (g/h)', stack=True), 
             color=alt.Color('Source', 
-                            scale=alt.Scale(domain=color_domain,  # Uso il domain ordinato
+                            scale=alt.Scale(domain=color_domain,  
                                             range=color_range),
-                            # FORZA L'ORDINE SULL'INDICE NUMERICO IN MODO CRESCENTE (ascending)
                             sort=alt.SortField(field='sort_index', order='ascending') 
                            ),
             tooltip=[
@@ -1234,20 +1224,17 @@ with tab2:
             ]
         )
         
-        # Linea Fabbisogno Totale
         line_demand = alt.Chart(df_total_demand).mark_line(color='black', strokeDash=[5,5], size=2).encode(
             x='Time (min)',
             y='Total Demand'
         )
 
-        # Combinazione
         final_combo_chart = (chart_stack + line_demand).properties(
-            title="Bilancio Energetico: Richiesta vs. Fonti di Ossidazione" # Titolo esplicito
+            title="Bilancio Energetico: Richiesta vs. Fonti di Ossidazione" 
         ).interactive()
         
         st.altair_chart(final_combo_chart, use_container_width=True)
         
-        # Didascalia Esplicativa
         st.caption("""
         **Guida alla Lettura:**
         * **Altezza Totale:** Rappresenta il consumo energetico orario (g/h) richiesto dallo sforzo in quel momento (linea tratteggiata nera).
@@ -1260,29 +1247,22 @@ with tab2:
         
         st.caption("Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno) ")
         
-        # --- LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
-        
-        # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
         initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
-        max_total = initial_total_glycogen * 1.05 # Max per l'asse Y
+        max_total = initial_total_glycogen * 1.05 
         
-        # Definizioni delle soglie di rischio sul TOTALE GLICOGENO INIZIALE
         zone_green_end = initial_total_glycogen * 1.05 
-        zone_yellow_end = initial_total_glycogen * 0.65 # Sotto il 65% si entra in zona gialla
-        zone_red_end = initial_total_glycogen * 0.30 # Sotto il 30% si entra in zona critica
+        zone_yellow_end = initial_total_glycogen * 0.65 
+        zone_red_end = initial_total_glycogen * 0.30 
         
-        # Si considerano 20g come limite minimo per la glicemia (rischio bonk)
         MIN_GLUCEMIA_LIMIT = 20
         
         zones_df = pd.DataFrame({
             'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
-            # Gli intervalli sono definiti dal basso verso l'alto
             'Start': [zone_yellow_end, MIN_GLUCEMIA_LIMIT, 0],
             'End': [zone_green_end, zone_yellow_end, MIN_GLUCEMIA_LIMIT],
-            'Color': ['#4CAF50', '#FFC107', '#F44336'] # Verde, Giallo, Rosso Scuro
+            'Color': ['#4CAF50', '#FFC107', '#F44336'] 
         })
 
-        # 2. Layer 1: Sfondo colorato (Bande)
         background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
             y=alt.Y('Start', axis=None), 
             y2=alt.Y2('End'),         
@@ -1290,10 +1270,9 @@ with tab2:
             tooltip=['Zone']
         )
 
-        # 3. Layer 2: Linee di Deplezione. Usa 'Residuo Totale'.
         lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
             x=alt.X('Time (min)', title='Durata (min)'),
-            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), # <--- MODIFICA 2: Usa Residuo Totale
+            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), 
             
             color=alt.Color('Scenario', 
                             scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
@@ -1304,7 +1283,6 @@ with tab2:
             tooltip=['Time (min)', 'Residuo Totale', 'Stato', 'Scenario']
         ).interactive()
 
-        # 4. Combinazione dei Layer
         chart = (background + lines).properties(
             title="Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno)"
         ).resolve_scale(
@@ -1312,19 +1290,15 @@ with tab2:
         )
 
         st.altair_chart(chart, use_container_width=True)
-        # --- FINE NUOVA LOGICA GRAFICO ---
         
         st.markdown("---")
         
-        # --- BLOCCO ACCUMULO INTESTINALE (PIENA PAGINA) ---
         st.markdown("### ⚠️ Accumulo Intestinale (Rischio GI) & Flusso CHO")
         
-        # TESTO INTERPRETATIVO AGGIUNTO
         st.caption(f"""
         **Interpretazione:** La distanza verticale tra la Linea Blu (Ingerito) e la Linea Verde (Ossidato) crea l'**Accumulo CHO (g)**, ovvero il carico intestinale istantaneo. Se l'area supera la Soglia di Rischio GI ({risk_threshold_input} g), la strategia di assunzione è troppo aggressiva.
         """)
 
-        # Spiegazione per l'utente, resa più chiara e sintetica
         with st.expander("Dettagli Modello Flusso CHO e Rischio GI"):
             st.markdown(f"""
             Questo grafico visualizza il **bilancio dinamico** tra ciò che ingerisci e ciò che il tuo corpo riesce ad ossidare (bruciare), indicando il rischio di *Distress Gastrointestinale (GI)*.
@@ -1339,30 +1313,24 @@ with tab2:
             * **Soglia di Rischio GI:** {risk_threshold_input} g (Linea Rossa Tratteggiata). Superarla indica un alto rischio di sintomi GI.
             """)
         
-        # PARAMETRO DINAMICO
         RISK_THRESHOLD = risk_threshold_input
         
-        # Calcolo del colore condizionale per l'area
         df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio', 'Basso Rischio')
         
-        # Crea un punto per evidenziare il massimo carico
         max_gut_load = df_sim['Gut Load'].max()
         max_gut_load_time = df_sim[df_sim['Gut Load'] == max_gut_load]['Time (min)'].iloc[0] if max_gut_load > 0 else 0
         max_df = pd.DataFrame([{'Time (min)': max_gut_load_time, 'Gut Load': max_gut_load}])
 
-        # 1. Grafico Area di Accumulo (Asse Y Sinistro)
         gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63')),
             tooltip=['Time (min)', 'Gut Load', 'Rischio']
         )
         
-        # Linea di Soglia di Rischio (30g)
         risk_line = alt.Chart(pd.DataFrame({'y': [RISK_THRESHOLD]})).mark_rule(color='#F44336', strokeDash=[4,4], size=2).encode(
             y=alt.Y('y', axis=None)
         )
         
-        # Punto di Massimo Accumulo
         max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Gut Load'),
@@ -1371,13 +1339,9 @@ with tab2:
         
         gut_layer_base = alt.layer(gut_area, risk_line, max_point)
 
-        # --- Tracce Cumulative per il Secondo Asse Y ---
-        
-        # Trasformiamo il df_sim per il grafico dual-axis
         df_cumulative = df_sim.melt('Time (min)', value_vars=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
                                    var_name='Flusso', value_name='Grammi')
 
-        # 2. Linea Intake Cumulativo (asse secondario)
         intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
             x=alt.X('Time (min)'), 
             y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
@@ -1389,7 +1353,6 @@ with tab2:
             tooltip=['Time (min)', 'Flusso', 'Grammi']
         )
 
-        # Layer Cumulative (Asse Destro)
         cumulative_layer = intake_oxidation_lines.encode(
             y=alt.Y('Grammi', 
                     axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2', orient='right'), 
@@ -1397,7 +1360,6 @@ with tab2:
                     )
         )
         
-        # Combinazione Finale
         final_gut_chart = alt.layer(
             gut_layer_base,
             cumulative_layer
