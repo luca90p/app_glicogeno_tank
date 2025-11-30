@@ -1249,53 +1249,81 @@ with tab2:
         st.altair_chart(final_combo_chart, use_container_width=True)
         
         st.markdown("---")
-        st.markdown("### 📉 Confronto Riserve Nette")
+        st.markdown("### 📉 Confronto Riserve Nette (Svuotamento Serbatio)")
         
-        st.caption("Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno) ")
+        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
         
+        # --- LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
+        
+        # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
         initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
-        max_total = initial_total_glycogen * 1.05 
+        max_total = initial_total_glycogen * 1.05 # Max per l'asse Y
         
-        zone_green_end = initial_total_glycogen * 1.05 
-        zone_yellow_end = initial_total_glycogen * 0.65 
-        zone_red_end = initial_total_glycogen * 0.30 
+        # Definisce i campi da mostrare nel grafico a pila delle riserve
+        reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
+
+        # Melt dei dati per la visualizzazione stacked
+        df_reserve_long = combined_df.melt(
+            id_vars=['Time (min)', 'Scenario'], 
+            value_vars=reserve_fields, 
+            var_name='Tipo Glicogeno', 
+            value_name='Residuo (g)'
+        )
         
-        MIN_GLUCEMIA_LIMIT = 20
+        # Mappatura colori specifica per le riserve (chiaro per Muscolo, scuro per Fegato critico)
+        reserve_color_map = {
+            'Residuo Muscolare': '#E57373', # Rosso tenue
+            'Residuo Epatico': '#B71C1C',   # Rosso scuro/critico
+        }
         
+        # Le riserve totali devono essere rappresentate da colonne affiancate (Scenario)
+        
+        # Base Chart
+        base_reserve_chart = alt.Chart(df_reserve_long).encode(
+            x=alt.X('Time (min)', title='Durata (min)'),
+            tooltip=['Time (min)', 'Scenario', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
+        ).interactive()
+
+        # Grafico ad area accatastata (Stacked Area Chart) per ogni Scenario
+        area_chart = base_reserve_chart.mark_area().encode(
+            y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
+            color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
+            order=alt.Order('Tipo Glicogeno', sort='ascending') # Epatico in basso, Muscolare sopra
+        )
+        
+        # Aggiungi le bande di rischio come layer di sfondo
         zones_df = pd.DataFrame({
             'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
-            'Start': [zone_yellow_end, MIN_GLUCEMIA_LIMIT, 0],
-            'End': [zone_green_end, zone_yellow_end, MIN_GLUCEMIA_LIMIT],
-            'Color': ['#4CAF50', '#FFC107', '#F44336'] 
+            'Start': [initial_total_glycogen * 0.65, initial_total_glycogen * 0.30, 0],
+            'End': [initial_total_glycogen * 1.05, initial_total_glycogen * 0.65, initial_total_glycogen * 0.30],
+            'Color': ['#4CAF50', '#FFC107', '#F44336'], 
         })
-
+        
         background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
             y=alt.Y('Start', axis=None), 
             y2=alt.Y2('End'),         
             color=alt.Color('Color', scale=None), 
             tooltip=['Zone']
         )
-
-        lines = alt.Chart(combined_df).mark_line(strokeWidth=3).encode(
-            x=alt.X('Time (min)', title='Durata (min)'),
-            y=alt.Y('Residuo Totale', title='Glicogeno Totale Residuo (g)', scale=alt.Scale(domain=[0, max_total])), 
-            
-            color=alt.Color('Scenario', 
-                            scale=alt.Scale(domain=['Con Integrazione (Strategia)', 'Senza Integrazione (Digiuno)'], 
-                                            range=['#D32F2F', '#757575']
-                                            ),
-                            legend=alt.Legend(title="Scenario")
-                           ),
-            tooltip=['Time (min)', 'Residuo Totale', 'Stato', 'Scenario']
+        
+        # Layering (Sfondo + Aree Accatastate)
+        layered_chart = alt.layer(background, area_chart).resolve_scale(
+            y='shared' # Condividi l'asse Y tra sfondo e area
+        )
+        
+        # Sfaccettatura (Facet) per separare i due scenari
+        final_reserve_chart = layered_chart.facet(
+            column=alt.Column('Scenario', header=alt.Header(titleOrient="bottom", labelOrient="bottom"))
+        ).properties(
+            title="Confronto: Deplezione del Serbatoio (Muscolo vs Fegato) per Strategia"
+        ).configure_facet(
+            spacing=20
+        ).configure_title(
+            anchor='start'
         ).interactive()
 
-        chart = (background + lines).properties(
-            title="Confronto: Deplezione Glicogeno Totale (Strategia vs Digiuno)"
-        ).resolve_scale(
-            y='shared' 
-        )
-
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(final_reserve_chart, use_container_width=True)
+        # --- FINE LOGICA GRAFICO RISERVE NETTE ---
         
         st.markdown("---")
         
