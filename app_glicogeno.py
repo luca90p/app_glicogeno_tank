@@ -1283,14 +1283,22 @@ with tab2:
             'Color': ['#4CAF50', '#FFC107', '#F44336'], 
         })
         
-        background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
-            y=alt.Y('Start', axis=None), 
+        # Creiamo un DataFrame per lo sfondo con la colonna 'Scenario' duplicata
+        scenarios_df = pd.DataFrame({'Scenario': combined_df['Scenario'].unique()})
+        zones_with_scenario_df = pd.merge(zones_df.assign(key=1), scenarios_df.assign(key=1), on='key').drop('key', axis=1)
+
+        # Background sfaccettato
+        background_facet = alt.Chart(zones_with_scenario_df).mark_rect(opacity=0.15).encode(
+            x=alt.X('Time (min)', title='Durata (min)'), # Aggiunto x encoding per faceting
+            y=alt.Y('Start', title='Glicogeno Residuo (g)', axis=None), 
             y2=alt.Y2('End'),         
             color=alt.Color('Color', scale=None), 
             tooltip=['Zone']
+        ).properties(
+             height=350 # Altezza fissa per i rettangoli
         )
 
-        # 2. Grafico ad area accatastata (Stacked Area Chart) per ogni Scenario
+        # Grafico ad area accatastata (Stacked Area Chart) per ogni Scenario
         area_chart = alt.Chart(df_reserve_long).mark_area().encode(
             x=alt.X('Time (min)', title='Durata (min)'),
             y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
@@ -1299,34 +1307,13 @@ with tab2:
             tooltip=['Time (min)', 'Scenario', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
         ).interactive()
         
-        # 3. Layering (Sfondo + Aree Accatastate)
-        layered_chart = alt.layer(background, area_chart).resolve_scale(
-            y='shared' 
-        )
-        
-        # 4. Sfaccettatura (Facet) per separare i due scenari
-        # FIX: Il background non può essere sfaccettato direttamente se non contiene il campo 'Scenario'.
-        # Dobbiamo creare una sfaccettatura che usa df_reserve_long (che contiene Scenario) come base per la colonna
-        # e poi inseriamo i layer.
-        
-        # Per far funzionare la sfaccettatura con lo sfondo colorato statico,
-        # replichiamo lo sfondo per ogni scenario e usiamo un Concatenated Chart o Facet su un'unica base.
-        
-        # Creiamo un DataFrame fittizio per lo sfondo con la colonna 'Scenario'
-        scenarios_df = pd.DataFrame({'Scenario': combined_df['Scenario'].unique()})
-        zones_with_scenario_df = pd.merge(zones_df.assign(key=1), scenarios_df.assign(key=1), on='key').drop('key', axis=1)
-
-        background_facet = alt.Chart(zones_with_scenario_df).mark_rect(opacity=0.15).encode(
-            y=alt.Y('Start', axis=None), 
-            y2=alt.Y2('End'),         
-            color=alt.Color('Color', scale=None), 
-            tooltip=['Zone']
-        )
+        # Layering (Sfondo + Aree Accatastate)
+        # Qui uniamo background_facet e area_chart e poi sfaccettiamo.
         
         final_reserve_chart = alt.layer(background_facet, area_chart).facet(
             column=alt.Column('Scenario', header=alt.Header(titleOrient="bottom", labelOrient="bottom"))
         ).resolve_scale(
-            y='shared'
+            y='shared' # Risoluzione della scala Y condivisa
         ).properties(
             title="Confronto: Deplezione del Serbatoio (Muscolo vs Fegato) per Strategia"
         ).configure_facet(
