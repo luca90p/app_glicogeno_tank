@@ -109,7 +109,7 @@ class MenstrualPhase(Enum):
 class ChoMixType(Enum):
     GLUCOSE_ONLY = (1.0, 60.0, "Solo Glucosio/Maltodestrine (Standard)")
     MIX_2_1 = (1.5, 90.0, "Mix 2:1 (Maltodestrine:Fruttosio)")
-    MIX_1_08 = (1.7, 105.0, "Mix 1:0.8 (High Fructose)")
+    MIX_1_08 = (1.7, 105.0, "Mix 1:0.8 (High Frructose)")
 
     def __init__(self, ox_factor, max_rate_gh, label):
         self.ox_factor = ox_factor # Fattore moltiplicativo rispetto al glucosio
@@ -538,7 +538,9 @@ def simulate_metabolism(
         g_muscle = muscle_usage_g_min
         g_liver = from_liver
         g_exo = from_exogenous
-        g_fat = (current_kcal_demand * fat_ratio_used / 9.0) if not is_lab_data else lab_fat_rate
+        # Assicurati che fat_ratio_used sia definito anche se !is_lab_data e t>0 non è vero
+        fat_ratio_used_local = 1.0 - cho_ratio if not is_lab_data else (lab_fat_rate * 9.0) / current_kcal_demand if current_kcal_demand > 0 else 0.0
+        g_fat = (current_kcal_demand * fat_ratio_used_local / 9.0)
         
         total_g_min = g_muscle + g_liver + g_exo + g_fat
         if total_g_min == 0: total_g_min = 1.0 # Evita divisione per zero
@@ -599,7 +601,7 @@ st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("Strumento di stima delle riserve energetiche e simulazione del metabolismo sotto sforzo.")
 
-# --- NOTE TECNICHE ---
+# --- NOTE TECNICHE REINTRODOTTE ---
 with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     st.info("""
     **1. Stima Riserve & Capacità di Stoccaggio**
@@ -615,7 +617,7 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     * **B) Rischio Gastrointestinale:** L'accumulo di CHO non ossidati è il predittore principale di distress GI. Il modello stima questo rischio calcolando il delta tra assunzione e ossidazione (Podlogar et al., 2025).
     * **C) Mix di Carboidrati:** L'uso di miscele Glucosio:Fruttosio (es. 2:1 o 1:0.8) sfrutta trasportatori multipli (SGLT1 e GLUT5), aumentando il limite di ossidazione fino a $1.5-1.7 \text{ g/min}$ (Jeukendrup, 2004).
     """)
-# --- FINE NOTE TECNICHE ---
+# --- FINE NOTE TECNICHE REINTRODOTTE ---
 
 tab1, tab2 = st.tabs(["Analisi Riserve (Tank)", "Simulazione Metabolica (Burn)"])
 
@@ -708,6 +710,10 @@ with tab1:
         avg_cho_gk = 5.0
         steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0 
 
+        # Variabili CHO Inizializzate per prevenire NameError
+        cho_g1 = weight * DietType.NORMAL.ref_value
+        cho_g2 = weight * DietType.NORMAL.ref_value
+        
         # =========================================================================
         # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta)
         # =========================================================================
@@ -731,18 +737,15 @@ with tab1:
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
             
             # Recupera l'enum corretto dal label completo
-            # La soluzione precedente falliva perché selected_diet_label conteneva la stringa [~...g tot]
-            # Cerchiamo l'Enum in base al label base (sperando che sia unico)
-            # Troviamo l'enum corretto in modo sicuro
             s_diet = DietType.NORMAL
             for d in DietType:
                 if selected_diet_label.startswith(d.label):
                     s_diet = d
                     break
             
-            # Ora calcoliamo i CHO fittizi per la funzione di calcolo
-            cho_day_minus_1_g = weight * s_diet.ref_value
-            cho_day_minus_2_g = weight * s_diet.ref_value # Assumiamo coerenza nei due giorni
+            # Ora calcoliamo i CHO fittizi e li assegnamo a cho_g1/g2
+            cho_g1 = weight * s_diet.ref_value
+            cho_g2 = weight * s_diet.ref_value 
             
             # I fattori di recupero sono gestiti più avanti (Punto 5)
             temp_fatigue = FatigueState.RESTED
@@ -751,8 +754,8 @@ with tab1:
             # Calcoliamo il diet_factor in base ai CHO fittizi (per la visualizzazione)
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
-                cho_day_minus_1_g=cho_day_minus_1_g,
-                cho_day_minus_2_g=cho_day_minus_2_g,
+                cho_day_minus_1_g=cho_g1,
+                cho_day_minus_2_g=cho_g2,
                 s_fatigue=temp_fatigue, # Neutro
                 s_sleep=temp_sleep,     # Neutro
                 steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
@@ -779,6 +782,10 @@ with tab1:
                 help="Apporto totale di CHO del giorno precedente."
             )
             
+            # Assegna i valori reali agli output
+            cho_g1 = cho_day_minus_1_g
+            cho_g2 = cho_day_minus_2_g
+
             cho_day_minus_2_gk = cho_day_minus_2_g / weight
             cho_day_minus_1_gk = cho_day_minus_1_g / weight
 
@@ -808,6 +815,7 @@ with tab1:
         # =========================================================================
         st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
         
+        # Selezione qualitativa per default
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=0, key='sleep_final')]
         
@@ -828,8 +836,8 @@ with tab1:
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
         
-        # Determina i CHO da utilizzare per il ricalcolo (cho_g1/g2 sono definiti sopra in entrambi i rami)
-        # Ricalcoliamo il combined_filling, utilizzando i CHO fittizi (Metodo 1) o reali (Metodo 2)
+        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
+        # Visto che cho_g1/g2 sono definiti in entrambi i rami, possiamo chiamare la funzione qui:
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -1165,6 +1173,11 @@ with tab2:
         
         st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
         
+        # Didascalia Esplicativa Aggiunta
+        st.caption("""
+        **Guida alla Lettura:** L'altezza totale del grafico (linea tratteggiata nera) rappresenta il consumo energetico orario (g/h) richiesto dallo sforzo. Le aree colorate mostrano come il corpo miscela i diversi substrati per soddisfare esattamente quella richiesta.
+        """)
+
         color_map = {
             'Glicogeno Epatico (g)': '#B71C1C',    # Rosso Scuro (1) - BASE
             'Carboidrati Esogeni (g)': '#1976D2', # Blu (2)
@@ -1234,13 +1247,6 @@ with tab2:
         ).interactive()
         
         st.altair_chart(final_combo_chart, use_container_width=True)
-        
-        st.caption("""
-        **Guida alla Lettura:**
-        * **Altezza Totale:** Rappresenta il consumo energetico orario (g/h) richiesto dallo sforzo in quel momento (linea tratteggiata nera).
-        * **Aree Colorate:** Mostrano come il corpo "pesca" dalle diverse riserve per soddisfare quella richiesta.
-        * **Obiettivo:** Vedere l'area Blu (Esogeni) crescere per risparmiare le aree Rosse (Glicogeno).
-        """)
         
         st.markdown("---")
         st.markdown("### 📉 Confronto Riserve Nette")
