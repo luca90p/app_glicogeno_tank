@@ -1223,7 +1223,7 @@ with tab2:
 
         chart_stack = alt.Chart(df_long_rich).mark_area().encode(
             x=alt.X('Time (min)'),
-            y=alt.Y('Rate (g/h)', stack=True), 
+            y=alt.Y('Rate (g/h)', stack="zero"), # Usiamo stack="zero" per maggiore chiarezza
             color=alt.Color('Source', 
                             scale=alt.Scale(domain=color_domain,  
                                             range=color_range),
@@ -1255,7 +1255,6 @@ with tab2:
         
         # --- LOGICA PER GRAFICO CON BANDE DI RISCHIO BASATO SU TOTALE GLICOGENO ---
         
-        # 1. Calcola i livelli in base al serbatoio TOTALE iniziale
         initial_total_glycogen = tank_data['muscle_glycogen_g'] + tank_data['liver_glycogen_g']
         max_total = initial_total_glycogen * 1.05 # Max per l'asse Y
         
@@ -1264,7 +1263,7 @@ with tab2:
 
         # Melt dei dati per la visualizzazione stacked
         df_reserve_long = combined_df.melt(
-            id_vars=['Time (min)', 'Scenario'], 
+            id_vars=['Time (min)', 'Scenario', 'Stato'], 
             value_vars=reserve_fields, 
             var_name='Tipo Glicogeno', 
             value_name='Residuo (g)'
@@ -1276,22 +1275,7 @@ with tab2:
             'Residuo Epatico': '#B71C1C',   # Rosso scuro/critico
         }
         
-        # Le riserve totali devono essere rappresentate da colonne affiancate (Scenario)
-        
-        # Base Chart
-        base_reserve_chart = alt.Chart(df_reserve_long).encode(
-            x=alt.X('Time (min)', title='Durata (min)'),
-            tooltip=['Time (min)', 'Scenario', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
-        ).interactive()
-
-        # Grafico ad area accatastata (Stacked Area Chart) per ogni Scenario
-        area_chart = base_reserve_chart.mark_area().encode(
-            y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
-            color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
-            order=alt.Order('Tipo Glicogeno', sort='ascending') # Epatico in basso, Muscolare sopra
-        )
-        
-        # Aggiungi le bande di rischio come layer di sfondo
+        # 1. Definizione delle zone di rischio (Basato su Riserva Totale)
         zones_df = pd.DataFrame({
             'Zone': ['Sicurezza (Verde)', 'Warning (Giallo)', 'Critico (Rosso)'],
             'Start': [initial_total_glycogen * 0.65, initial_total_glycogen * 0.30, 0],
@@ -1305,15 +1289,44 @@ with tab2:
             color=alt.Color('Color', scale=None), 
             tooltip=['Zone']
         )
+
+        # 2. Grafico ad area accatastata (Stacked Area Chart) per ogni Scenario
+        area_chart = alt.Chart(df_reserve_long).mark_area().encode(
+            x=alt.X('Time (min)', title='Durata (min)'),
+            y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
+            color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
+            order=alt.Order('Tipo Glicogeno', sort='ascending'), # Epatico in basso, Muscolare sopra
+            tooltip=['Time (min)', 'Scenario', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
+        ).interactive()
         
-        # Layering (Sfondo + Aree Accatastate)
+        # 3. Layering (Sfondo + Aree Accatastate)
         layered_chart = alt.layer(background, area_chart).resolve_scale(
-            y='shared' # Condividi l'asse Y tra sfondo e area
+            y='shared' 
         )
         
-        # Sfaccettatura (Facet) per separare i due scenari
-        final_reserve_chart = layered_chart.facet(
+        # 4. Sfaccettatura (Facet) per separare i due scenari
+        # FIX: Il background non può essere sfaccettato direttamente se non contiene il campo 'Scenario'.
+        # Dobbiamo creare una sfaccettatura che usa df_reserve_long (che contiene Scenario) come base per la colonna
+        # e poi inseriamo i layer.
+        
+        # Per far funzionare la sfaccettatura con lo sfondo colorato statico,
+        # replichiamo lo sfondo per ogni scenario e usiamo un Concatenated Chart o Facet su un'unica base.
+        
+        # Creiamo un DataFrame fittizio per lo sfondo con la colonna 'Scenario'
+        scenarios_df = pd.DataFrame({'Scenario': combined_df['Scenario'].unique()})
+        zones_with_scenario_df = pd.merge(zones_df.assign(key=1), scenarios_df.assign(key=1), on='key').drop('key', axis=1)
+
+        background_facet = alt.Chart(zones_with_scenario_df).mark_rect(opacity=0.15).encode(
+            y=alt.Y('Start', axis=None), 
+            y2=alt.Y2('End'),         
+            color=alt.Color('Color', scale=None), 
+            tooltip=['Zone']
+        )
+        
+        final_reserve_chart = alt.layer(background_facet, area_chart).facet(
             column=alt.Column('Scenario', header=alt.Header(titleOrient="bottom", labelOrient="bottom"))
+        ).resolve_scale(
+            y='shared'
         ).properties(
             title="Confronto: Deplezione del Serbatoio (Muscolo vs Fegato) per Strategia"
         ).configure_facet(
