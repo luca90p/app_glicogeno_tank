@@ -660,7 +660,7 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     """)
 # --- FINE NOTE TECNICHE REINTRODOTTE ---
 
-tab1, tab2, tab3 = st.tabs(["1. Profilo Base & Capacità", "2. Stato Pre-Evento (Riempimento)", "3. Simulazione & Strategia"])
+tab1, tab2, tab3, tab4 = st.tabs(["1. Profilo Base & Capacità", "2. Stato Pre-Evento (Riempimento)", "3. Simulazione & Strategia", "4. Diario Settimanale"])
 
 # --- TAB 1: PROFILO BASE & CAPACITÀ ---
 with tab1:
@@ -752,7 +752,9 @@ with tab1:
 
         with st.expander("Inserisci le Tue Soglie e Visualizza Zone", expanded=True):
             if s_sport == SportType.CYCLING:
+                # MODIFICA: FTP è l'input primario per IF
                 ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
+                st.caption(f"La FTP è usata come soglia per l'Intensity Factor (IF).")
                 
                 if zone_def_method == "Standard (Calcolate)":
                     zones_data = calculate_zones_cycling(ftp_watts_input)
@@ -774,8 +776,10 @@ with tab1:
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
+                # MODIFICA: Uso THR come dato primario per IF nella corsa
                 thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
+                st.caption(f"La Soglia Anaerobica è usata per calcolare l'IF (FC media / THR).")
                 
                 if zone_def_method == "Standard (Calcolate)":
                     zones_data = calculate_zones_running_hr(thr_hr_input)
@@ -794,12 +798,13 @@ with tab1:
                         {"Zona": "Z5+ - Sovrasoglia", "Range %": "Custom", "Valore": f"> {z4_lim} bpm"}
                     ]
 
-            else: # Altri sport
+            else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
                 c_thr, c_max = st.columns(2)
                 max_hr_input = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1, key='max_hr_input_general')
-                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') 
+                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') # Aggiungo soglia aerobica
+                st.caption("La FC Max è usata per il calcolo approssimativo dell'IF.")
                 if zone_def_method == "Standard (Calcolate)":
-                    zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback
+                    zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback su zone HR
                 else:
                     st.caption("Personalizzazione disponibile per Ciclismo e Corsa.")
 
@@ -892,7 +897,7 @@ with tab2:
         # SEZIONE 3: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
         # =========================================================================
         st.subheader("1. Stato Nutrizionale (Introito CHO 48h)")
-        st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
+        st.success("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
             "Metodo di Calcolo Ripristino Glicogeno:", 
@@ -1013,8 +1018,6 @@ with tab2:
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
         
-        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
-        # Visto che cho_g1/g2 sono definiti in entrambi i rami, possiamo chiamare la funzione qui:
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -1050,10 +1053,8 @@ with tab2:
         
         # --- RICALCOLO FINALE E CREAZIONE OGGETTO SUBJECT ---
         
-        # Recupera la struttura base creata nel Tab 1
         base_subject = st.session_state['base_subject_struct']
         
-        # Aggiorna solo i campi di stato dinamici
         subject = base_subject
         subject.liver_glycogen_g = liver_val
         subject.filling_factor = combined_filling
@@ -1717,3 +1718,17 @@ with tab3:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
+    
+    
+    # --- TAB 4: DIARIO SETTIMANALE (SCHELETRO) ---
+    with tab4:
+        st.subheader("Diario Settimanale del Glicogeno")
+        st.info("Funzionalità in sviluppo: Permetterà di tracciare il bilancio del glicogeno su 7 giorni.")
+        
+        # Esempio di struttura dati per un giorno
+        with st.expander("Lunedì"):
+            c1, c2 = st.columns(2)
+            c1.selectbox("Allenamento Lun", ["Riposo", "Corsa Z2 (60')", "Bici Z3 (90')"], key="mon_train")
+            c2.number_input("CHO Assunti (g) Lun", 0, 1000, 300, key="mon_cho")
+            
+        st.caption("Il grafico del trend settimanale apparirà qui.")
