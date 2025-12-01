@@ -332,3 +332,123 @@ def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_live
             "Glicogeno Epatico": round(current_liver)
         })
     return pd.DataFrame(daily_status)
+    
+def calculate_tapering_trajectory(subject, days_data):
+    """
+    Simula l'andamento del glicogeno giorno per giorno (Tapering).
+    Considera: Dieta, Attività, Intensità e Qualità del Sonno (che influenza la resintesi).
+    """
+    # Costanti fisiologiche
+    LIVER_DRAIN_RATE_GH = 4.5 # g/h consumati dal fegato a riposo
+    DAILY_NEAT_CHO = 1.0 * subject.weight_kg # Consumo basale non sportivo
+    
+    # Capacità massime (Target)
+    tank = calculate_tank(subject)
+    MAX_MUSCLE = tank['max_capacity_g'] - 120 # Approssimazione: togliamo la quota epatica dal totale teorico
+    MAX_LIVER = 120.0
+    
+    # Stato Iniziale (Start of Tapering: -7 Giorni)
+    # Assumiamo che l'atleta arrivi da un blocco di carico, quindi parzialmente depleto
+    current_muscle = MAX_MUSCLE * 0.55 
+    current_liver = MAX_LIVER * 0.50
+    
+    trajectory = []
+    
+    for day in days_data:
+        # 1. Calcolo Consumo Energetico Attività
+        duration = day['duration']
+        intensity_zone = day['intensity']
+        cho_in = day['cho_in']
+        sleep_factor = day['sleep_factor'] # 1.0 (Good), 0.95 (Avg), 0.85 (Poor)
+        
+        # Stima consumo attività
+        exercise_drain_muscle = 0
+        exercise_drain_liver = 0
+        
+        if duration > 0:
+            # Moltiplicatori basati su intensità (Z1->Z5)
+            # Stima VO2 relativo (ml/kg/min) in base alla zona
+            max_vo2 = (subject.vo2max_absolute_l_min * 1000) / subject.weight_kg
+            
+            if intensity_zone == "Riposo":
+                intensity_pct = 0.0
+                cho_ox_pct = 0.0
+            elif "Z1" in intensity_zone: # Z1-Z2
+                intensity_pct = 0.50
+                cho_ox_pct = 0.30
+            elif "Z3" in intensity_zone: # Z3
+                intensity_pct = 0.70
+                cho_ox_pct = 0.70
+            else: # Z4+
+                intensity_pct = 0.90
+                cho_ox_pct = 0.95
+            
+            kcal_min = (max_vo2 * intensity_pct * subject.weight_kg / 1000) * 5.0
+            total_kcal = kcal_min * duration
+            total_cho_burned = (total_kcal * cho_ox_pct) / 4.0
+            
+            # Ripartizione deplezione (più intenso = più muscolo)
+            liver_ratio = 0.20 if intensity_pct < 0.6 else 0.10
+            exercise_drain_liver = total_cho_burned * liver_ratio
+            exercise_drain_muscle = total_cho_burned * (1 - liver_ratio)
+
+        # 2. Calcolo Consumo Basale (24h)
+        daily_liver_drain = (LIVER_DRAIN_RATE_GH * 24) + DAILY_NEAT_CHO
+        
+        # 3. Resintesi (Input)
+        # Il sonno influenza l'efficienza di stoccaggio (sensibilità insulinica)
+        base_efficiency = 0.96 # Efficienza digestiva standard
+        synthesis_efficiency = base_efficiency * sleep_factor
+        
+        effective_cho_available = cho_in * synthesis_efficiency
+        
+        # 4. Bilancio Epatico (Priorità fisiologica: prima si riempie il fegato col pasto)
+        # Sottraiamo il consumo basale ed esercizio
+        liver_net = effective_cho_available - daily_liver_drain - exercise_drain_liver
+        
+        surplus_for_muscle = 0
+        
+        if liver_net >= 0:
+            # Abbiamo coperto il fabbisogno epatico
+            space_in_liver = MAX_LIVER - current_liver
+            
+            if liver_net >= space_in_liver:
+                current_liver = MAX_LIVER
+                surplus_for_muscle = liver_net - space_in_liver
+            else:
+                current_liver += liver_net
+                surplus_for_muscle = 0
+        else:
+            # Deficit epatico (intaccare riserve)
+            current_liver += liver_net # liver_net è negativo
+            if current_liver < 0: current_liver = 0
+            surplus_for_muscle = 0
+            
+        # 5. Bilancio Muscolare
+        # Muscolo perde per esercizio e guadagna dal surplus
+        current_muscle = current_muscle - exercise_drain_muscle + surplus_for_muscle
+        
+        # Cap limits
+        if current_muscle > MAX_MUSCLE: current_muscle = MAX_MUSCLE
+        if current_muscle < 0: current_muscle = 0
+        
+        trajectory.append({
+            "Giorno": day['label'],
+            "Muscolare": int(current_muscle),
+            "Epatico": int(current_liver),
+            "Totale": int(current_muscle + current_liver),
+            "Pct": (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100,
+            "Input CHO": cho_in,
+            "Sleep Penalty": "Sì" if sleep_factor < 0.9 else "No"
+        })
+        
+    final_state = trajectory[-1]
+    
+    # Aggiorniamo la struttura del soggetto per il Tab 3 con i valori finali
+    updated_tank = tank.copy()
+    updated_tank['muscle_glycogen_g'] = final_state['Muscolare']
+    updated_tank['liver_glycogen_g'] = final_state['Epatico']
+    updated_tank['actual_available_g'] = final_state['Totale']
+    updated_tank['fill_pct'] = final_state['Pct']
+    
+    return pd.DataFrame(trajectory), updated_tank
