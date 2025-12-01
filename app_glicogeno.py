@@ -400,7 +400,7 @@ def simulate_metabolism_cached(
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
         
-        # --- FIX: Use correct parameter name initial_muscle_g instead of initial_muscle_glycogen
+        # FIX: Use correct parameter name initial_muscle_g
         muscle_fill_state = current_muscle_glycogen / initial_muscle_g if initial_muscle_g > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         
@@ -731,7 +731,7 @@ def main():
                 steps_m1, min_act_m1, steps_m2, min_act_m2
             )
             
-            # Update Subject con copia corretta usando replace
+            # Update Subject con copia corretta usando replace (FIXED ATTRIBUTE ERROR)
             subj_current = replace(subj)
             subj_current.filling_factor = combined_filling
             subj_current.glucose_mg_dl = gluc_val
