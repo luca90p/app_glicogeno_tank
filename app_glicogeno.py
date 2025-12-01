@@ -149,11 +149,11 @@ with tab1:
             st.table(pd.DataFrame(zones_r))
 
 # =============================================================================
-# TAB 2: DIARIO IBRIDO
+# TAB 2: DIARIO DI TAPERING
 # =============================================================================
 with tab2:
     if 'base_tank_data' not in st.session_state:
-        st.warning("⚠️ Completa prima il Tab 1.")
+        st.warning("⚠️ Completa prima il Tab 1 (Profilo Atleta).")
         st.stop()
         
     subj_base = st.session_state['base_subject_struct']
@@ -161,18 +161,17 @@ with tab2:
     # Recupero soglie
     user_ftp = st.session_state.get('ftp_watts_input', 250)
     user_thr = st.session_state.get('thr_hr_input', 170)
+    user_max_hr = st.session_state.get('max_hr_input', 185)
     
-    st.subheader("🗓️ Diario di Avvicinamento (Multidisciplinare)")
+    st.subheader("🗓️ Diario di Avvicinamento (Countdown)")
     st.markdown("""
-    Pianifica il tapering. Seleziona **Ciclismo** (Watt) o **Corsa/Altro** (BPM) per calcolare l'**IF** corretto in base allo sport svolto.
+    Pianifica il tapering. Definisci il tuo stato iniziale e compila la settimana.
     """)
     
     # --- FIX SESSION STATE ---
-    # Resetta se la struttura è vecchia o incompatibile
     if "tapering_data" in st.session_state:
         if len(st.session_state["tapering_data"]) > 0:
             first_row = st.session_state["tapering_data"][0]
-            # Se la vecchia 'type' era "Allenamento", resettiamo per passare a "Ciclismo"/"Corsa"
             if "type" not in first_row or first_row["type"] == "Allenamento":
                 del st.session_state["tapering_data"]
                 st.rerun()
@@ -188,29 +187,42 @@ with tab2:
             {"day": -1, "label": "-1 Giorno", "type": "Riposo", "val": 0, "dur": 0, "cho": 500, "sleep": "Ottimale (>7h)"}
         ]
 
+    # --- NUOVO INPUT: STATO INIZIALE ---
+    # Usiamo la nuova Enum GlycogenState (assicurati di aver aggiornato data_models.py)
+    from data_models import GlycogenState
+    
+    st.markdown("#### Condizione di Partenza (-7 Giorni)")
+    gly_states = list(GlycogenState)
+    # Default su 'Normal' (Indice 2)
+    sel_state = st.selectbox(
+        "Livello di riempimento iniziale:", 
+        gly_states, 
+        format_func=lambda x: x.label,
+        index=2
+    )
+    
+    st.markdown("---")
+
     # --- HEADER COLONNE ---
     cols = st.columns([1, 1.3, 1, 1.3, 1, 1.2])
     cols[0].markdown("**Countdown**")
     cols[1].markdown("**Attività**")
     cols[2].markdown("**Minuti**")
-    cols[3].markdown("**Intensità (Watt o FC)**")
+    cols[3].markdown("**Intensità (Watt/FC)**")
     cols[4].markdown("**CHO (g)**")
     cols[5].markdown("**Sonno**")
     
     sleep_opts = {"Ottimale (>7h)": 1.0, "Sufficiente (6-7h)": 0.95, "Insufficiente (<6h)": 0.85}
-    type_opts = ["Riposo", "Ciclismo", "Corsa/Altro"] # Opzioni Ibride
+    type_opts = ["Riposo", "Ciclismo", "Corsa/Altro"] 
     
     input_result_data = []
     
     for i, row in enumerate(st.session_state["tapering_data"]):
         c1, c2, c3, c4, c5, c6 = st.columns([1, 1.3, 1, 1.3, 1, 1.2])
         
-        # 1. Label
         if row['day'] >= -2: c1.error(f"**{row['label']}**")
         else: c1.write(f"**{row['label']}**")
             
-        # 2. Select Sport
-        # Troviamo l'indice corretto anche se i dati salvati sono diversi
         try:
             curr_idx = type_opts.index(row['type'])
         except:
@@ -221,34 +233,24 @@ with tab2:
         intensity_val = 0
         calc_if = 0.0
         
-        # 3 & 4. Logica Condizionale Ibrida
         if act_type != "Riposo":
             duration = c3.number_input(f"d_{i}", 0, 600, row.get('dur', 0), step=10, key=f"dur_{i}", label_visibility="collapsed")
             
-            # Label dinamica per l'input valore
             val_default = row.get('val', 0) if row.get('val', 0) > 0 else 140
             intensity_val = c4.number_input(f"v_{i}", 0, 600, val_default, step=5, key=f"val_{i}", label_visibility="collapsed")
             
-            # --- CALCOLO IF IBRIDO ---
             if act_type == "Ciclismo":
-                # Usa FTP
                 if user_ftp > 0:
                     calc_if = intensity_val / user_ftp
-                    c4.caption(f"IF: **{calc_if:.2f}** (su {user_ftp}W)")
-                else:
-                    c4.warning("FTP = 0")
+                    c4.caption(f"IF: **{calc_if:.2f}**")
             elif act_type == "Corsa/Altro":
-                # Usa THR
                 if user_thr > 0:
                     calc_if = intensity_val / user_thr
-                    c4.caption(f"IF: **{calc_if:.2f}** (su {user_thr}bpm)")
-                else:
-                    c4.warning("Soglia FC = 0")
+                    c4.caption(f"IF: **{calc_if:.2f}**")
         else:
             c3.write("-")
             c4.write("-")
         
-        # 5 & 6. Resto
         new_cho = c5.number_input(f"c_{i}", 0, 1500, row['cho'], step=50, key=f"cho_{i}", label_visibility="collapsed")
         
         sl_idx = list(sleep_opts.keys()).index(row['sleep']) if row['sleep'] in sleep_opts else 0
@@ -257,7 +259,7 @@ with tab2:
         input_result_data.append({
             "label": row['label'],
             "duration": duration,
-            "calculated_if": calc_if, # Passiamo l'IF calcolato correttamente in base allo sport
+            "calculated_if": calc_if,
             "cho_in": new_cho,
             "sleep_factor": sleep_opts[new_sleep_label]
         })
@@ -270,7 +272,8 @@ with tab2:
         st.warning("⚠️ Carboidrati giorni -2/-1 a zero. Carico assente.")
     
     if st.button("🚀 Simula Stato Glicogeno (Race Ready)", type="primary"):
-        df_trend, final_tank = logic.calculate_tapering_trajectory(subj_base, input_result_data)
+        # Passiamo il nuovo parametro sel_state alla funzione
+        df_trend, final_tank = logic.calculate_tapering_trajectory(subj_base, input_result_data, start_state=sel_state)
         
         st.session_state['tank_data'] = final_tank
         st.session_state['subject_struct'] = subj_base
@@ -408,3 +411,4 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
