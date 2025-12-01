@@ -5,6 +5,8 @@ import altair as alt
 from dataclasses import dataclass
 from enum import Enum
 import math
+import xml.etree.ElementTree as ET
+import io # Necessario per leggere i file in memoria
 
 # --- 0. SISTEMA DI PROTEZIONE (LOGIN) ---
 def check_password():
@@ -335,7 +337,8 @@ def simulate_metabolism(
     activity_params,
     oxidation_efficiency_input=0.80, 
     custom_max_exo_rate=None,
-    mix_type_input=ChoMixType.GLUCOSE_ONLY # Nuovo parametro
+    mix_type_input=ChoMixType.GLUCOSE_ONLY,
+    intensity_series=None # Nuovo parametro: Serie di IF istantanei (0-1.5)
 ):
     tank_g = subject_data['actual_available_g']
     results = []
@@ -349,54 +352,40 @@ def simulate_metabolism(
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
     
-    avg_power = 0
-    ftp_watts = 250 
-    intensity_factor = 0.7
-    kcal_per_min_base = 10.0
+    # Recupero i parametri statici per l'IF dinamico
+    avg_power = activity_params.get('avg_watts', 200)
+    ftp_watts = activity_params.get('ftp_watts', 250) 
+    avg_hr = activity_params.get('avg_hr', 150)
+    max_hr = activity_params.get('max_hr', 185)
     
+    # Determino l'IF di riferimento (solo se non usiamo la serie dinamica)
+    intensity_factor_reference = activity_params.get('intensity_factor', 0.8)
+    
+    # Calcolo dei tassi base per le simulazioni basate su HR/Potenza
     if mode == 'cycling':
-        avg_power = activity_params['avg_watts']
-        ftp_watts = activity_params['ftp_watts']
-        intensity_factor = avg_power / ftp_watts if ftp_watts > 0 else 0
-        
+        kcal_per_min_base = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
     elif mode == 'running':
-        speed_kmh = activity_params['speed_kmh']
+        # Calcola kcal_per_min_base usando la velocità media o proxy HR
+        speed_kmh = activity_params.get('speed_kmh', 10.0)
         weight = subject_obj.weight_kg
         kcal_per_hour = 1.0 * weight * speed_kmh
         kcal_per_min_base = kcal_per_hour / 60.0
-        
-        avg_hr = activity_params['avg_hr']
-        threshold_hr = activity_params['threshold_hr']
-        # IF basato su HR/Soglia
-        intensity_factor = avg_hr / threshold_hr if threshold_hr > 0 else 0.7 
-        
-        ftp_watts = (subject_obj.vo2max_absolute_l_min * 1000) / 12 
-        
-    elif mode == 'other':
-        avg_hr = activity_params['avg_hr']
-        max_hr = activity_params['max_hr']
-        # IF basato su HR/Max
-        intensity_factor = avg_hr / max_hr if max_hr > 0 else 0.7
-        
-        vo2_operating = subject_obj.vo2max_absolute_l_min * intensity_factor
-        kcal_per_min_base = vo2_operating * 5.0 
-        threshold_proxy = max_hr * 0.85
-        
-        ftp_watts = 200 
+    else:
+        # Usa un proxy basato su VO2max e IF di riferimento per calcolare kcal/min
+        vo2_operating = subject_obj.vo2max_absolute_l_min * intensity_factor_reference
+        kcal_per_min_base = vo2_operating * 5.0
         
     is_lab_data = activity_params.get('use_lab_data', False)
     lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
     lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
     
+    crossover_pct = activity_params.get('crossover_pct', 70)
     crossover_if = crossover_pct / 100.0
-    effective_if_for_rer = intensity_factor + ((75.0 - crossover_pct) / 100.0)
-    if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
     
     # --- STIMA O USO DEL TASSO MASSIMO DI OSSIDAZIONE ESOGENA ---
     if custom_max_exo_rate is not None:
         max_exo_rate_g_min = custom_max_exo_rate 
     else:
-        # Passiamo il mix_type alla funzione di stima
         max_exo_rate_g_min = estimate_max_exogenous_oxidation(
             subject_obj.height_cm, 
             subject_obj.weight_kg, 
@@ -425,19 +414,41 @@ def simulate_metabolism(
     is_input_zero = constant_carb_intake_g_h == 0
     
     for t in range(int(duration_min) + 1):
+        
+        # --- 1. DETERMINAZIONE IF/RICHIESTA ISTANTANEA ---
+        
+        current_intensity_factor = intensity_factor_reference
+        if intensity_series is not None and t < len(intensity_series):
+            # Usa l'IF istantaneo fornito dal file strutturato
+            current_intensity_factor = intensity_series[t]
+        
+        # Aggiorna la richiesta calorica (con drift)
         current_kcal_demand = 0.0
+        
+        # Ricalcolo Kcal Demand basato sull'IF istantaneo
         if mode == 'cycling':
+            # Assumiamo che Avg_power sia un proxy del costo base quando non ci sono dati di file
+            # Se usiamo la serie IF, calcoliamo la potenza istantanea
+            instant_power = current_intensity_factor * ftp_watts
             current_eff = gross_efficiency
             if t > 60: 
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
-            current_kcal_demand = (avg_power * 60) / 4184 / (current_eff / 100.0)
-        else: 
+            current_kcal_demand = (instant_power * 60) / 4184 / (current_eff / 100.0)
+            
+        else: # Running/Other
+            # Per corsa/altro, il costo base è kcal_per_min_base, ma lo scaliamo per l'IF istantaneo
+            # Per simulare l'aumento di richiesta energetica dovuto all'alta intensità del segmento
+            demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
+            
             drift_factor = 1.0
             if t > 60:
                 drift_factor += (t - 60) * 0.0005 
-            current_kcal_demand = kcal_per_min_base * drift_factor
-
+            
+            current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
+        
+        # Fine determinazione IF/Richiesta
+        
         instantaneous_input_g_min = 0.0 
         
         if not is_input_zero and intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
@@ -463,6 +474,7 @@ def simulate_metabolism(
             total_intake_cumulative += instantaneous_input_g_min 
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
+        # --- Ripartizione Substrati (Dinamico) ---
         if is_lab_data:
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult 
@@ -477,12 +489,16 @@ def simulate_metabolism(
             rer = 0.7 + (0.3 * cho_ratio) 
         
         else:
+            # Calcola RER in base all'IF istantaneo
+            effective_if_for_rer = current_intensity_factor + ((75.0 - crossover_pct) / 100.0)
+            if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
+            
             rer = calculate_rer_polynomial(effective_if_for_rer)
             base_cho_ratio = (rer - 0.70) * 3.45
             base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
             
             current_cho_ratio = base_cho_ratio
-            if intensity_factor < 0.85 and t > 60:
+            if current_intensity_factor < 0.85 and t > 60:
                 hours_past = (t - 60) / 60.0
                 metabolic_shift = 0.05 * (hours_past ** 1.2) 
                 current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
@@ -534,18 +550,15 @@ def simulate_metabolism(
         exo_oxidation_g_h = from_exogenous * 60
         
         # --- CALCOLO % TOTALE ENERGIA FORNITA (per tooltip) ---
-        # Calcoliamo i grammi totali usati in questo minuto da tutte le fonti
         g_muscle = muscle_usage_g_min
         g_liver = from_liver
         g_exo = from_exogenous
-        # Assicurati che fat_ratio_used sia definito anche se !is_lab_data e t>0 non è vero
         fat_ratio_used_local = 1.0 - cho_ratio if not is_lab_data else (lab_fat_rate / 60 * 9.0) / current_kcal_demand if current_kcal_demand > 0 else 0.0
         g_fat = (current_kcal_demand * fat_ratio_used_local / 9.0)
         
         total_g_min = g_muscle + g_liver + g_exo + g_fat
-        if total_g_min == 0: total_g_min = 1.0 # Evita divisione per zero
+        if total_g_min == 0: total_g_min = 1.0 
         
-        # Aggiungiamo le percentuali al dizionario results
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
@@ -553,7 +566,6 @@ def simulate_metabolism(
             "Carboidrati Esogeni (g)": exo_oxidation_g_h, 
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             
-            # Campi Percentuali per Tooltip
             "Pct_Muscle": f"{(g_muscle / total_g_min * 100):.1f}%",
             "Pct_Liver": f"{(g_liver / total_g_min * 100):.1f}%",
             "Pct_Exo": f"{(g_exo / total_g_min * 100):.1f}%",
@@ -567,7 +579,8 @@ def simulate_metabolism(
             "Stato": status_label,
             "CHO %": cho_ratio * 100,
             "Intake Cumulativo (g)": total_intake_cumulative,
-            "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative
+            "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative,
+            "Intensity Factor (IF)": current_intensity_factor # Aggiungo l'IF istantaneo
         })
         
     total_kcal_final = current_kcal_demand * 60 
@@ -585,7 +598,7 @@ def simulate_metabolism(
         "kcal_total_h": total_kcal_final,
         "gut_accumulation": (gut_accumulation_total / duration_min) * 60 if duration_min > 0 else 0,
         "max_exo_capacity": max_exo_rate_g_min * 60,
-        "intensity_factor": intensity_factor,
+        "intensity_factor": intensity_factor_reference,
         "avg_rer": rer,
         "gross_efficiency": gross_efficiency,
         "intake_g_h": constant_carb_intake_g_h,
@@ -593,6 +606,56 @@ def simulate_metabolism(
     }
 
     return pd.DataFrame(results), stats
+
+# --- LOGICA DI PARSING ZWO ---
+
+def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
+    # La logica è semplificata e si basa sulla lettura dei tag SteadyState
+    
+    tree = ET.parse(io.StringIO(uploaded_file.getvalue().decode('utf-8')))
+    root = tree.getroot()
+    
+    intensity_series = [] # Array degli IF (Intensity Factors) minuto per minuto
+    total_duration_min = 0
+    total_weighted_if = 0
+    
+    # Lo ZWO ha la potenza espressa come frazione della Soglia (FTP/FTHR)
+    for steady_state in root.findall('.//SteadyState'):
+        duration_sec = int(steady_state.get('Duration'))
+        power_ratio = float(steady_state.get('Power'))
+        
+        # Per semplicità, convertiamo tutto in minuti e usiamo l'IF come proxy
+        duration_min = round(duration_sec / 60)
+        if duration_min == 0: continue
+            
+        intensity_factor = power_ratio # Power Ratio = IF per ZWO
+        
+        # Riempiamo la serie IF per ogni minuto
+        for _ in range(duration_min):
+            intensity_series.append(intensity_factor)
+        
+        total_duration_min += duration_min
+        total_weighted_if += intensity_factor * duration_min
+
+    if total_duration_min > 0:
+        avg_if = total_weighted_if / total_duration_min
+        
+        # Ricalcoliamo l'AvgW/AvgHR in base all'IF medio
+        if sport_type == SportType.CYCLING:
+            avg_power = avg_if * ftp_watts
+            avg_hr = 0
+        elif sport_type == SportType.RUNNING:
+            # Per la corsa, usiamo la THR per mappare l'IF in HR
+            # IF = AvgHR / THR -> AvgHR = IF * THR
+            avg_hr = avg_if * thr_hr
+            avg_power = 0
+        else: # Altri sport
+            avg_hr = avg_if * st.session_state.get('max_hr_input', 185) * 0.85 # Proxy max HR
+            avg_power = 0
+            
+        return intensity_series, total_duration_min, avg_power, avg_hr
+    
+    return [], 0, 0, 0
 
 # --- 3. INTERFACCIA UTENTE ---
 
@@ -1061,6 +1124,7 @@ with tab3:
         # Inizializzazioni per la lettura del file
         avg_w = 200
         avg_hr = 150
+        intensity_series = None # Inizializzazione della serie IF
         
         if sport_mode == 'cycling':
             avg_w = 200
@@ -1075,39 +1139,45 @@ with tab3:
             
             file_upload_method = st.radio(
                 "Fonte dati attività:", 
-                ["Manuale (Media)", "Carica File (.fit / .gpx / .csv)"],
+                ["Manuale (Media)", "Carica File Strutturato (.zwo / .fit / .gpx / .csv)"],
                 key='file_upload_method'
             )
             
-            if file_upload_method == "Carica File (.fit / .gpx / .csv)":
-                st.info("I file .gpx/.fit devono essere convertiti in .csv con colonne 'power' o 'heart_rate'.")
-                uploaded_file = st.file_uploader("Carica file attività", type=['gpx', 'csv', 'fit'])
+            if file_upload_method == "Carica File Strutturato (.zwo / .fit / .gpx / .csv)":
+                st.info("I file .gpx/.fit/.csv devono contenere le colonne 'power' o 'heart_rate' per l'estrazione. I file .zwo calcolano automaticamente l'IF istantaneo.")
+                uploaded_file = st.file_uploader("Carica file attività", type=['gpx', 'csv', 'fit', 'zwo'])
                 
                 if uploaded_file is not None:
                     try:
-                        # Simuliamo l'estrazione dai dati (la lettura FIT/GPX è simulata come CSV per Streamlit)
-                        df_activity = pd.read_csv(uploaded_file)
+                        filename = uploaded_file.name
                         
-                        # Simula l'estrazione di dati chiave (assumendo 5s per riga come proxy di risoluzione)
-                        if sport_mode == 'cycling':
-                            if 'power' in df_activity.columns:
-                                avg_w = df_activity['power'].mean()
-                                duration_sec = df_activity.shape[0] * 5 
-                                duration = round(duration_sec / 60)
-                                st.success(f"Dati estratti: Potenza media: {avg_w:.1f} W, Durata: {duration} min.")
-                            else:
-                                st.error("Il file deve contenere la colonna 'power'.")
-                        
-                        elif sport_mode == 'running' or sport_mode == 'other':
-                            if 'heart_rate' in df_activity.columns:
-                                avg_hr = df_activity['heart_rate'].mean()
-                                duration_sec = df_activity.shape[0] * 5 
-                                duration = round(duration_sec / 60)
-                                st.success(f"Dati estratti: FC media: {avg_hr:.1f} BPM, Durata: {duration} min.")
-                            else:
-                                st.error("Il file deve contenere la colonna 'heart_rate'.")
-                        
-                        
+                        if filename.endswith('.zwo'):
+                            # Logica per ZWO (XML)
+                            st.info("Analisi di un allenamento strutturato ZWO (IF istantaneo calcolato).")
+                            intensity_series, duration, avg_w, avg_hr = parse_zwo_file(uploaded_file, ftp_watts, thr_hr, subj.sport)
+                            
+                        else:
+                            # Logica per CSV/GPX/FIT (lettura semplificata in CSV)
+                            df_activity = pd.read_csv(uploaded_file)
+                            
+                            # Simula l'estrazione di dati chiave (assumendo 5s per riga come proxy di risoluzione)
+                            duration_sec = df_activity.shape[0] * 5 
+                            duration = round(duration_sec / 60)
+                            
+                            if sport_mode == 'cycling':
+                                if 'power' in df_activity.columns:
+                                    avg_w = df_activity['power'].mean()
+                                    st.success(f"Dati estratti: Potenza media: {avg_w:.1f} W, Durata: {duration} min.")
+                                else:
+                                    st.error("Il file deve contenere la colonna 'power'.")
+                            
+                            elif sport_mode == 'running' or sport_mode == 'other':
+                                if 'heart_rate' in df_activity.columns:
+                                    avg_hr = df_activity['heart_rate'].mean()
+                                    st.success(f"Dati estratti: FC media: {avg_hr:.1f} BPM, Durata: {duration} min.")
+                                else:
+                                    st.error("Il file deve contenere la colonna 'heart_rate'.")
+                            
                     except Exception as e:
                         st.error(f"Errore nell'elaborazione del file: {e}")
                         
@@ -1119,6 +1189,9 @@ with tab3:
                 act_params['efficiency'] = st.slider("Efficienza Meccanica [%]", 16.0, 26.0, 22.0, 0.5)
                 duration = st.slider("Durata Attività (min)", 30, 420, int(duration), step=10)
                 
+                # Calcola IF di riferimento
+                intensity_factor_reference = avg_w / ftp_watts if ftp_watts > 0 else 0.8
+
             elif sport_mode == 'running':
                 run_input_mode = st.radio("Modalità Obiettivo:", ["Imposta Passo & Distanza", "Imposta Tempo & Distanza"], horizontal=True)
                 c_dist, c_var = st.columns(2)
@@ -1148,17 +1221,21 @@ with tab3:
 
                 act_params['speed_kmh'] = speed_kmh
                 
-                # Input HR media per calcolo IF (usa il default o il valore estratto dal file)
                 avg_hr = st.number_input("Frequenza Cardiaca Media", 80, 220, int(avg_hr), 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['threshold_hr'] = thr_hr
                 
+                # Calcola IF di riferimento
+                intensity_factor_reference = avg_hr / thr_hr if thr_hr > 0 else 0.8
+                
             else: 
-                # Input HR media per calcolo IF (usa il default o il valore estratto dal file)
                 avg_hr = st.number_input("Frequenza Cardiaca Media Gara", 80, 220, int(avg_hr), 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['max_hr'] = max_hr
                 duration = st.slider("Durata Attività (min)", 30, 420, int(duration), step=10)
+                
+                # Calcola IF di riferimento (usiamo max HR come soglia)
+                intensity_factor_reference = avg_hr / max_hr if max_hr > 0 else 0.8
             
         with col_meta:
             st.subheader("2. Strategia di Integrazione e Calibrazione")
@@ -1259,12 +1336,16 @@ with tab3:
 
         h_cm = subj.height_cm 
         
+        # Inserisco l'IF di riferimento nell'act_params
+        act_params['intensity_factor'] = intensity_factor_reference
+        
         df_sim, stats = simulate_metabolism(
             tank_data, duration, carb_intake, cho_per_unit, crossover, 
             tau_absorption_input, subj, act_params,
             oxidation_efficiency_input=oxidation_efficiency_input,
             custom_max_exo_rate=custom_max_exo_rate,
-            mix_type_input=selected_mix_type 
+            mix_type_input=selected_mix_type,
+            intensity_series=intensity_series # Passa la serie IF istantanea
         )
         df_sim["Scenario"] = "Con Integrazione (Strategia)"
         
@@ -1273,7 +1354,8 @@ with tab3:
             tau_absorption_input, subj, act_params,
             oxidation_efficiency_input=oxidation_efficiency_input,
             custom_max_exo_rate=custom_max_exo_rate,
-            mix_type_input=selected_mix_type
+            mix_type_input=selected_mix_type,
+            intensity_series=intensity_series # Passa la serie IF istantanea
         )
         df_no_cho["Scenario"] = "Senza Integrazione (Digiuno)"
         
