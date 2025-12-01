@@ -472,8 +472,8 @@ def simulate_metabolism(
             glycogen_burned_per_min = total_cho_demand - current_exo_oxidation_g_min
             min_endo = total_cho_demand * 0.2 
             if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
-            fat_burned_per_min = lab_fat_rate 
-            cho_ratio = total_cho_demand / (total_cho_demand + lab_fat_rate) if (total_cho_demand + lab_fat_rate) > 0 else 0
+            lab_fat_rate_min = lab_fat_rate / 60
+            cho_ratio = total_cho_demand / (total_cho_demand + lab_fat_rate_min) if (total_cho_demand + lab_fat_rate_min) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
         
         else:
@@ -539,7 +539,7 @@ def simulate_metabolism(
         g_liver = from_liver
         g_exo = from_exogenous
         # Assicurati che fat_ratio_used sia definito anche se !is_lab_data e t>0 non è vero
-        fat_ratio_used_local = 1.0 - cho_ratio if not is_lab_data else (lab_fat_rate * 9.0) / current_kcal_demand if current_kcal_demand > 0 else 0.0
+        fat_ratio_used_local = 1.0 - cho_ratio if not is_lab_data else (lab_fat_rate / 60 * 9.0) / current_kcal_demand if current_kcal_demand > 0 else 0.0
         g_fat = (current_kcal_demand * fat_ratio_used_local / 9.0)
         
         total_g_min = g_muscle + g_liver + g_exo + g_fat
@@ -707,21 +707,22 @@ with tab1:
 
         with st.expander("Inserisci le Tue Soglie di Performance"):
             if s_sport == SportType.CYCLING:
+                # MODIFICA: FTP è l'input primario per IF
                 ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
-                st.caption(f"Il tuo VO2max di {vo2_input:.0f} ml/kg/min supporta questa soglia.")
+                st.caption(f"La FTP è usata come soglia per l'Intensity Factor (IF).")
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
                 # MODIFICA: Uso THR come dato primario per IF nella corsa
                 thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
-                st.caption(f"L'Intensity Factor (IF) sarà calcolato su FC media / THR ({thr_hr_input} BPM).")
+                st.caption(f"La Soglia Anaerobica è usata per calcolare l'IF (FC media / THR).")
                 
             else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
                 c_thr, c_max = st.columns(2)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
                 thr_hr_input = c_thr.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1) # Aggiungo soglia aerobica
-                st.caption("Per sport multidisciplinari, l'IF si basa sulla Frequenza Cardiaca Media rispetto alle tue soglie.")
+                st.caption("La FC Max è usata per il calcolo approssimativo dell'IF.")
         
         # Salvataggio delle soglie nello stato di sessione per il Tab 3
         st.session_state['ftp_watts_input'] = ftp_watts_input
@@ -1057,6 +1058,15 @@ with tab3:
         cho_per_unit = 25 # Default
         carb_intake = 60  # Default
         
+        # Inizializzazioni per la lettura del file
+        avg_w = 200
+        avg_hr = 150
+        
+        if sport_mode == 'cycling':
+            avg_w = 200
+        elif sport_mode == 'running' or sport_mode == 'other':
+            avg_hr = 150
+        
         with col_param:
             st.subheader(f"1. Parametri Sforzo ({sport_mode.capitalize()})")
             
@@ -1065,49 +1075,46 @@ with tab3:
             
             file_upload_method = st.radio(
                 "Fonte dati attività:", 
-                ["Manuale (Media)", "Carica File (.csv sim.)"],
+                ["Manuale (Media)", "Carica File (.gpx / .csv)"],
                 key='file_upload_method'
             )
             
-            avg_w = 200
-            avg_hr = 150
-            
-            if file_upload_method == "Carica File (.csv sim.)":
-                uploaded_file = st.file_uploader("Carica file .csv con dati attività (Tempo, Potenza/HR)", type=['csv'])
+            if file_upload_method == "Carica File (.gpx / .csv)":
+                uploaded_file = st.file_uploader("Carica file attività (.gpx o .csv)", type=['gpx', 'csv'])
                 
                 if uploaded_file is not None:
                     try:
+                        # Simuliamo l'estrazione dai dati (i file .gpx non sono leggibili direttamente da pd.read_csv)
+                        if uploaded_file.name.endswith('.gpx'):
+                             st.warning("ATTENZIONE: L'analisi di file .gpx richiede conversione in CSV con colonne 'power' o 'heart_rate'. Simulo l'estrazione.")
+                        
+                        # In un'applicazione reale, dovresti usare una libreria come gpxpy o xml.etree per .gpx
+                        # Qui simuliamo la lettura di un CSV ben formattato per la demo
                         df_activity = pd.read_csv(uploaded_file)
                         
-                        # Simula l'estrazione di dati chiave
+                        # Simula l'estrazione di dati chiave (assumendo 5s per riga come proxy di risoluzione)
                         if sport_mode == 'cycling':
-                            # Esempio: calcola la potenza media e la durata in minuti
                             if 'power' in df_activity.columns:
                                 avg_w = df_activity['power'].mean()
-                                duration_sec = df_activity.shape[0] * 5 # Assumendo 5s per riga
+                                duration_sec = df_activity.shape[0] * 5 
                                 duration = round(duration_sec / 60)
-                                st.success(f"Dati caricati: Potenza media: {avg_w:.1f} W, Durata: {duration} min.")
+                                st.success(f"Dati estratti: Potenza media: {avg_w:.1f} W, Durata: {duration} min.")
                             else:
-                                st.error("Il file CSV deve contenere una colonna 'power'.")
+                                st.error("Il file deve contenere la colonna 'power'.")
                         
                         elif sport_mode == 'running' or sport_mode == 'other':
-                             # Esempio: calcola HR media e durata
                             if 'heart_rate' in df_activity.columns:
                                 avg_hr = df_activity['heart_rate'].mean()
                                 duration_sec = df_activity.shape[0] * 5 
                                 duration = round(duration_sec / 60)
-                                st.success(f"Dati caricati: FC media: {avg_hr:.1f} BPM, Durata: {duration} min.")
+                                st.success(f"Dati estratti: FC media: {avg_hr:.1f} BPM, Durata: {duration} min.")
                             else:
-                                st.error("Il file CSV deve contenere una colonna 'heart_rate'.")
+                                st.error("Il file deve contenere la colonna 'heart_rate'.")
                         
-                        else:
-                            st.warning("Tipo di sport non supportato per l'analisi da file.")
-                            
+                        
                     except Exception as e:
-                        st.error(f"Errore nella lettura del file: {e}")
+                        st.error(f"Errore nell'elaborazione del file: {e}")
                         
-                # Nota: gli input manuali sottostanti verranno sovrascritti dai dati del file se caricato.
-            
             # --- INPUT MANUALE / RIEPILOGO DATI ---
             if sport_mode == 'cycling':
                 avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, int(avg_w), step=5)
