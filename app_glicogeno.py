@@ -234,70 +234,116 @@ with tab2:
     
     # --- DIARIO SETTIMANALE (FUNZIONALITA' RECUPERATA) ---
     st.subheader("Diario di Tapering (Pianificazione Settimanale)")
+    # --- DIARIO DI TAPERING (COUNTDOWN) ---
+    st.markdown("---")
+    st.subheader("Diario di Tapering (Countdown Gara)")
     st.markdown("""
-    Simula l'andamento delle riserve di glicogeno su una settimana tipo. 
-    Utile per verificare se il carico di carboidrati è sufficiente a compensare le sessioni di allenamento durante il tapering.
+    Pianifica la settimana di avvicinamento. 
+    **Nota:** I giorni **-2** e **-1** sono bloccati e sincronizzati con i dati inseriti nel pannello "Stato Nutrizionale" in alto per garantire coerenza.
     """)
     
-    with st.expander("Apri/Chiudi Pianificatore Settimanale", expanded=True):
-        days = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+    with st.expander("Apri/Chiudi Pianificatore Countdown", expanded=True):
+        # Definizione labels relative all'evento
+        days_labels = [
+            "-6 Giorni", "-5 Giorni", "-4 Giorni", "-3 Giorni", 
+            "-2 Giorni", "-1 Giorno", "Race Day (Gara)"
+        ]
+        
         weekly_schedule = []
         
         # Intestazione Colonne
-        c_h1, c_h2, c_h3, c_h4 = st.columns([1, 1.5, 1.5, 1])
-        c_h1.markdown("**Giorno**")
+        c_h1, c_h2, c_h3, c_h4 = st.columns([1.2, 1.5, 1.5, 1])
+        c_h1.markdown("**Meno...**")
         c_h2.markdown("**Attività**")
         c_h3.markdown("**Intensità**")
         c_h4.markdown("**CHO (g)**")
         
-        for d in days:
-            c1, c2, c3, c4 = st.columns([1, 1.5, 1.5, 1])
-            c1.write(f"**{d}**")
+        for i, d_label in enumerate(days_labels):
+            c1, c2, c3, c4 = st.columns([1.2, 1.5, 1.5, 1])
             
-            act_key = f"act_{d}"
-            dur_key = f"dur_{d}"
-            int_key = f"int_{d}"
-            cho_key = f"cho_{d}"
+            # Stile visuale per evidenziare i giorni bloccati
+            is_day_minus_2 = (i == 4) # Indice 4 è "-2 Giorni"
+            is_day_minus_1 = (i == 5) # Indice 5 è "-1 Giorno"
+            is_locked = is_day_minus_2 or is_day_minus_1
             
+            # Label Giorno
+            if is_locked:
+                c1.info(f"**{d_label}**")
+            elif i == 6:
+                c1.error(f"**{d_label}**") # Rosso per la gara
+            else:
+                c1.write(f"**{d_label}**")
+            
+            # Chiavi univoche per i widget
+            act_key = f"act_d{i}"
+            dur_key = f"dur_d{i}"
+            int_key = f"int_d{i}"
+            cho_key = f"cho_d{i}"
+            
+            # Logica Attività
+            # Default: Attivo per tutti tranne magari i primi giorni di scarico, ma lasciamo scelta
             activity = c2.selectbox("", ["Riposo", "Attivo"], key=act_key, label_visibility="collapsed")
             
             duration = 0
             intensity = "Riposo"
             
             if activity == "Attivo":
-                duration = c2.number_input(f"Minuti {d}", 0, 300, 60, key=dur_key, label_visibility="collapsed")
-                intensity = c3.selectbox(f"Int {d}", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key=int_key, label_visibility="collapsed")
+                duration = c2.number_input(f"Min {i}", 0, 600, 60, key=dur_key, label_visibility="collapsed")
+                intensity = c3.selectbox(f"Int {i}", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key=int_key, label_visibility="collapsed")
             else:
-                c3.write("-")
-                
-            cho_in = c4.number_input(f"CHO {d}", 0, 1200, 350, key=cho_key, label_visibility="collapsed")
+                c3.write(" - ")
+            
+            # Logica CHO (Gestione Lock)
+            default_cho = 350
+            if is_day_minus_2:
+                default_cho = int(cho_g2) # Prende dal blocco superiore
+            elif is_day_minus_1:
+                default_cho = int(cho_g1) # Prende dal blocco superiore
+            
+            # Il widget è disabilitato se è un giorno lock
+            cho_in = c4.number_input(
+                f"CHO {i}", 
+                0, 1500, 
+                value=default_cho, 
+                key=cho_key, 
+                disabled=is_locked, # QUI AVVIENE IL BLOCCO
+                label_visibility="collapsed"
+            )
             
             weekly_schedule.append({
-                "day": d, "activity": activity, "duration": duration, 
-                "intensity": intensity, "cho_in": cho_in
+                "day": d_label, 
+                "activity": activity, 
+                "duration": duration, 
+                "intensity": intensity, 
+                "cho_in": cho_in
             })
             
-        if st.button("Calcola Trend Settimanale"):
+        if st.button("Calcola Trend Tapering"):
             # Parametri simulazione settimanale
-            init_muscle = tank_data['max_capacity_g'] - 100 # Assumiamo partenza non piena
-            init_liver = 100
-            max_muscle = tank_data['max_capacity_g'] - 100
+            # Assumiamo che a -7 giorni si parta con riserve non piene (allenamento cronico)
+            init_muscle = tank_data['max_capacity_g'] * 0.60 
+            init_liver = 80
+            max_muscle = tank_data['max_capacity_g']
             max_liver = 120
             
-            # Stima VO2 relativo per calcoli consumo
+            # Stima VO2 relativo per calcoli consumo giornaliero
             vo2_calc = subj_base.vo2max_absolute_l_min * 1000 / weight 
             
             df_week = logic.calculate_weekly_balance(init_muscle, init_liver, max_muscle, max_liver, weekly_schedule, weight, vo2_calc)
             
             # Grafico Trend
+            # Usiamo un grafico a step o linea per mostrare l'accumulo
             chart_trend = alt.Chart(df_week).mark_line(point=True, strokeWidth=3).encode(
-                x=alt.X('Giorno', sort=days),
+                x=alt.X('Giorno', sort=days_labels, title='Countdown'),
                 y=alt.Y('Totale', title='Glicogeno Totale (g)', scale=alt.Scale(zero=False)),
+                color=alt.value('#2E7D32'),
                 tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico']
-            ).properties(height=300, title="Evoluzione Riserve durante la Settimana")
+            ).properties(height=300, title="Carico Glicogeno Pre-Gara (Simulazione)")
             
             st.altair_chart(chart_trend, use_container_width=True)
-            st.dataframe(df_week, hide_index=True)
+            
+            # Tabella riassuntiva pulita
+            st.dataframe(df_week[['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico']], hide_index=True, use_container_width=True)
 
 # =============================================================================
 # TAB 3: SIMULAZIONE GARA & STRATEGIA
@@ -475,3 +521,4 @@ with tab3:
             st.warning("La durata dell'evento è troppo breve per la frequenza di integrazione impostata.")
     else:
         st.info("Nessuna strategia di integrazione definita (Target CHO = 0).")
+
