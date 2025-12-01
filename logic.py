@@ -250,8 +250,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
 # --- NUOVA FUNZIONE PER IL TAB 2 ---
 def calculate_tapering_trajectory(subject, days_data):
     """
-    Simula l'andamento del glicogeno giorno per giorno.
-    Considera: Dieta, Attività, Intensità e Qualità del Sonno.
+    Simula l'andamento del glicogeno.
+    ORA USA L'INTENSITY FACTOR (IF) CALCOLATO PER DETERMINARE IL CONSUMO.
     """
     LIVER_DRAIN_RATE_GH = 4.5 
     DAILY_NEAT_CHO = 1.0 * subject.weight_kg 
@@ -267,29 +267,42 @@ def calculate_tapering_trajectory(subject, days_data):
     
     for day in days_data:
         duration = day['duration']
-        intensity_zone = day['intensity']
+        # Qui ora ci aspettiamo un valore numerico di IF (es. 0.75), non una stringa
+        intensity_if = day.get('calculated_if', 0.0) 
         cho_in = day['cho_in']
         sleep_factor = day['sleep_factor']
         
         exercise_drain_muscle = 0
         exercise_drain_liver = 0
         
-        if duration > 0:
-            max_vo2 = (subject.vo2max_absolute_l_min * 1000) / subject.weight_kg
-            if intensity_zone == "Riposo":
-                intensity_pct, cho_ox_pct = 0.0, 0.0
-            elif "Z1" in intensity_zone:
-                intensity_pct, cho_ox_pct = 0.50, 0.30
-            elif "Z3" in intensity_zone:
-                intensity_pct, cho_ox_pct = 0.70, 0.70
-            else:
-                intensity_pct, cho_ox_pct = 0.90, 0.95
+        # Calcolo consumo basato su IF preciso
+        if duration > 0 and intensity_if > 0:
+            max_vo2_ml = (subject.vo2max_absolute_l_min * 1000) / subject.weight_kg
             
-            kcal_min = (max_vo2 * intensity_pct * subject.weight_kg / 1000) * 5.0
+            # Stima della % del VO2max utilizzata basata sull'IF
+            # (Approssimazione: IF 1.0 ~= 90% VO2max per un'ora, IF 0.6 ~= 50% VO2max)
+            # Usiamo una relazione lineare semplificata per il tapering
+            pct_vo2 = min(1.0, intensity_if * 0.95) 
+            
+            # Determina il mix energetico (CHO vs FAT) basato sull'IF
+            # IF < 0.60 -> Prevalenza grassi (CHO ratio basso)
+            # IF > 0.90 -> Prevalenza zuccheri (CHO ratio alto)
+            if intensity_if <= 0.55:
+                cho_ox_pct = 0.20
+            elif intensity_if <= 0.75: # Z2/Z3
+                cho_ox_pct = 0.50 + (intensity_if - 0.55) * 1.5 # Scala lineare
+            elif intensity_if <= 0.90: # Z3/Z4
+                cho_ox_pct = 0.80 + (intensity_if - 0.75) * 1.0
+            else: # Sopra soglia
+                cho_ox_pct = 1.0
+            
+            # Calcolo Calorie
+            kcal_min = (max_vo2_ml * pct_vo2 * subject.weight_kg / 1000) * 5.0
             total_kcal = kcal_min * duration
             total_cho_burned = (total_kcal * cho_ox_pct) / 4.0
             
-            liver_ratio = 0.20 if intensity_pct < 0.6 else 0.10
+            # Ripartizione fegato/muscolo
+            liver_ratio = 0.20 if intensity_if < 0.7 else 0.10
             exercise_drain_liver = total_cho_burned * liver_ratio
             exercise_drain_muscle = total_cho_burned * (1 - liver_ratio)
 
@@ -323,7 +336,8 @@ def calculate_tapering_trajectory(subject, days_data):
             "Epatico": int(current_liver),
             "Totale": int(current_muscle + current_liver),
             "Pct": (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100,
-            "Input CHO": cho_in
+            "Input CHO": cho_in,
+            "IF": intensity_if
         })
         
     final_state = trajectory[-1]
