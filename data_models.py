@@ -1,7 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass
 
-# --- ENUMS ---
 class Sex(Enum):
     MALE = "Uomo"
     FEMALE = "Donna"
@@ -29,9 +28,9 @@ class SportType(Enum):
         self.label = label
 
 class DietType(Enum):
-    HIGH_CARB = (1.25, "Carico Carboidrati (Supercompensazione)", 8.0)
-    NORMAL = (1.00, "Regime Normocalorico Misto (Baseline)", 5.0)
-    LOW_CARB = (0.50, "Restrizione Glucidica / Low Carb", 2.5)
+    HIGH_CARB = (1.25, "Carico Carboidrati", 8.0)
+    NORMAL = (1.00, "Regime Normocalorico", 5.0)
+    LOW_CARB = (0.50, "Restrizione Glucidica", 2.5)
 
     def __init__(self, factor, label, ref_value):
         self.factor = factor
@@ -39,18 +38,18 @@ class DietType(Enum):
         self.ref_value = ref_value
 
 class FatigueState(Enum):
-    RESTED = (1.0, "Riposo / Tapering (Pieno Recupero)")
-    ACTIVE = (0.9, "Carico di lavoro moderato (24h prec.)")
-    TIRED = (0.60, "Alto carico o Danno Muscolare (EIMD)")
+    RESTED = (1.0, "Riposo / Tapering")
+    ACTIVE = (0.9, "Carico moderato (24h prec.)")
+    TIRED = (0.60, "Alto carico o Danno Muscolare")
 
     def __init__(self, factor, label):
         self.factor = factor
         self.label = label
 
 class SleepQuality(Enum):
-    GOOD = (1.0, "Ottimale (>7h, ristoratore)")
+    GOOD = (1.0, "Ottimale (>7h)")
     AVERAGE = (0.95, "Sufficiente (6-7h)")
-    POOR = (0.85, "Insufficiente / Disturbato (<6h)")
+    POOR = (0.85, "Insufficiente (<6h)")
 
     def __init__(self, factor, label):
         self.factor = factor
@@ -59,23 +58,22 @@ class SleepQuality(Enum):
 class MenstrualPhase(Enum):
     NONE = (1.0, "Non applicabile")
     FOLLICULAR = (1.0, "Fase Follicolare")
-    LUTEAL = (0.95, "Fase Luteale (Premestruale)")
+    LUTEAL = (0.95, "Fase Luteale")
 
     def __init__(self, factor, label):
         self.factor = factor
         self.label = label
 
 class ChoMixType(Enum):
-    GLUCOSE_ONLY = (1.0, 60.0, "Solo Glucosio/Maltodestrine (Standard)")
+    GLUCOSE_ONLY = (1.0, 60.0, "Solo Glucosio/Maltodestrine")
     MIX_2_1 = (1.5, 90.0, "Mix 2:1 (Maltodestrine:Fruttosio)")
-    MIX_1_08 = (1.7, 105.0, "Mix 1:0.8 (High Frructose)")
+    MIX_1_08 = (1.7, 105.0, "Mix 1:0.8 (High Fructose)")
 
     def __init__(self, ox_factor, max_rate_gh, label):
         self.ox_factor = ox_factor 
         self.max_rate_gh = max_rate_gh 
         self.label = label
 
-# --- DATACLASS ---
 @dataclass
 class Subject:
     weight_kg: float
