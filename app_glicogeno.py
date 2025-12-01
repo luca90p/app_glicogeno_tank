@@ -106,34 +106,61 @@ with tab1:
         
         # --- NUOVA SEZIONE: PROFILO METABOLICO (SPOSTATA QUI) ---
         st.markdown("---")
-        with st.expander("🧬 Profilo Metabolico (Test Laboratorio)", expanded=False):
-            st.info("Inserisci i dati dal test del gas (Metabolimetro) per personalizzare i consumi.")
-            active_lab = st.checkbox("Attiva Profilo Metabolico Personalizzato", value=st.session_state.get('use_lab_data', False))
+        # --- SEZIONE PROFILO METABOLICO MULTIPOINT ---
+        st.markdown("---")
+        with st.expander("🧬 Profilo Metabolico Avanzato (Curva a 3 Punti)", expanded=False):
+            st.info("Inserisci i dati reali dal tuo test per 3 intensità chiave. Il simulatore interpolerà i consumi.")
+            active_lab = st.checkbox("Usa Curva Metabolica Reale", value=st.session_state.get('use_lab_data', False))
             
             if active_lab:
-                st.caption("Range di consumo rilevati al Ritmo Gara previsto (es. zona FatMax o Tempo):")
+                # Recuperiamo i dati calcolati o usiamo default
+                # Punti suggeriti dall'analisi del file
                 
-                l1, l2 = st.columns(2)
-                # CHO Range
-                cho_min = l1.number_input("CHO Min (g/h)", 0, 600, 124, key='cho_min_in')
-                cho_max = l2.number_input("CHO Max (g/h)", 0, 600, 148, key='cho_max_in')
+                st.markdown("**1. Zona Z2 (Aerobica / FatMax)**")
+                c1, c2, c3 = st.columns(3)
+                z2_hr = c1.number_input("FC (bpm)", 100, 200, 138, key='z2_hr')
+                z2_cho = c2.number_input("CHO (g/h)", 0, 400, 75, key='z2_cho')
+                z2_fat = c3.number_input("FAT (g/h)", 0, 200, 40, key='z2_fat')
                 
-                # FAT Range
-                fat_min = l1.number_input("FAT Min (g/h)", 0, 300, 26, key='fat_min_in')
-                fat_max = l2.number_input("FAT Max (g/h)", 0, 300, 36, key='fat_max_in')
+                st.markdown("**2. Zona Z3 (Medio / Tempo)**")
+                c4, c5, c6 = st.columns(3)
+                z3_hr = c4.number_input("FC (bpm)", 100, 200, 158, key='z3_hr')
+                z3_cho = c5.number_input("CHO (g/h)", 0, 400, 139, key='z3_cho')
+                z3_fat = c6.number_input("FAT (g/h)", 0, 200, 29, key='z3_fat')
                 
-                # Calcolo Medie
-                lab_cho_mean = (cho_min + cho_max) / 2
-                lab_fat_mean = (fat_min + fat_max) / 2
+                st.markdown("**3. Zona Z4 (Soglia / Vo2max)**")
+                c7, c8, c9 = st.columns(3)
+                z4_hr = c7.number_input("FC (bpm)", 100, 220, 172, key='z4_hr')
+                z4_cho = c8.number_input("CHO (g/h)", 0, 600, 219, key='z4_cho')
+                z4_fat = c9.number_input("FAT (g/h)", 0, 200, 7, key='z4_fat')
                 
-                st.success(f"Profilo Calcolato: **{lab_cho_mean:.0f} g/h CHO** | **{lab_fat_mean:.0f} g/h FAT**")
+                # Creazione Dizionario Curva
+                metabolic_curve = {
+                    'z2': {'hr': z2_hr, 'cho': z2_cho, 'fat': z2_fat},
+                    'z3': {'hr': z3_hr, 'cho': z3_cho, 'fat': z3_fat},
+                    'z4': {'hr': z4_hr, 'cho': z4_cho, 'fat': z4_fat}
+                }
                 
-                # Salvataggio nello stato
                 st.session_state['use_lab_data'] = True
-                st.session_state['lab_cho_mean'] = lab_cho_mean
-                st.session_state['lab_fat_mean'] = lab_fat_mean
+                st.session_state['metabolic_curve'] = metabolic_curve
+                
+                # Grafico anteprima curva
+                df_curve = pd.DataFrame([
+                    {'FC': z2_hr, 'Consumo': z2_cho, 'Tipo': 'CHO'},
+                    {'FC': z3_hr, 'Consumo': z3_cho, 'Tipo': 'CHO'},
+                    {'FC': z4_hr, 'Consumo': z4_cho, 'Tipo': 'CHO'},
+                    {'FC': z2_hr, 'Consumo': z2_fat, 'Tipo': 'FAT'},
+                    {'FC': z3_hr, 'Consumo': z3_fat, 'Tipo': 'FAT'},
+                    {'FC': z4_hr, 'Consumo': z4_fat, 'Tipo': 'FAT'}
+                ])
+                c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
+                    x='FC', y='Consumo', color='Tipo'
+                ).properties(height=200, title="La tua Curva Metabolica")
+                st.altair_chart(c_chart, use_container_width=True)
+                
             else:
                 st.session_state['use_lab_data'] = False
+                st.session_state['metabolic_curve'] = None
 
         # Setup soggetto base
         with st.expander("Opzioni Fisiologiche Aggiuntive"):
@@ -432,3 +459,4 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
