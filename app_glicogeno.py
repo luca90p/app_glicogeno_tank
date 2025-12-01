@@ -289,7 +289,6 @@ def calculate_tank(subject: Subject):
         "muscle_source_note": muscle_source_note
     }
 
-# Aggiornato per accettare il mix type
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: ChoMixType):
     # Base rate per GLUCOSIO
     # Iniziamo con la stima individuale (Podlogar/Body Size/Potenza)
@@ -367,18 +366,21 @@ def simulate_metabolism(
         
         avg_hr = activity_params['avg_hr']
         threshold_hr = activity_params['threshold_hr']
-        intensity_factor = avg_hr / threshold_hr if threshold_hr > 0 else 0.7
+        # IF basato su HR/Soglia
+        intensity_factor = avg_hr / threshold_hr if threshold_hr > 0 else 0.7 
         
         ftp_watts = (subject_obj.vo2max_absolute_l_min * 1000) / 12 
         
     elif mode == 'other':
         avg_hr = activity_params['avg_hr']
         max_hr = activity_params['max_hr']
-        hr_pct = avg_hr / max_hr if max_hr > 0 else 0.7
-        vo2_operating = subject_obj.vo2max_absolute_l_min * hr_pct
+        # IF basato su HR/Max
+        intensity_factor = avg_hr / max_hr if max_hr > 0 else 0.7
+        
+        vo2_operating = subject_obj.vo2max_absolute_l_min * intensity_factor
         kcal_per_min_base = vo2_operating * 5.0 
         threshold_proxy = max_hr * 0.85
-        intensity_factor = avg_hr / threshold_proxy 
+        
         ftp_watts = 200 
         
     is_lab_data = activity_params.get('use_lab_data', False)
@@ -709,14 +711,16 @@ with tab1:
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
-                thr_hr_input = c_thr.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
+                # MODIFICA: Uso THR come dato primario per IF nella corsa
+                thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
-                st.caption("Questi dati sono usati per calcolare l'Intensity Factor (IF).")
+                st.caption(f"L'Intensity Factor (IF) sarà calcolato su FC media / THR ({thr_hr_input} BPM).")
                 
             else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
                 c_thr, c_max = st.columns(2)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
-                st.caption("Per sport multidisciplinari, l'IF si basa sulla Frequenza Cardiaca Massima.")
+                thr_hr_input = c_thr.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1) # Aggiungo soglia aerobica
+                st.caption("Per sport multidisciplinari, l'IF si basa sulla Frequenza Cardiaca Media rispetto alle tue soglie.")
         
         # Salvataggio delle soglie nello stato di sessione per il Tab 3
         st.session_state['ftp_watts_input'] = ftp_watts_input
