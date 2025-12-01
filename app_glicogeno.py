@@ -329,7 +329,7 @@ with tab2:
             st.write(f"- Fegato: **{int(final_tank['liver_glycogen_g'])} g**")
 
 # =============================================================================
-# TAB 3: SIMULAZIONE GARA
+# TAB 3: SIMULAZIONE GARA & STRATEGIA
 # =============================================================================
 with tab3:
     if 'tank_data' not in st.session_state:
@@ -342,75 +342,100 @@ with tab3:
     st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
     
     c_s1, c_s2, c_s3 = st.columns(3)
+    
+    # --- 1. PROFILO SFORZO ---
     with c_s1:
         st.markdown("### 1. Profilo Sforzo")
         duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
         uploaded_file = st.file_uploader("Importa File (.zwo)", type=['zwo'])
         intensity_series = None
+        
         if uploaded_file:
+            # Recupera le soglie corrette dal Tab 1
             target_thresh_hr = st.session_state['thr_hr_input']
             target_ftp = st.session_state['ftp_watts_input']
+            
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
             if series:
                 intensity_series = series
                 duration = dur_calc
-                st.success(f"File: {dur_calc} min.")
+                st.success(f"File importato: {dur_calc} min.")
+        
+        # Input Manuale (se non c'è file)
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
             params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': st.session_state['ftp_watts_input'], 'efficiency': 22.0}
+            # Per il ciclismo, usiamo la potenza media come proxy di intensità se non c'è serie
+            avg_hr_proxy = (val / st.session_state['ftp_watts_input']) * 170 # Stima FC da Watt
+            params['avg_hr'] = avg_hr_proxy 
         else:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': st.session_state['thr_hr_input']}
             
+    # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
         cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
         cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
+    # --- 3. FISIOLOGIA (Curve Metaboliche) ---
     with c_s3:
-        st.markdown("### 3. Fisiologia")
+        st.markdown("### 3. Motore Metabolico")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
+        # Recupero la Curva dal Session State (definita nel Tab 1)
+        curve_data = st.session_state.get('metabolic_curve', None)
+        use_lab_active = st.session_state.get('use_lab_data', False)
         
-        # --- VERIFICA SE USARE DATI LAB (DAL TAB 1) ---
-        use_lab_config = st.session_state.get('use_lab_data', False)
-        
-        if use_lab_config:
-            st.success("✅ Profilo Metabolico Personalizzato Attivo")
-            lab_cho_val = st.session_state.get('lab_cho_mean', 0)
-            lab_fat_val = st.session_state.get('lab_fat_mean', 0)
-            st.caption(f"Uso: CHO {lab_cho_val:.0f} g/h | FAT {lab_fat_val:.0f} g/h")
+        if use_lab_active and curve_data:
+            st.success("✅ **Curva Metabolica Attiva**")
+            st.caption("Il simulatore userà i dati reali del tuo test per calcolare i consumi a ogni variazione di intensità.")
             
-            params['use_lab_data'] = True
-            params['lab_cho_g_h'] = lab_cho_val
-            params['lab_fat_g_h'] = lab_fat_val
-            
-            # Parametri standard nascosti
+            # Parametri cinetici standard nascosti (o fissi) quando si usa il Lab
             tau = 20
             risk_thresh = 30
         else:
-            st.info("Uso modello teorico (nessun dato Lab)")
-            params['use_lab_data'] = False
+            st.info("Uso modello teorico standard.")
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
-    df_sim, stats_sim = logic.simulate_metabolism(tank, duration, cho_h, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
+    # --- ESECUZIONE SIMULAZIONI ---
+    
+    # 1. Scenario A: Strategia Integrata
+    df_sim, stats_sim = logic.simulate_metabolism(
+        tank, duration, cho_h, cho_unit, 70, tau, subj, params, 
+        mix_type_input=mix_sel, 
+        intensity_series=intensity_series,
+        metabolic_curve=curve_data # <--- QUI PASSIAMO LA CURVA
+    )
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
-    df_no, _ = logic.simulate_metabolism(tank, duration, 0, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
+    # 2. Scenario B: Riferimento (Digiuno)
+    df_no, _ = logic.simulate_metabolism(
+        tank, duration, 0, cho_unit, 70, tau, subj, params, 
+        mix_type_input=mix_sel, 
+        intensity_series=intensity_series,
+        metabolic_curve=curve_data # <--- QUI PASSIAMO LA CURVA
+    )
     df_no['Scenario'] = 'Riferimento (Digiuno)'
     df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
+    # --- DASHBOARD RISULTATI ---
     st.markdown("---")
+    
+    # ROW 1: BILANCIO
     r1_c1, r1_c2 = st.columns([2, 1])
     with r1_c1:
         st.markdown("#### Bilancio Energetico")
+        # Grafico Stacked Area
         df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
         order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
         colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
+        
         chart_stack = alt.Chart(df_melt).mark_area().encode(
-            x='Time (min)', y='g/h', color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
+            x='Time (min)', y='g/h', 
+            color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
             tooltip=['Time (min)', 'Fonte', 'g/h']
         ).properties(height=350)
         st.altair_chart(chart_stack, use_container_width=True)
@@ -421,21 +446,24 @@ with tab3:
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
         
-        if use_lab_config:
-            st.metric("Fonte Dati", "Test Lab (Media)")
+        if use_lab_active:
+            st.metric("Fonte Dati", "Test Lab (Interpolato)")
         else:
             st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
             
         st.metric("CHO Ossidati", f"{int(stats_sim['total_exo_used'] + stats_sim['total_muscle_used'] + stats_sim['total_liver_used'])} g")
         st.metric("FAT Ossidati", f"{int(stats_sim['fat_total_g'])} g")
 
+    # ROW 2: RISCHI
     st.markdown("---")
     r2_c1, r2_c2 = st.columns(2)
+    
     with r2_c1:
         st.markdown("#### Zone di Rischio")
         chart_strat = create_risk_zone_chart(df_sim, "Scenario: Con Integrazione", start_total)
         chart_fast = create_risk_zone_chart(df_no, "Scenario: Digiuno", start_total)
         st.altair_chart(alt.vconcat(chart_strat, chart_fast), use_container_width=True)
+        
     with r2_c2:
         st.markdown("#### Analisi Gut Load")
         base = alt.Chart(df_sim).encode(x='Time (min)')
@@ -444,6 +472,7 @@ with tab3:
         chart_gi = alt.layer(area_gut, rule).properties(height=350)
         st.altair_chart(chart_gi, use_container_width=True)
 
+    # TABELLA
     st.markdown("---")
     st.markdown("### 📋 Cronotabella Operativa")
     if cho_h > 0 and cho_unit > 0:
@@ -459,4 +488,5 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
 
