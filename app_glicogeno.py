@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from dataclasses import dataclass, replace # Importa replace
+from dataclasses import dataclass, replace 
 from enum import Enum
 import math
 import xml.etree.ElementTree as ET
@@ -728,7 +728,7 @@ def main():
                 steps_m1, min_act_m1, steps_m2, min_act_m2
             )
             
-            # Update Subject con copia corretta
+            # Update Subject con copia corretta usando replace
             subj_current = replace(subj)
             subj_current.filling_factor = combined_filling
             subj_current.glucose_mg_dl = gluc_val
