@@ -549,7 +549,6 @@ def simulate_metabolism(
 # --- LOGICA DI PARSING ZWO ---
 
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
-    
     try:
         xml_content = uploaded_file.getvalue().decode('utf-8')
         root = ET.fromstring(xml_content)
@@ -567,7 +566,6 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
             st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per BICI. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
         elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
             st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per CORSA. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
-
     
     intensity_series = [] 
     total_duration_sec = 0
@@ -634,6 +632,125 @@ def calculate_zones_running_hr(thr):
         {"Zona": "Z5b - Capacità Aerobica", "Range %": "103 - 106% LTHR", "Valore": f"{int(thr*1.03)} - {int(thr*1.06)} bpm"},
         {"Zona": "Z5c - Potenza Anaerobica", "Range %": "> 106% LTHR", "Valore": f"> {int(thr*1.06)} bpm"}
     ]
+
+# --- FUNZIONE DI CALCOLO SETTIMANALE ---
+def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, subject_weight, vo2max):
+    
+    # Assunzioni di base per il calcolo semplificato
+    # Tasso basale fegato: 4 g/h -> 96 g/24h (approssimato a 100g se non si mangia)
+    LIVER_DRAIN_RATE = 4.0 
+    
+    # Efficienza di sintesi (costo metabolico dello stoccaggio): ~5-7% di perdita
+    SYNTHESIS_EFFICIENCY = 0.95
+    
+    # Limite di assorbimento epatico orario (approx): 
+    # In realtà il fegato si riempie post-prandiale. Semplifichiamo: refill prioritario al fegato
+    
+    daily_status = []
+    
+    current_muscle = initial_muscle
+    current_liver = initial_liver
+    
+    days = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+    
+    for i, day in enumerate(days):
+        day_data = weekly_schedule[i]
+        
+        activity_type = day_data['activity']
+        duration = day_data['duration']
+        intensity = day_data['intensity'] # "Bassa", "Media", "Alta", "Riposo"
+        cho_in = day_data['cho_in']
+        
+        # 1. Deplezione Basale Fegato (24h)
+        # Assumiamo che parte dei CHO ingeriti copra direttamente questo fabbisogno se mangiati
+        # Ma per il bilancio, togliamo il fisso e poi aggiungiamo l'input
+        daily_liver_drain = 24 * LIVER_DRAIN_RATE
+        
+        # 2. Deplezione da Esercizio
+        exercise_drain_muscle = 0
+        exercise_drain_liver = 0
+        
+        if activity_type != "Riposo" and duration > 0:
+            # Stima costo energetico (Kcal/min)
+            # Usa una formula generica basata su peso e intensità relativa
+            # Bassa: ~50% VO2max, Media: ~70%, Alta: ~85%
+            
+            if intensity == "Bassa (Z1-Z2)":
+                rel_intensity = 0.5
+                cho_pct = 0.2 # 20% CHO
+            elif intensity == "Media (Z3)":
+                rel_intensity = 0.7
+                cho_pct = 0.6 # 60% CHO
+            else: # Alta (Z4+)
+                rel_intensity = 0.85
+                cho_pct = 0.9 # 90% CHO
+                
+            # Kcal/min approx = L O2/min * 5 kcal/L
+            # L O2/min = VO2max * rel_intensity * weight / 1000
+            kcal_min = (vo2max * rel_intensity * subject_weight / 1000) * 5.0
+            total_kcal = kcal_min * duration
+            total_cho_burned = (total_kcal * cho_pct) / 4.0 # 4 kcal/g CHO
+            
+            # Ripartizione consumo (Muscolo vs Fegato)
+            # Il fegato contribuisce per circa 10-20% in condizioni normali, di più se bassa intensità
+            liver_fraction = 0.15 
+            
+            exercise_drain_liver = total_cho_burned * liver_fraction
+            exercise_drain_muscle = total_cho_burned * (1 - liver_fraction)
+            
+        # 3. Calcolo Bilancio Giornaliero
+        
+        # Deplezione
+        used_liver = daily_liver_drain + exercise_drain_liver
+        used_muscle = exercise_drain_muscle
+        
+        # Stato pre-pasto (teorico, per vedere se si va in rosso durante l'attività o la notte)
+        # Qui facciamo un bilancio netto a fine giornata
+        
+        current_liver -= used_liver
+        current_muscle -= used_muscle
+        
+        # Check "Bonk" (se si va sotto zero prima del refill, è un problema, ma nel bilancio daily 
+        # assumiamo che si mangi durante il giorno. Se il netto è negativo, scendiamo)
+        
+        # Refill (Priorità Fegato -> Muscolo)
+        # Assumiamo che l'ingestione avvenga durante la giornata
+        
+        effective_cho_in = cho_in * SYNTHESIS_EFFICIENCY
+        
+        # Riempi Fegato
+        liver_deficit = max_liver - current_liver
+        
+        if effective_cho_in >= liver_deficit:
+            current_liver = max_liver # Pieno
+            remaining_cho = effective_cho_in - liver_deficit
+        else:
+            current_liver += effective_cho_in
+            remaining_cho = 0
+            
+        # Riempi Muscolo
+        current_muscle += remaining_cho
+        
+        # Clamp ai massimi
+        if current_muscle > max_muscle: current_muscle = max_muscle
+        if current_liver > max_liver: current_liver = max_liver # Già fatto, ma per sicurezza
+        
+        # Clamp ai minimi (non si può avere glicogeno negativo, significa catabolismo/fatica estrema)
+        # Se va sotto zero, rimane a zero (stato di deplezione totale)
+        if current_muscle < 0: current_muscle = 0
+        if current_liver < 0: current_liver = 0
+            
+        daily_status.append({
+            "Giorno": day,
+            "Glicogeno Muscolare": round(current_muscle),
+            "Glicogeno Epatico": round(current_liver),
+            "Totale": round(current_muscle + current_liver),
+            "Allenamento": f"{activity_type} ({duration} min)" if activity_type != "Riposo" else "Riposo",
+            "CHO In": cho_in
+        })
+        
+    return pd.DataFrame(daily_status)
+
 
 # --- 3. INTERFACCIA UTENTE ---
 
@@ -1372,6 +1489,9 @@ with tab3:
 
         h_cm = subj.height_cm 
         
+        # Inserisco l'IF di riferimento nell'act_params
+        act_params['intensity_factor'] = intensity_factor_reference
+        
         df_sim, stats = simulate_metabolism(
             tank_data, duration, carb_intake, cho_per_unit, crossover, 
             tau_absorption_input, subj, act_params,
@@ -1723,12 +1843,55 @@ with tab3:
     # --- TAB 4: DIARIO SETTIMANALE (SCHELETRO) ---
     with tab4:
         st.subheader("Diario Settimanale del Glicogeno")
-        st.info("Funzionalità in sviluppo: Permetterà di tracciare il bilancio del glicogeno su 7 giorni.")
+        st.info("Modella la tua settimana per vedere come il glicogeno fluttua in base all'allenamento e alla dieta.")
         
-        # Esempio di struttura dati per un giorno
-        with st.expander("Lunedì"):
-            c1, c2 = st.columns(2)
-            c1.selectbox("Allenamento Lun", ["Riposo", "Corsa Z2 (60')", "Bici Z3 (90')"], key="mon_train")
-            c2.number_input("CHO Assunti (g) Lun", 0, 1000, 300, key="mon_cho")
+        # Struttura Dati Settimanale (Inizializzazione)
+        days = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+        weekly_schedule = []
+        
+        # Input per ogni giorno
+        for day in days:
+            with st.expander(f"{day}"):
+                c1, c2, c3, c4 = st.columns(4)
+                activity = c1.selectbox("Attività", ["Riposo", "Corsa", "Bici", "Altro"], key=f"{day}_act")
+                duration = c2.number_input("Durata (min)", 0, 300, 0, key=f"{day}_dur") if activity != "Riposo" else 0
+                intensity = c3.selectbox("Intensità", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key=f"{day}_int") if activity != "Riposo" else "Riposo"
+                cho_in = c4.number_input("CHO Assunti (g)", 0, 1500, 300, key=f"{day}_cho")
+                
+                weekly_schedule.append({
+                    "day": day, "activity": activity, "duration": duration, 
+                    "intensity": intensity, "cho_in": cho_in
+                })
+        
+        # Calcolo e Visualizzazione
+        if st.button("Calcola Trend Settimanale"):
+            # Recupera i dati iniziali dal Tab 1 (Tank pieno come start, o attuale?)
+            # Assumiamo start da Tank Pieno o da valori di default se Tab 1 non compilato
+            if 'base_tank_data' in st.session_state:
+                initial_muscle = st.session_state['base_tank_data']['max_capacity_g'] - 100 # Start un po' meno del max
+                initial_liver = 100
+                max_muscle = st.session_state['base_tank_data']['max_capacity_g'] - 100
+                max_liver = 120 # Approx
+                weight = st.session_state['base_subject_struct'].weight_kg
+                vo2max = st.session_state['base_subject_struct'].vo2max_absolute_l_min * 1000 / weight 
+            else:
+                initial_muscle = 500
+                initial_liver = 100
+                max_muscle = 600
+                max_liver = 120
+                weight = 74
+                vo2max = 60
+
+            df_weekly = calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, weight, vo2max)
             
-        st.caption("Il grafico del trend settimanale apparirà qui.")
+            st.markdown("### 📉 Andamento Riserve Glicogeno (7 Giorni)")
+            
+            # Grafico Altair
+            chart_weekly = alt.Chart(df_weekly).mark_line(point=True).encode(
+                x=alt.X('Giorno', sort=days),
+                y=alt.Y('Totale', title='Glicogeno Totale (g)'),
+                tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico', 'Allenamento', 'CHO In']
+            ).interactive()
+            
+            st.altair_chart(chart_weekly, use_container_width=True)
+            st.table(df_weekly)
