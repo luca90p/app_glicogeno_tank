@@ -34,9 +34,11 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
         return [], 0, 0, 0
 
     zwo_sport_tag = root.findtext('sportType')
+    
     if zwo_sport_tag:
+        # Nota: usiamo sport_type.value o sport_type per confronti a seconda dell'enum
         if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
-            st.warning(f⚠️ File per BICI ma sport selezionato: {sport_type.label}")
+            st.warning(f"⚠️ File per BICI ma sport selezionato: {sport_type.label}")
         elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
             st.warning(f"⚠️ File per CORSA ma sport selezionato: {sport_type.label}")
 
@@ -44,10 +46,12 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     total_duration_sec = 0
     total_weighted_if = 0
     
+    # Trova tutti gli elementi SteadyState nel file XML
     for steady_state in root.findall('.//SteadyState'):
         try:
             duration_sec = int(steady_state.get('Duration'))
             power_ratio = float(steady_state.get('Power'))
+            
             duration_min_segment = math.ceil(duration_sec / 60)
             intensity_factor = power_ratio 
             
@@ -56,22 +60,27 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
             
             total_duration_sec += duration_sec
             total_weighted_if += intensity_factor * (duration_sec / 60) 
-        except:
+
+        except Exception:
             continue
 
     total_duration_min = math.ceil(total_duration_sec / 60)
     
+    avg_power = 0
+    avg_hr = 0
+
     if total_duration_min > 0:
         avg_if = total_weighted_if / total_duration_min
+        
         if sport_type == SportType.CYCLING:
             avg_power = avg_if * ftp_watts
-            avg_hr = 0
         elif sport_type == SportType.RUNNING:
             avg_hr = avg_if * thr_hr
-            avg_power = 0
         else: 
-            avg_hr = avg_if * st.session_state.get('max_hr_input', 185) * 0.85 
-            avg_power = 0
+            # Fallback per altri sport usando input session state se esiste, altrimenti default
+            max_hr_ref = st.session_state.get('max_hr_input', 185)
+            avg_hr = avg_if * max_hr_ref * 0.85 
+            
         return intensity_series, total_duration_min, avg_power, avg_hr
     
     return [], 0, 0, 0
