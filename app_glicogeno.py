@@ -312,7 +312,6 @@ with tab2:
                 tooltip=['Giorno', 'Totale', 'Muscolare', 'Epatico', 'Input CHO', alt.Tooltip('IF', format='.2f')]
             ).properties(height=300, title="Evoluzione Riserve")
             st.altair_chart(chart, use_container_width=True)
-            
         with r2:
             final_pct = final_tank['fill_pct']
             st.metric("Riempimento Gara", f"{final_pct:.1f}%", delta=f"{int(final_tank['actual_available_g'])}g Totali")
@@ -337,7 +336,6 @@ with tab3:
     st.markdown("### 🛠️ Modalità Test / Override")
     enable_override = st.checkbox("Abilita Override Livello Iniziale (Bypassa Tab 2)", value=False)
     
-    # FIX: Definisco start_total e tank indipendentemente dal path
     if enable_override:
         max_cap = tank_base['max_capacity_g']
         st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
@@ -358,8 +356,6 @@ with tab3:
         tank = tank_base
         start_total = tank['actual_available_g']
         st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
-    
-    # --- FINE OVERRIDE ---
     
     c_s1, c_s2, c_s3 = st.columns(3)
     
@@ -481,7 +477,6 @@ with tab3:
     with r1_c2:
         st.markdown("#### KPI")
         fin_gly = stats_sim['final_glycogen']
-        # Calcolo delta usando start_total (ora sempre definito)
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
         
@@ -511,6 +506,38 @@ with tab3:
         rule = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
         chart_gi = alt.layer(area_gut, rule).properties(height=350)
         st.altair_chart(chart_gi, use_container_width=True)
+        
+    # --- REINTEGRAZIONE CALCOLO BONK (Mancante) ---
+    st.markdown("---")
+    st.subheader("Analisi Criticità & Timing")
+    
+    liver_bonk = df_sim[df_sim['Residuo Epatico'] <= 0]
+    muscle_bonk = df_sim[df_sim['Residuo Muscolare'] <= 20]
+    
+    bonk_time = None
+    cause = None
+    
+    if not liver_bonk.empty:
+        bonk_time = liver_bonk['Time (min)'].iloc[0]
+        cause = "Esaurimento Epatico (Ipoglicemia)"
+    if not muscle_bonk.empty:
+        t_muscle = muscle_bonk['Time (min)'].iloc[0]
+        if bonk_time is None or t_muscle < bonk_time:
+            bonk_time = t_muscle
+            cause = "Esaurimento Muscolare (Gambe Vuote)"
+            
+    c_b1, c_b2 = st.columns([2, 1])
+    with c_b1:
+        if bonk_time:
+            st.error(f"⚠️ **CRITICITÀ RILEVATA AL MINUTO {bonk_time}**")
+            st.write(f"Causa Primaria: **{cause}**")
+        else:
+            st.success("✅ **STRATEGIA SOSTENIBILE**")
+    with c_b2:
+        if bonk_time:
+             st.metric("Tempo Limite", f"{bonk_time} min", delta="Bonk!", delta_color="inverse")
+        else:
+             st.metric("Buffer Energetico", "Sicuro")
 
     # TABELLA
     st.markdown("---")
