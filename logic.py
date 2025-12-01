@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
-from data_models import Subject, Sex, ChoMixType
+from data_models import Subject, Sex, ChoMixType, FatigueState
 
 def get_concentration_from_vo2max(vo2_max):
     """Stima la concentrazione di glicogeno muscolare (g/kg) basandosi sul VO2max."""
@@ -37,7 +37,6 @@ def calculate_filling_factor_from_diet(weight_kg, cho_d1, cho_d2, s_fatigue, s_s
     cho_d1_gk = max(cho_d1, 1.0) / weight_kg
     cho_d2_gk = max(cho_d2, 1.0) / weight_kg
     
-    # Peso maggiore al giorno -1 (70%) rispetto al giorno -2 (30%)
     avg_cho_gk = (cho_d1_gk * 0.7) + (cho_d2_gk * 0.3)
     
     if avg_cho_gk >= CHO_MAX_GK:
@@ -57,10 +56,7 @@ def calculate_filling_factor_from_diet(weight_kg, cho_d1, cho_d2, s_fatigue, s_s
     return final_filling, diet_factor, avg_cho_gk, cho_d1_gk, cho_d2_gk
 
 def calculate_tank(subject: Subject):
-    """
-    Calcola la capacità totale di stoccaggio (Muscolo + Fegato).
-    Utilizza la massa muscolare attiva specifica per lo sport.
-    """
+    """Calcola la capacità totale di stoccaggio (Muscolo + Fegato)."""
     if subject.muscle_mass_kg is not None and subject.muscle_mass_kg > 0:
         total_muscle = subject.muscle_mass_kg
     else:
@@ -68,8 +64,6 @@ def calculate_tank(subject: Subject):
         total_muscle = lbm * subject.muscle_fraction
 
     active_muscle = total_muscle * subject.sport.val
-    
-    # Bonus creatina (+10% volume cellulare stimato)
     creatine_multiplier = 1.10 if subject.uses_creatine else 1.0
     
     base_muscle_glycogen = active_muscle * subject.glycogen_conc_g_kg
@@ -78,21 +72,17 @@ def calculate_tank(subject: Subject):
     final_filling_factor = subject.filling_factor * subject.menstrual_phase.factor
     current_muscle_glycogen = base_muscle_glycogen * creatine_multiplier * final_filling_factor
     
-    # Limite fisiologico massimo (saturazione)
     max_physiological_limit = active_muscle * 35.0
     if current_muscle_glycogen > max_physiological_limit:
         current_muscle_glycogen = max_physiological_limit
     
-    # Stima glicogeno epatico
     liver_fill_factor = 1.0
     if subject.filling_factor <= 0.6: 
         liver_fill_factor = 0.6
         
     if subject.glucose_mg_dl is not None:
-        if subject.glucose_mg_dl < 70:
-            liver_fill_factor = 0.2
-        elif subject.glucose_mg_dl < 85:
-            liver_fill_factor = min(liver_fill_factor, 0.5)
+        if subject.glucose_mg_dl < 70: liver_fill_factor = 0.2
+        elif subject.glucose_mg_dl < 85: liver_fill_factor = min(liver_fill_factor, 0.5)
     
     current_liver_glycogen = subject.liver_glycogen_g * liver_fill_factor
     total_actual_glycogen = current_muscle_glycogen + current_liver_glycogen
@@ -108,7 +98,7 @@ def calculate_tank(subject: Subject):
     }
 
 def calculate_rer_polynomial(intensity_factor):
-    """Polinomio di sesto grado per stimare il RER in funzione dell'Intensità."""
+    """Stima RER basato sull'intensità."""
     if_val = intensity_factor
     rer = (-0.000000149 * (if_val**6) + 141.538462237 * (if_val**5) - 565.128206259 * (if_val**4) + 
            890.333333976 * (if_val**3) - 691.67948706 * (if_val**2) + 265.460857558 * if_val - 39.525121144)
@@ -117,23 +107,18 @@ def calculate_rer_polynomial(intensity_factor):
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         mix_type_input=ChoMixType.GLUCOSE_ONLY, intensity_series=None):
-    """
-    Simula il metabolismo minuto per minuto.
-    Modella deplezione glicogeno muscolare/epatico, ossidazione esogena e carico intestinale.
-    """
+    """Simula il metabolismo minuto per minuto."""
     results = []
     initial_muscle = subject_data['muscle_glycogen_g']
     current_muscle = initial_muscle
     current_liver = subject_data['liver_glycogen_g']
     
-    # Parametri attività
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
     avg_power = activity_params.get('avg_watts', 200)
     ftp_watts = activity_params.get('ftp_watts', 250) 
     intensity_factor_reference = activity_params.get('intensity_factor', 0.8)
     
-    # Calcolo base domanda energetica (kcal/min)
     if mode == 'cycling':
         kcal_per_min_base = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
     elif mode == 'running':
@@ -148,17 +133,15 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     lab_cho_rate = activity_params.get('lab_cho_g_h', 0) / 60.0
     lab_fat_rate = activity_params.get('lab_fat_g_h', 0) / 60.0
     
-    # Stima limite ossidazione esogena
     base_rate = 0.8 
     if subject_obj.height_cm > 170: base_rate += (subject_obj.height_cm - 170) * 0.015
     if ftp_watts > 200: base_rate += (ftp_watts - 200) * 0.0015
     max_exo_rate_g_min = min(base_rate * mix_type_input.ox_factor, mix_type_input.max_rate_gh / 60)
 
-    # Inizializzazione variabili accumulo
     total_fat_burned = 0.0
     gut_accumulation = 0.0
     current_exo_ox_rate = 0.0 
-    alpha = 1 - np.exp(-1.0 / tau_absorption) # Costante di assorbimento
+    alpha = 1 - np.exp(-1.0 / tau_absorption)
     
     total_muscle_used = 0.0
     total_liver_used = 0.0
@@ -166,20 +149,16 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     cumulative_intake = 0.0
     cumulative_ox = 0.0
     
-    # Gestione intake discreto (assunzione periodica)
     units_per_hour = constant_carb_intake_g_h / cho_per_unit_g if cho_per_unit_g > 0 else 0
     intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0 else duration_min + 1
     
     for t in range(int(duration_min) + 1):
-        # Determina IF istantaneo
         current_if = intensity_factor_reference
         if intensity_series is not None and t < len(intensity_series):
             current_if = intensity_series[t]
         
-        # Calcolo kcal demand istantaneo
         if mode == 'cycling':
             instant_power = current_if * ftp_watts
-            # Drift di efficienza dopo 60 min
             curr_eff = max(15.0, gross_efficiency - ((t - 60) * 0.02)) if t > 60 else gross_efficiency
             current_kcal_demand = (instant_power * 60) / 4184 / (curr_eff / 100.0)
         else: 
@@ -187,18 +166,14 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             demand_scaling = current_if / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             current_kcal_demand = kcal_per_min_base * drift * demand_scaling
         
-        # Gestione Assunzione CHO
         instant_input_g = 0.0 
         if constant_carb_intake_g_h > 0 and intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
             instant_input_g = cho_per_unit_g 
         
-        # Dinamica Ossidazione Esogena
         target_exo = max_exo_rate_g_min * oxidation_efficiency_input
         if t > 0:
-            if constant_carb_intake_g_h == 0: 
-                current_exo_ox_rate *= (1 - alpha) 
-            else: 
-                current_exo_ox_rate += alpha * (target_exo - current_exo_ox_rate)
+            if constant_carb_intake_g_h == 0: current_exo_ox_rate *= (1 - alpha) 
+            else: current_exo_ox_rate += alpha * (target_exo - current_exo_ox_rate)
             current_exo_ox_rate = max(0.0, current_exo_ox_rate)
         
         if t > 0:
@@ -207,17 +182,15 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             cumulative_intake += instant_input_g 
             cumulative_ox += current_exo_ox_rate
         
-        # Calcolo Substrati (CHO vs FAT)
         if is_lab_data:
             total_cho_demand = lab_cho_rate * (1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0)
             kcal_cho_demand = total_cho_demand * 4.1
             cho_ratio = total_cho_demand / (total_cho_demand + (lab_fat_rate/60)) if (total_cho_demand + lab_fat_rate) > 0 else 0
-            rer = 0.85 # Dummy per lab
+            rer = 0.85
         else:
             eff_if_rer = max(0.3, current_if + ((75.0 - crossover_pct) / 100.0))
             rer = calculate_rer_polynomial(eff_if_rer)
             base_cho_ratio = max(0.0, min(1.0, (rer - 0.70) * 3.45))
-            # Shift metabolico (riduzione efficienza glicolitica nel tempo)
             if current_if < 0.85 and t > 60:
                 base_cho_ratio = max(0.05, base_cho_ratio - (0.05 * (((t - 60) / 60.0) ** 1.2)))
             cho_ratio = base_cho_ratio
@@ -225,7 +198,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         
         total_cho_g_min = kcal_cho_demand / 4.1
         
-        # Ripartizione CHO (Muscolo vs Sangue/Fegato vs Esogeno)
         muscle_fill_state = current_muscle / initial_muscle if initial_muscle > 0 else 0
         muscle_contrib = math.pow(muscle_fill_state, 0.6) 
         muscle_usage = total_cho_g_min * muscle_contrib
@@ -233,10 +205,9 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         
         blood_demand = total_cho_g_min - muscle_usage
         from_exogenous = min(blood_demand, current_exo_ox_rate)
-        from_liver = min(blood_demand - from_exogenous, 1.2) # Max output epatico ~1.2 g/min
+        from_liver = min(blood_demand - from_exogenous, 1.2)
         if current_liver <= 0: from_liver = 0
         
-        # Aggiornamento serbatoi
         if t > 0:
             current_muscle = max(0, current_muscle - muscle_usage)
             current_liver = max(0, current_liver - from_liver)
@@ -248,7 +219,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             total_liver_used += from_liver
             total_exo_used += from_exogenous
             
-        # Logging risultati puntuali
         g_fat = (current_kcal_demand * (1.0 - cho_ratio) / 9.0) if not is_lab_data else lab_fat_rate/60
         
         results.append({
@@ -277,158 +247,73 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     }
     return pd.DataFrame(results), stats
 
-def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, subject_weight, vo2max):
-    """Calcola il bilancio settimanale del glicogeno."""
-    LIVER_DRAIN_RATE = 4.5 
-    DAILY_NEAT_CHO = 1.2 * subject_weight
-    SYNTHESIS_EFFICIENCY = 0.95
-    
-    daily_status = []
-    current_muscle = initial_muscle
-    current_liver = initial_liver
-    
-    for day_data in weekly_schedule:
-        activity_type = day_data['activity']
-        duration = day_data['duration']
-        cho_in = day_data['cho_in']
-        
-        total_basal_drain = (24 * LIVER_DRAIN_RATE) + DAILY_NEAT_CHO
-        exercise_drain_muscle = 0
-        exercise_drain_liver = 0
-        
-        if activity_type != "Riposo" and duration > 0:
-            intensity = day_data['intensity']
-            if intensity == "Bassa (Z1-Z2)": rel_intensity, cho_pct = 0.5, 0.25 
-            elif intensity == "Media (Z3)": rel_intensity, cho_pct = 0.7, 0.65 
-            else: rel_intensity, cho_pct = 0.85, 0.95 
-                
-            kcal_min = (vo2max * rel_intensity * subject_weight / 1000) * 5.0
-            total_cho_burned = (kcal_min * duration * cho_pct) / 4.0 
-            exercise_drain_liver = total_cho_burned * 0.15 
-            exercise_drain_muscle = total_cho_burned * 0.85
-            
-        effective_input = cho_in * SYNTHESIS_EFFICIENCY
-        drain_liver_total = total_basal_drain + exercise_drain_liver
-        
-        if effective_input >= drain_liver_total:
-            surplus = effective_input - drain_liver_total
-            if surplus >= (max_liver - current_liver):
-                current_liver = max_liver
-                surplus_for_muscle = surplus - (max_liver - current_liver)
-            else:
-                current_liver += surplus
-                surplus_for_muscle = 0
-        else:
-            current_liver -= (drain_liver_total - effective_input)
-            surplus_for_muscle = 0 
-            
-        current_muscle = min(max_muscle, max(0, current_muscle - exercise_drain_muscle + surplus_for_muscle))
-        current_liver = min(max_liver, max(0, current_liver))
-            
-        daily_status.append({
-            "Giorno": day_data['day'],
-            "Totale": round(current_muscle + current_liver),
-            "Glicogeno Muscolare": round(current_muscle),
-            "Glicogeno Epatico": round(current_liver)
-        })
-    return pd.DataFrame(daily_status)
-    
+# --- NUOVA FUNZIONE PER IL TAB 2 ---
 def calculate_tapering_trajectory(subject, days_data):
     """
-    Simula l'andamento del glicogeno giorno per giorno (Tapering).
-    Considera: Dieta, Attività, Intensità e Qualità del Sonno (che influenza la resintesi).
+    Simula l'andamento del glicogeno giorno per giorno.
+    Considera: Dieta, Attività, Intensità e Qualità del Sonno.
     """
-    # Costanti fisiologiche
-    LIVER_DRAIN_RATE_GH = 4.5 # g/h consumati dal fegato a riposo
-    DAILY_NEAT_CHO = 1.0 * subject.weight_kg # Consumo basale non sportivo
+    LIVER_DRAIN_RATE_GH = 4.5 
+    DAILY_NEAT_CHO = 1.0 * subject.weight_kg 
     
-    # Capacità massime (Target)
     tank = calculate_tank(subject)
-    MAX_MUSCLE = tank['max_capacity_g'] - 120 # Approssimazione: togliamo la quota epatica dal totale teorico
+    MAX_MUSCLE = tank['max_capacity_g'] - 120 
     MAX_LIVER = 120.0
     
-    # Stato Iniziale (Start of Tapering: -7 Giorni)
-    # Assumiamo che l'atleta arrivi da un blocco di carico, quindi parzialmente depleto
     current_muscle = MAX_MUSCLE * 0.55 
     current_liver = MAX_LIVER * 0.50
     
     trajectory = []
     
     for day in days_data:
-        # 1. Calcolo Consumo Energetico Attività
         duration = day['duration']
         intensity_zone = day['intensity']
         cho_in = day['cho_in']
-        sleep_factor = day['sleep_factor'] # 1.0 (Good), 0.95 (Avg), 0.85 (Poor)
+        sleep_factor = day['sleep_factor']
         
-        # Stima consumo attività
         exercise_drain_muscle = 0
         exercise_drain_liver = 0
         
         if duration > 0:
-            # Moltiplicatori basati su intensità (Z1->Z5)
-            # Stima VO2 relativo (ml/kg/min) in base alla zona
             max_vo2 = (subject.vo2max_absolute_l_min * 1000) / subject.weight_kg
-            
             if intensity_zone == "Riposo":
-                intensity_pct = 0.0
-                cho_ox_pct = 0.0
-            elif "Z1" in intensity_zone: # Z1-Z2
-                intensity_pct = 0.50
-                cho_ox_pct = 0.30
-            elif "Z3" in intensity_zone: # Z3
-                intensity_pct = 0.70
-                cho_ox_pct = 0.70
-            else: # Z4+
-                intensity_pct = 0.90
-                cho_ox_pct = 0.95
+                intensity_pct, cho_ox_pct = 0.0, 0.0
+            elif "Z1" in intensity_zone:
+                intensity_pct, cho_ox_pct = 0.50, 0.30
+            elif "Z3" in intensity_zone:
+                intensity_pct, cho_ox_pct = 0.70, 0.70
+            else:
+                intensity_pct, cho_ox_pct = 0.90, 0.95
             
             kcal_min = (max_vo2 * intensity_pct * subject.weight_kg / 1000) * 5.0
             total_kcal = kcal_min * duration
             total_cho_burned = (total_kcal * cho_ox_pct) / 4.0
             
-            # Ripartizione deplezione (più intenso = più muscolo)
             liver_ratio = 0.20 if intensity_pct < 0.6 else 0.10
             exercise_drain_liver = total_cho_burned * liver_ratio
             exercise_drain_muscle = total_cho_burned * (1 - liver_ratio)
 
-        # 2. Calcolo Consumo Basale (24h)
         daily_liver_drain = (LIVER_DRAIN_RATE_GH * 24) + DAILY_NEAT_CHO
-        
-        # 3. Resintesi (Input)
-        # Il sonno influenza l'efficienza di stoccaggio (sensibilità insulinica)
-        base_efficiency = 0.96 # Efficienza digestiva standard
+        base_efficiency = 0.96 
         synthesis_efficiency = base_efficiency * sleep_factor
-        
         effective_cho_available = cho_in * synthesis_efficiency
         
-        # 4. Bilancio Epatico (Priorità fisiologica: prima si riempie il fegato col pasto)
-        # Sottraiamo il consumo basale ed esercizio
         liver_net = effective_cho_available - daily_liver_drain - exercise_drain_liver
-        
         surplus_for_muscle = 0
         
         if liver_net >= 0:
-            # Abbiamo coperto il fabbisogno epatico
             space_in_liver = MAX_LIVER - current_liver
-            
             if liver_net >= space_in_liver:
                 current_liver = MAX_LIVER
                 surplus_for_muscle = liver_net - space_in_liver
             else:
                 current_liver += liver_net
-                surplus_for_muscle = 0
         else:
-            # Deficit epatico (intaccare riserve)
-            current_liver += liver_net # liver_net è negativo
+            current_liver += liver_net 
             if current_liver < 0: current_liver = 0
-            surplus_for_muscle = 0
             
-        # 5. Bilancio Muscolare
-        # Muscolo perde per esercizio e guadagna dal surplus
         current_muscle = current_muscle - exercise_drain_muscle + surplus_for_muscle
         
-        # Cap limits
         if current_muscle > MAX_MUSCLE: current_muscle = MAX_MUSCLE
         if current_muscle < 0: current_muscle = 0
         
@@ -438,13 +323,11 @@ def calculate_tapering_trajectory(subject, days_data):
             "Epatico": int(current_liver),
             "Totale": int(current_muscle + current_liver),
             "Pct": (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100,
-            "Input CHO": cho_in,
-            "Sleep Penalty": "Sì" if sleep_factor < 0.9 else "No"
+            "Input CHO": cho_in
         })
         
     final_state = trajectory[-1]
     
-    # Aggiorniamo la struttura del soggetto per il Tab 3 con i valori finali
     updated_tank = tank.copy()
     updated_tank['muscle_glycogen_g'] = final_state['Muscolare']
     updated_tank['liver_glycogen_g'] = final_state['Epatico']
