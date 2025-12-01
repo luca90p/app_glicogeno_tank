@@ -15,7 +15,7 @@ st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("""
 Applicazione avanzata per la modellazione delle riserve di glicogeno. 
-Supporta **Atleti Ibridi** con gestione differenziata delle soglie (Potenza/FC).
+Supporta **Atleti Ibridi** e profili metabolici personalizzati da test di laboratorio.
 """)
 
 if not utils.check_password():
@@ -44,14 +44,18 @@ def create_risk_zone_chart(df_data, title, max_y):
     
     return (background + area).properties(title=title, height=350)
 
+# Inizializzazione Session State per Dati Lab (se non esistono)
+if 'use_lab_data' not in st.session_state:
+    st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
+
 tab1, tab2, tab3 = st.tabs([
-    "1. Profilo & Soglie", 
+    "1. Profilo Atleta & Metabolismo", 
     "2. Diario Ibrido (Tapering)", 
     "3. Simulazione Gara"
 ])
 
 # =============================================================================
-# TAB 1: PROFILO & SOGLIE
+# TAB 1: PROFILO & METABOLISMO
 # =============================================================================
 with tab1:
     col_in, col_res = st.columns([1, 2])
@@ -71,7 +75,7 @@ with tab1:
             muscle_mass_input = st.number_input("SMM Misurata [kg]", 10.0, 60.0, 37.4, 0.1)
         
         st.markdown("---")
-        st.subheader("Capacità & Sport Target")
+        st.subheader("Capacità & Soglie")
         
         est_method = st.radio("Metodo Stima Densità:", ["Livello Atletico", "VO2max (Lab)"], horizontal=True)
         calculated_conc = 0.0
@@ -90,14 +94,9 @@ with tab1:
         
 
         sport_map = {s.label: s for s in SportType}
-        s_sport = sport_map[st.selectbox("Sport Gara (Target)", list(sport_map.keys()))]
+        s_sport = sport_map[st.selectbox("Sport Target (Principale)", list(sport_map.keys()))]
         
-        # --- SEZIONE SOGLIE IBRIDE ---
-        st.markdown("---")
-        st.subheader("Soglie Atleta Ibrido")
-        st.info("Inserisci entrambe le soglie per calcolare correttamente l'intensità (IF) sia per uscite in bici che per la corsa.")
-        
-        # Input sempre visibili
+        # --- INPUT SOGLIE IBRIDE ---
         c_ftp, c_hr = st.columns(2)
         ftp_watts = c_ftp.number_input("FTP Ciclismo (Watt)", 100, 600, 265, step=5)
         thr_hr = c_hr.number_input("Soglia Anaerobica Corsa (BPM)", 100, 220, 170, step=1)
@@ -105,9 +104,40 @@ with tab1:
             
         st.session_state.update({'ftp_watts_input': ftp_watts, 'thr_hr_input': thr_hr, 'max_hr_input': max_hr})
         
-        # Setup soggetto
-        with st.expander("Opzioni Avanzate"):
-            use_creatine = st.checkbox("Creatina")
+        # --- NUOVA SEZIONE: PROFILO METABOLICO (SPOSTATA QUI) ---
+        st.markdown("---")
+        with st.expander("🧬 Profilo Metabolico (Test Laboratorio)", expanded=False):
+            st.info("Inserisci i dati dal test del gas (Metabolimetro) per personalizzare i consumi.")
+            active_lab = st.checkbox("Attiva Profilo Metabolico Personalizzato", value=st.session_state.get('use_lab_data', False))
+            
+            if active_lab:
+                st.caption("Range di consumo rilevati al Ritmo Gara previsto (es. zona FatMax o Tempo):")
+                
+                l1, l2 = st.columns(2)
+                # CHO Range
+                cho_min = l1.number_input("CHO Min (g/h)", 0, 600, 124, key='cho_min_in')
+                cho_max = l2.number_input("CHO Max (g/h)", 0, 600, 148, key='cho_max_in')
+                
+                # FAT Range
+                fat_min = l1.number_input("FAT Min (g/h)", 0, 300, 26, key='fat_min_in')
+                fat_max = l2.number_input("FAT Max (g/h)", 0, 300, 36, key='fat_max_in')
+                
+                # Calcolo Medie
+                lab_cho_mean = (cho_min + cho_max) / 2
+                lab_fat_mean = (fat_min + fat_max) / 2
+                
+                st.success(f"Profilo Calcolato: **{lab_cho_mean:.0f} g/h CHO** | **{lab_fat_mean:.0f} g/h FAT**")
+                
+                # Salvataggio nello stato
+                st.session_state['use_lab_data'] = True
+                st.session_state['lab_cho_mean'] = lab_cho_mean
+                st.session_state['lab_fat_mean'] = lab_fat_mean
+            else:
+                st.session_state['use_lab_data'] = False
+
+        # Setup soggetto base
+        with st.expander("Opzioni Fisiologiche Aggiuntive"):
+            use_creatine = st.checkbox("Usa Creatina")
             s_menstrual = MenstrualPhase.NONE
             if s_sex == Sex.FEMALE:
                 m_map = {m.label: m for m in MenstrualPhase}
@@ -136,24 +166,20 @@ with tab1:
         
         st.progress(1.0)
         
-        # Mostra entrambe le tabelle zone per l'atleta ibrido
+        # Tabelle Zone
         st.markdown("### Zone di Allenamento (Ibrido)")
         t_cyc, t_run = st.tabs(["Ciclismo (Power)", "Corsa (Heart Rate)"])
-        
         with t_cyc:
-            zones_c = utils.calculate_zones_cycling(ftp_watts)
-            st.table(pd.DataFrame(zones_c))
-            
+            st.table(pd.DataFrame(utils.calculate_zones_cycling(ftp_watts)))
         with t_run:
-            zones_r = utils.calculate_zones_running_hr(thr_hr)
-            st.table(pd.DataFrame(zones_r))
+            st.table(pd.DataFrame(utils.calculate_zones_running_hr(thr_hr)))
 
 # =============================================================================
-# TAB 2: DIARIO DI TAPERING
+# TAB 2: DIARIO IBRIDO
 # =============================================================================
 with tab2:
     if 'base_tank_data' not in st.session_state:
-        st.warning("⚠️ Completa prima il Tab 1 (Profilo Atleta).")
+        st.warning("⚠️ Completa prima il Tab 1.")
         st.stop()
         
     subj_base = st.session_state['base_subject_struct']
@@ -161,32 +187,17 @@ with tab2:
     # Recupero soglie
     user_ftp = st.session_state.get('ftp_watts_input', 250)
     user_thr = st.session_state.get('thr_hr_input', 170)
-    user_max_hr = st.session_state.get('max_hr_input', 185)
     
-    st.subheader("🗓️ Diario di Avvicinamento (Countdown)")
+    st.subheader("🗓️ Diario di Avvicinamento (Multidisciplinare)")
     
-    # --- NUOVO EXPANDER CON SPIEGAZIONE SCIENTIFICA ---
-    with st.expander("🧬 Come funziona il Modello di Risintesi? (Dettagli Scientifici)"):
-        st.markdown("""
-        Il simulatore utilizza un modello fisiologico non-lineare basato sulla letteratura sportiva recente (Burke et al., 2017; Jentjens & Jeukendrup, 2003).
-        Ecco le logiche applicate al tuo diario:
-
-        1.  **Tetto Fisiologico (Rate Limiting):** Non puoi stoccare carboidrati all'infinito in un solo giorno. Il muscolo ha un limite di sintesi di circa **10-12 g/kg/die**. Qualsiasi eccesso oltre questa soglia viene ossidato o convertito in lipidi, non in glicogeno.
-        2.  **Legge della Saturazione (Inibizione da Prodotto):** Più il tuo serbatoio si avvicina al 100%, più lenta diventa la risintesi. Gli ultimi grammi (il "topping off") sono i più difficili da ottenere perché l'enzima *glicogeno-sintasi* viene inibito dall'accumulo stesso di glicogeno.
-        3.  **Tassa Metabolica (Costo Basale):** Prima di riempire i muscoli, il corpo deve "pagare" le spese fisse:
-            * **Fegato:** ~4g/h per mantenere la glicemia stabile per il cervello.
-            * **NEAT:** Consumo per attività non sportiva.
-            * *Risultato:* Se mangi poco, copri a malapena le spese vive e non ricarichi i muscoli.
-        4.  **Finestra Anabolica & Sonno:** * L'allenamento svuota le riserve ma aumenta la sensibilità insulinica (traslocazione GLUT4), accelerando la ricarica successiva.
-            * Un sonno insufficiente (<6h) riduce questa sensibilità, penalizzando l'efficienza di stoccaggio del **~15-20%**.
-        """)
-        
-    st.markdown("""
-    Pianifica il tapering. Definisci il tuo stato iniziale e compila la settimana.
-    Il sistema calcolerà l'accumulo progressivo rispettando i vincoli fisiologici sopra descritti.
-    """)
+    # --- NUOVO INPUT: STATO INIZIALE ---
+    from data_models import GlycogenState
+    st.markdown("#### Condizione di Partenza (-7 Giorni)")
+    gly_states = list(GlycogenState)
+    sel_state = st.selectbox("Livello di riempimento iniziale:", gly_states, format_func=lambda x: x.label, index=2)
+    st.markdown("---")
     
-    # --- FIX SESSION STATE ---
+    # FIX SESSION STATE
     if "tapering_data" in st.session_state:
         if len(st.session_state["tapering_data"]) > 0:
             first_row = st.session_state["tapering_data"][0]
@@ -205,26 +216,11 @@ with tab2:
             {"day": -1, "label": "-1 Giorno", "type": "Riposo", "val": 0, "dur": 0, "cho": 500, "sleep": "Ottimale (>7h)"}
         ]
 
-    # --- NUOVO INPUT: STATO INIZIALE ---
-    from data_models import GlycogenState
-    
-    st.markdown("#### Condizione di Partenza (-7 Giorni)")
-    gly_states = list(GlycogenState)
-    sel_state = st.selectbox(
-        "Livello di riempimento iniziale:", 
-        gly_states, 
-        format_func=lambda x: x.label,
-        index=2
-    )
-    
-    st.markdown("---")
-
-    # --- HEADER COLONNE ---
     cols = st.columns([1, 1.3, 1, 1.3, 1, 1.2])
     cols[0].markdown("**Countdown**")
     cols[1].markdown("**Attività**")
     cols[2].markdown("**Minuti**")
-    cols[3].markdown("**Intensità (Watt/FC)**")
+    cols[3].markdown("**Intensità (Watt o FC)**")
     cols[4].markdown("**CHO (g)**")
     cols[5].markdown("**Sonno**")
     
@@ -239,10 +235,8 @@ with tab2:
         if row['day'] >= -2: c1.error(f"**{row['label']}**")
         else: c1.write(f"**{row['label']}**")
             
-        try:
-            curr_idx = type_opts.index(row['type'])
-        except:
-            curr_idx = 0
+        try: curr_idx = type_opts.index(row['type'])
+        except: curr_idx = 0
         act_type = c2.selectbox(f"t_{i}", type_opts, index=curr_idx, key=f"type_{i}", label_visibility="collapsed")
         
         duration = 0
@@ -251,7 +245,6 @@ with tab2:
         
         if act_type != "Riposo":
             duration = c3.number_input(f"d_{i}", 0, 600, row.get('dur', 0), step=10, key=f"dur_{i}", label_visibility="collapsed")
-            
             val_default = row.get('val', 0) if row.get('val', 0) > 0 else 140
             intensity_val = c4.number_input(f"v_{i}", 0, 600, val_default, step=5, key=f"val_{i}", label_visibility="collapsed")
             
@@ -268,16 +261,12 @@ with tab2:
             c4.write("-")
         
         new_cho = c5.number_input(f"c_{i}", 0, 1500, row['cho'], step=50, key=f"cho_{i}", label_visibility="collapsed")
-        
         sl_idx = list(sleep_opts.keys()).index(row['sleep']) if row['sleep'] in sleep_opts else 0
         new_sleep_label = c6.selectbox(f"s_{i}", list(sleep_opts.keys()), index=sl_idx, key=f"sl_{i}", label_visibility="collapsed")
         
         input_result_data.append({
-            "label": row['label'],
-            "duration": duration,
-            "calculated_if": calc_if,
-            "cho_in": new_cho,
-            "sleep_factor": sleep_opts[new_sleep_label]
+            "label": row['label'], "duration": duration, "calculated_if": calc_if,
+            "cho_in": new_cho, "sleep_factor": sleep_opts[new_sleep_label]
         })
 
     st.markdown("---")
@@ -285,11 +274,10 @@ with tab2:
     cho_d2 = input_result_data[5]['cho_in']
     cho_d1 = input_result_data[6]['cho_in']
     if cho_d2 == 0 and cho_d1 == 0:
-        st.warning("⚠️ Carboidrati giorni -2/-1 a zero. Carico assente.")
+        st.warning("⚠️ Carboidrati giorni -2/-1 a zero.")
     
     if st.button("🚀 Simula Stato Glicogeno (Race Ready)", type="primary"):
         df_trend, final_tank = logic.calculate_tapering_trajectory(subj_base, input_result_data, start_state=sel_state)
-        
         st.session_state['tank_data'] = final_tank
         st.session_state['subject_struct'] = subj_base
         
@@ -303,7 +291,6 @@ with tab2:
                 tooltip=['Giorno', 'Totale', 'Muscolare', 'Epatico', 'Input CHO', alt.Tooltip('IF', format='.2f')]
             ).properties(height=300, title="Evoluzione Riserve")
             st.altair_chart(chart, use_container_width=True)
-            
         with r2:
             final_pct = final_tank['fill_pct']
             st.metric("Riempimento Gara", f"{final_pct:.1f}%", delta=f"{int(final_tank['actual_available_g'])}g Totali")
@@ -328,14 +315,11 @@ with tab3:
     st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
     
     c_s1, c_s2, c_s3 = st.columns(3)
-    
-    # --- 1. PROFILO SFORZO ---
     with c_s1:
         st.markdown("### 1. Profilo Sforzo")
         duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
         uploaded_file = st.file_uploader("Importa File (.zwo)", type=['zwo'])
         intensity_series = None
-        
         if uploaded_file:
             target_thresh_hr = st.session_state['thr_hr_input']
             target_ftp = st.session_state['ftp_watts_input']
@@ -343,8 +327,7 @@ with tab3:
             if series:
                 intensity_series = series
                 duration = dur_calc
-                st.success(f"File importato: {dur_calc} min.")
-        
+                st.success(f"File: {dur_calc} min.")
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
             params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': st.session_state['ftp_watts_input'], 'efficiency': 22.0}
@@ -352,68 +335,47 @@ with tab3:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': st.session_state['thr_hr_input']}
             
-    # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
         cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
         cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
-    # --- 3. FISIOLOGIA & METABOLIMETRO (RANGE UPDATE) ---
     with c_s3:
-        st.markdown("### 3. Fisiologia & Lab Data")
+        st.markdown("### 3. Fisiologia")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
-        use_lab = st.checkbox("Usa Dati Test Metabolico")
         
-        lab_cho_final = 0.0
-        lab_fat_final = 0.0
-        tau = 20
-        risk_thresh = 30
+        # --- VERIFICA SE USARE DATI LAB (DAL TAB 1) ---
+        use_lab_config = st.session_state.get('use_lab_data', False)
         
-        if use_lab:
-            st.caption("Inserisci la 'forbice' di consumo rilevata al ritmo gara (es. 152-159 bpm).")
+        if use_lab_config:
+            st.success("✅ Profilo Metabolico Personalizzato Attivo")
+            lab_cho_val = st.session_state.get('lab_cho_mean', 0)
+            lab_fat_val = st.session_state.get('lab_fat_mean', 0)
+            st.caption(f"Uso: CHO {lab_cho_val:.0f} g/h | FAT {lab_fat_val:.0f} g/h")
             
-            c_l1, c_l2 = st.columns(2)
-            # CHO Range
-            cho_min = c_l1.number_input("CHO Min (g/h)", 0, 600, 124)
-            cho_max = c_l2.number_input("CHO Max (g/h)", 0, 600, 148)
+            params['use_lab_data'] = True
+            params['lab_cho_g_h'] = lab_cho_val
+            params['lab_fat_g_h'] = lab_fat_val
             
-            # FAT Range
-            fat_min = c_l1.number_input("FAT Min (g/h)", 0, 300, 26)
-            fat_max = c_l2.number_input("FAT Max (g/h)", 0, 300, 36)
-            
-            # Calcolo Medio (o Prudenziale)
-            lab_cho_final = (cho_min + cho_max) / 2
-            lab_fat_final = (fat_min + fat_max) / 2
-            
-            st.info(f"Simulazione basata sulla media: **{lab_cho_final:.0f} g/h CHO** e **{lab_fat_final:.0f} g/h FAT**.")
-            
+            # Parametri standard nascosti
+            tau = 20
+            risk_thresh = 30
         else:
+            st.info("Uso modello teorico (nessun dato Lab)")
+            params['use_lab_data'] = False
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
-    
-    # Aggiornamento Parametri
-    if use_lab:
-        params['use_lab_data'] = True
-        params['lab_cho_g_h'] = lab_cho_final
-        params['lab_fat_g_h'] = lab_fat_final
-    else:
-        params['use_lab_data'] = False
 
-    # --- ESECUZIONE SIMULAZIONE ---
-    # 1. Strategia
     df_sim, stats_sim = logic.simulate_metabolism(tank, duration, cho_h, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
-    # 2. Riferimento (Digiuno)
     df_no, _ = logic.simulate_metabolism(tank, duration, 0, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
     df_no['Scenario'] = 'Riferimento (Digiuno)'
     df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
-    # --- DASHBOARD ---
     st.markdown("---")
-    
     r1_c1, r1_c2 = st.columns([2, 1])
     with r1_c1:
         st.markdown("#### Bilancio Energetico")
@@ -432,7 +394,7 @@ with tab3:
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
         
-        if use_lab:
+        if use_lab_config:
             st.metric("Fonte Dati", "Test Lab (Media)")
         else:
             st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
@@ -470,6 +432,3 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
-
-
-
