@@ -10,6 +10,37 @@ import io
 from datetime import datetime
 
 # ==============================================================================
+# 0. SISTEMA DI PROTEZIONE (LOGIN)
+# ==============================================================================
+def check_password():
+    """Returns `True` if the user had the correct password."""
+
+    def password_entered():
+        """Checks whether a password entered by the user is correct."""
+        if st.session_state["password"] == "glicogeno2025": # <--- CAMBIA QUI LA TUA PASSWORD
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't store password
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input for password.
+        st.text_input(
+            "🔐 Inserisci la Password per accedere al Simulatore", type="password", on_change=password_entered, key="password"
+        )
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input + error.
+        st.text_input(
+            "🔐 Inserisci la Password per accedere al Simulatore", type="password", on_change=password_entered, key="password"
+        )
+        st.error("😕 Password errata. Riprova.")
+        return False
+    else:
+        # Password correct.
+        return True
+
+# ==============================================================================
 # 1. DEFINIZIONI E CLASSI (Dati Statici)
 # ==============================================================================
 
@@ -176,8 +207,6 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
     
     return combined_filling, final_diet_depletion_factor, avg_cho_gk
 
-# NOTA: calculate_tank riceve un oggetto Subject, che non è hashable di default da st.cache_data.
-# Passiamo i parametri primitivi o rendiamo la funzione non decorata (è molto veloce).
 def calculate_tank(subject: Subject):
     if subject.muscle_mass_kg is not None and subject.muscle_mass_kg > 0:
         total_muscle = subject.muscle_mass_kg
@@ -231,7 +260,6 @@ def calculate_tank(subject: Subject):
 
 @st.cache_data
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type_val, mix_type_max_rate, mix_type_ox_factor):
-    # Passiamo i valori scalari dell'enum per il caching
     base_rate = 0.8 
     if height_cm > 170: base_rate += (height_cm - 170) * 0.015
     if ftp_watts > 200: base_rate += (ftp_watts - 200) * 0.0015
@@ -252,7 +280,7 @@ def calculate_rer_polynomial(intensity_factor):
            39.525121144)
     return max(0.70, min(1.15, rer))
 
-# Funzione di simulazione principale (Heavy Calculation)
+# Funzione di simulazione principale
 @st.cache_data
 def simulate_metabolism_cached(
     tank_g, initial_muscle_g, initial_liver_g,
@@ -269,7 +297,7 @@ def simulate_metabolism_cached(
     current_muscle_glycogen = initial_muscle_g
     current_liver_glycogen = initial_liver_g
     
-    kcal_per_min_base = 10.0 # Default fallback
+    kcal_per_min_base = 10.0
     if mode == 'cycling':
         kcal_per_min_base = (avg_power * 60) / 4184 / (efficiency / 100.0)
     elif mode == 'running':
@@ -286,7 +314,7 @@ def simulate_metabolism_cached(
     else:
         max_exo_rate_g_min = estimate_max_exogenous_oxidation(
             height_cm, weight_kg, ftp_watts, 
-            None, mix_type_max_rate, mix_type_ox_factor # Passiamo None come enum ma i valori scalari
+            None, mix_type_max_rate, mix_type_ox_factor 
         )
     
     total_fat_burned_g = 0.0
@@ -499,7 +527,7 @@ def parse_zwo_file(file_content, ftp_watts, thr_hr, sport_type_val):
         elif sport_type_val == SportType.RUNNING.value:
             avg_hr = avg_if * thr_hr
         else: 
-            avg_hr = avg_if * 185 * 0.85 # Proxy
+            avg_hr = avg_if * 185 * 0.85 
             
     return intensity_series, total_duration_min, avg_power, avg_hr, sport_warning
 
@@ -522,7 +550,7 @@ def calculate_zones_running_hr(thr):
         {"Zona": "Z2 - Aerobico", "Range %": "85 - 89% LTHR", "Valore": f"{int(thr*0.85)} - {int(thr*0.89)} bpm"},
         {"Zona": "Z3 - Tempo", "Range %": "90 - 94% LTHR", "Valore": f"{int(thr*0.90)} - {int(thr*0.94)} bpm"},
         {"Zona": "Z4 - Sub-Soglia", "Range %": "95 - 99% LTHR", "Valore": f"{int(thr*0.95)} - {int(thr*0.99)} bpm"},
-        {"Zona": "Z5a - Super-Soglia", "Range %": "100 - 102% LTHR", "Valore": f"{int(thr*1.00)} - {int(thr*1.02)} bpm"},
+        {"Zona": "Z5a - Super-Soglia (FTP)", "Range %": "100 - 102% LTHR", "Valore": f"{int(thr*1.00)} - {int(thr*1.02)} bpm"},
         {"Zona": "Z5b - Capacità Aerobica", "Range %": "103 - 106% LTHR", "Valore": f"{int(thr*1.03)} - {int(thr*1.06)} bpm"},
         {"Zona": "Z5c - Potenza Anaerobica", "Range %": "> 106% LTHR", "Valore": f"> {int(thr*1.06)} bpm"}
     ]
