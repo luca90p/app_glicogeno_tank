@@ -104,6 +104,8 @@ def interpolate_consumption(current_val, curve_data):
         extra = current_val - p3['hr']
         return p3['cho'] + (extra * 4.0), max(0.0, p3['fat'] - extra * 0.5)
 
+# --- MOTORE TAPERING ---
+
 def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState = GlycogenState.NORMAL):
     LIVER_DRAIN_24H = 4.0 * 24 
     NEAT_CHO_24H = 1.0 * subject.weight_kg 
@@ -183,11 +185,19 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     final_tank['fill_pct'] = (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
     return pd.DataFrame(trajectory), final_tank
 
+# --- MOTORE DI SIMULAZIONE E BILANCIO (TAB 3) ---
+
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
                         intensity_series=None, metabolic_curve=None):
-
+    
+    results = []
+    # Setup Serbatoi
+    initial_muscle_glycogen = subject_data['muscle_glycogen_g']
+    current_muscle_glycogen = initial_muscle_glycogen
+    current_liver_glycogen = subject_data['liver_glycogen_g']
+    
     # Parametri Ambientali/Atleta
     avg_watts = activity_params.get('avg_watts', 200)
     ftp_watts = activity_params.get('ftp_watts', 250)
@@ -201,11 +211,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     
     is_lab_data_active = True if metabolic_curve else False
     
-    # Setup Serbatoi
-    initial_muscle_glycogen = subject_data['muscle_glycogen_g']
-    current_muscle_glycogen = initial_muscle_glycogen
-    current_liver_glycogen = subject_data['liver_glycogen_g']
-    
     # Cinetica Esogena (Rateo Max Assorbimento)
     base_rate = 0.8 
     if subject_obj.height_cm > 170: base_rate += (subject_obj.height_cm - 170) * 0.015
@@ -214,7 +219,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     else:
         max_exo_rate_g_min = min(base_rate * mix_type_input.ox_factor, mix_type_input.max_rate_gh / 60)
     
-    # Inizializzazione Accumulatori
+    # Inizializzazione Accumulatori (TUTTI, per evitare NameError)
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0
     alpha = 1 - np.exp(-1.0 / tau_absorption)
@@ -222,6 +227,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     total_liver_used = 0.0
     total_exo_used = 0.0
     total_fat_burned_g = 0.0
+    total_intake_cumulative = 0.0
+    total_exo_oxidation_cumulative = 0.0
     
     units_per_hour = constant_carb_intake_g_h / cho_per_unit_g if cho_per_unit_g > 0 else 0
     intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0 else duration_min + 1
@@ -229,21 +236,22 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     
     for t in range(int(duration_min) + 1):
         
-        # 1. DETERMINAZIONE INTENSITÀ ISTANTANEA (Base o da Serie)
+        # Reset variabili ciclo per sicurezza
+        rer = 0.0
+        fat_burned_g_min = 0.0
+        
+        # 1. INTENSITÀ
         current_val = base_val
         if intensity_series is not None and t < len(intensity_series):
             current_val = intensity_series[t]
             
         current_if = current_val / threshold_ref if threshold_ref > 0 else 0.8
         
-        # 2. CALCOLO CONSUMO TOTALE (CHO/FAT)
+        # 2. CONSUMO (Lab o Teorico)
         if is_lab_data_active:
-            # A. MOTORE EMPIRICO (Dati Lab - Curva)
-            
-            # Interpolazione del consumo sulla curva
             cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve)
             
-            # Applicazione Drift Fisiologico (Efficiency/Stress)
+            # Drift Fisiologico (disaccoppiamento)
             if t > 60:
                 drift_factor = 1.0 + ((t - 60) * 0.0006)
                 cho_rate_gh *= drift_factor
@@ -251,23 +259,16 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             
             total_cho_demand_g_min = cho_rate_gh / 60.0
             fat_burned_g_min = fat_rate_gh / 60.0
-            rer = 0 # Placeholder per log Lab
-            
+            rer = 0 
         else:
-            # B. MOTORE TEORICO (RER Polinomiale)
-            
-            # 1. Kcal Demand (basato su efficienza e potenza/peso)
             if mode == 'cycling':
-                kcal_demand = (current_val * 60) / 4184 / (gross_efficiency / 100.0)
-                if t > 60: 
-                    loss = (t - 60) * 0.02
-                    current_eff = max(15.0, gross_efficiency - loss)
-                    kcal_demand = (current_val * 60) / 4184 / (current_eff / 100.0)
+                curr_eff = gross_efficiency
+                if t > 60: curr_eff = max(18.0, gross_efficiency - ((t-60)*0.015))
+                kcal_demand = (current_val * 60) / 4184 / (curr_eff / 100.0)
             else:
                 drift_vo2 = 1.0 + ((t - 60) * 0.0005) if t > 60 else 1.0
-                kcal_demand = (subject_obj.vo2max_absolute_l_min * current_if * 5.0) * drift_vo2 / 5.0
+                kcal_demand = (subject_obj.weight_kg * 0.2 * current_if * 3.5) * drift_vo2 / 5.0
             
-            # 2. RER e Ratio (Logica Crossover)
             standard_crossover = 75.0 
             if_shift = (standard_crossover - crossover_pct) / 100.0
             effective_if_for_rer = max(0.3, current_if + if_shift)
@@ -290,40 +291,53 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         
         if t > 0:
             if is_input_zero: current_exo_oxidation_g_min *= (1 - alpha)
-            else: current_exo_oxidation_g_min += alpha * (target_exo - current_exo_ox_rate)
+            else: current_exo_oxidation_g_min += alpha * (target_exo - current_exo_oxidation_g_min)
             current_exo_oxidation_g_min = max(0.0, current_exo_oxidation_g_min)
             
             gut_accumulation_total += (instant_input_g * oxidation_efficiency_input) - current_exo_oxidation_g_min
-            if gut_accumulation_total < 0: gut_accumulation_total = 0
+            if gut_accumulation_total < 0: gut_accumulation_total = 0 
 
-        # --- 4. RIPARTIZIONE FONTI (PRIORITÀ CORRETTA: MUSCOLO DITTATORE) ---
+            total_intake_cumulative += instant_input_g
+            total_exo_oxidation_cumulative += current_exo_oxidation_g_min
+
+        # --- 4. RIPARTIZIONE DINAMICA (MODELLO COGGAN) ---
+        # FIX DEL GRADINO: Il muscolo è il DITTATORE, ma cala la sua pretesa man mano che si svuota.
+        # Il sangue (Esogeno + Fegato) copre il gap lasciato dal muscolo.
         
-        # Stima % a carico del muscolo (il muscolo brucia le sue scorte in base all'intensità)
-        muscle_share_ratio = 0.6 + (max(0, current_if - 0.5) * 0.75)
-        muscle_share_ratio = min(0.95, muscle_share_ratio) 
+        # Muscle Fading: Più è pieno, più contribuisce.
+        muscle_fill_ratio = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
+        fading_factor = math.pow(muscle_fill_ratio, 0.6) # Curva convessa
         
-        # A. Quota Muscolare Primaria
-        primary_muscle_demand = total_cho_demand_g_min * muscle_share_ratio
-        from_muscle = min(primary_muscle_demand, current_muscle_glycogen)
+        # Base share: Intensità determina il reclutamento "forzato"
+        # A riposo/bassa intensità (IF 0.5) -> ~50% muscolo
+        # A soglia (IF 1.0) -> ~100% muscolo
+        intensity_drive = min(1.0, current_if)
+        base_muscle_share = 0.5 + (0.5 * intensity_drive) 
         
-        # B. Richiesta Ematica (il residuo da coprire tramite sangue)
-        blood_demand = total_cho_demand_g_min - from_muscle
+        # Target Muscle Share: Quello che il muscolo "vuole" prendere
+        target_muscle_share = base_muscle_share * fading_factor
         
-        # C. Esogeno (Priority 1 for Blood)
-        from_exogenous = min(blood_demand, current_exo_oxidation_g_min)
+        # Quote Ideali
+        ideal_muscle_draw = total_cho_demand_g_min * target_muscle_share
+        ideal_blood_demand = total_cho_demand_g_min - ideal_muscle_draw
         
-        # D. Fegato (Priority 2 for Blood)
-        remaining_blood_demand = blood_demand - from_exogenous
-        from_liver = min(remaining_blood_demand, 1.5) # Max epatico 1.5 g/min
+        # Copertura Blood Demand
+        # A. Esogeno (Priorità 1 per risparmio epatico)
+        from_exogenous = min(ideal_blood_demand, current_exo_oxidation_g_min)
+        
+        # B. Fegato (Copre il resto della richiesta ematica)
+        remaining_blood_needed = ideal_blood_demand - from_exogenous
+        liver_cap = 1.5 # Max epatico 1.5 g/min
+        from_liver = min(remaining_blood_needed, liver_cap)
         from_liver = min(from_liver, current_liver_glycogen)
         
-        # E. Compensazione (Failsafe per deficit)
-        unmet_demand = remaining_blood_demand - from_liver
-        if unmet_demand > 0 and current_muscle_glycogen > 0:
-            extra_muscle = min(unmet_demand, current_muscle_glycogen - from_muscle) 
-            from_muscle += extra_muscle
-
-        # Update Stato Serbatoi
+        # C. FAILSAFE (Se Fegato/Esogeno non bastano, il Muscolo deve coprire il buco)
+        unmet_blood_demand = remaining_blood_needed - from_liver
+        
+        from_muscle = ideal_muscle_draw + unmet_blood_demand
+        from_muscle = min(from_muscle, current_muscle_glycogen) # Non può dare ciò che non ha
+        
+        # Update Stato
         if t > 0:
             current_liver_glycogen -= from_liver
             current_muscle_glycogen -= from_muscle
@@ -336,7 +350,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             total_liver_used += from_liver
             total_exo_used += from_exogenous
             
-        # Logging (Rates in g/h)
         results.append({
             "Time (min)": t,
             "Glicogeno Muscolare (g)": from_muscle * 60, 
@@ -347,7 +360,9 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             "Residuo Epatico": current_liver_glycogen,
             "Gut Load": gut_accumulation_total,
             "Intensity": current_val,
-            "RER_Sim": rer if not is_lab_data_active else 0
+            "RER_Sim": rer,
+            "Intake Cumulativo (g)": total_intake_cumulative,
+            "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative
         })
         
     final_total_glycogen = current_muscle_glycogen + current_liver_glycogen
