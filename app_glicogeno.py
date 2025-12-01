@@ -549,6 +549,7 @@ def simulate_metabolism(
 # --- LOGICA DI PARSING ZWO ---
 
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
+    
     try:
         xml_content = uploaded_file.getvalue().decode('utf-8')
         root = ET.fromstring(xml_content)
@@ -566,6 +567,7 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
             st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per BICI. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
         elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
             st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per CORSA. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
+
     
     intensity_series = [] 
     total_duration_sec = 0
@@ -636,15 +638,12 @@ def calculate_zones_running_hr(thr):
 # --- FUNZIONE DI CALCOLO SETTIMANALE ---
 def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, subject_weight, vo2max):
     
-    # Assunzioni di base per il calcolo semplificato
-    # Tasso basale fegato: 4 g/h -> 96 g/24h (approssimato a 100g se non si mangia)
-    LIVER_DRAIN_RATE = 4.0 
+    # Tasso basale fegato (brain+organs): ~4-5 g/h
+    LIVER_DRAIN_RATE = 4.5 
+    # Costo basale attività quotidiana (NEAT): ~1.2 g/kg/die (variabile, ma stima conservativa)
+    DAILY_NEAT_CHO = 1.2 * subject_weight
     
-    # Efficienza di sintesi (costo metabolico dello stoccaggio): ~5-7% di perdita
     SYNTHESIS_EFFICIENCY = 0.95
-    
-    # Limite di assorbimento epatico orario (approx): 
-    # In realtà il fegato si riempie post-prandiale. Semplifichiamo: refill prioritario al fegato
     
     daily_status = []
     
@@ -658,85 +657,94 @@ def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_live
         
         activity_type = day_data['activity']
         duration = day_data['duration']
-        intensity = day_data['intensity'] # "Bassa", "Media", "Alta", "Riposo"
+        intensity = day_data['intensity'] 
         cho_in = day_data['cho_in']
         
-        # 1. Deplezione Basale Fegato (24h)
-        # Assumiamo che parte dei CHO ingeriti copra direttamente questo fabbisogno se mangiati
-        # Ma per il bilancio, togliamo il fisso e poi aggiungiamo l'input
-        daily_liver_drain = 24 * LIVER_DRAIN_RATE
+        # 1. Consumo Basale Totale (Fegato + NEAT)
+        # Il fegato si svuota costantemente. Il NEAT consuma glucosio ematico/epatico.
+        total_basal_drain = (24 * LIVER_DRAIN_RATE) + DAILY_NEAT_CHO
         
-        # 2. Deplezione da Esercizio
+        # Ripartiamo il basale: 70% Fegato, 30% pool ematico (che drena fegato se non si mangia)
+        # Semplificazione: Tutto dal Fegato/Sangue. Se fegato vuoto -> neoglucogenesi (non modellata qui, stop a 0)
+        
+        # 2. Deplezione da Esercizio (Allenamento)
         exercise_drain_muscle = 0
         exercise_drain_liver = 0
         
         if activity_type != "Riposo" and duration > 0:
             # Stima costo energetico (Kcal/min)
-            # Usa una formula generica basata su peso e intensità relativa
-            # Bassa: ~50% VO2max, Media: ~70%, Alta: ~85%
-            
             if intensity == "Bassa (Z1-Z2)":
                 rel_intensity = 0.5
-                cho_pct = 0.2 # 20% CHO
+                cho_pct = 0.25 # Aumentato leggermente
             elif intensity == "Media (Z3)":
                 rel_intensity = 0.7
-                cho_pct = 0.6 # 60% CHO
+                cho_pct = 0.65 
             else: # Alta (Z4+)
                 rel_intensity = 0.85
-                cho_pct = 0.9 # 90% CHO
+                cho_pct = 0.95 
                 
-            # Kcal/min approx = L O2/min * 5 kcal/L
-            # L O2/min = VO2max * rel_intensity * weight / 1000
             kcal_min = (vo2max * rel_intensity * subject_weight / 1000) * 5.0
             total_kcal = kcal_min * duration
-            total_cho_burned = (total_kcal * cho_pct) / 4.0 # 4 kcal/g CHO
+            total_cho_burned = (total_kcal * cho_pct) / 4.0 
             
-            # Ripartizione consumo (Muscolo vs Fegato)
-            # Il fegato contribuisce per circa 10-20% in condizioni normali, di più se bassa intensità
             liver_fraction = 0.15 
             
             exercise_drain_liver = total_cho_burned * liver_fraction
             exercise_drain_muscle = total_cho_burned * (1 - liver_fraction)
             
-        # 3. Calcolo Bilancio Giornaliero
+        # 3. Bilancio
         
-        # Deplezione
-        used_liver = daily_liver_drain + exercise_drain_liver
-        used_muscle = exercise_drain_muscle
+        total_daily_consumption = total_basal_drain + exercise_drain_liver + exercise_drain_muscle
+        net_balance = cho_in * SYNTHESIS_EFFICIENCY - total_daily_consumption
         
-        # Stato pre-pasto (teorico, per vedere se si va in rosso durante l'attività o la notte)
-        # Qui facciamo un bilancio netto a fine giornata
+        # Logica di aggiornamento scorte
+        # Prima soddisfiamo il fabbisogno immediato (esercizio + basale)
+        # Se avanza CHO -> Refill Fegato -> Refill Muscolo
+        # Se manca CHO -> Drena Fegato -> Drena Muscolo
         
-        current_liver -= used_liver
-        current_muscle -= used_muscle
+        effective_input = cho_in * SYNTHESIS_EFFICIENCY
         
-        # Check "Bonk" (se si va sotto zero prima del refill, è un problema, ma nel bilancio daily 
-        # assumiamo che si mangi durante il giorno. Se il netto è negativo, scendiamo)
+        # Fase 1: Copertura Spese
+        # Le spese "basali" e "fegato-esercizio" intaccano il fegato.
+        # Le spese "muscolo-esercizio" intaccano il muscolo.
         
-        # Refill (Priorità Fegato -> Muscolo)
-        # Assumiamo che l'ingestione avvenga durante la giornata
+        drain_liver_total = total_basal_drain + exercise_drain_liver
+        drain_muscle_total = exercise_drain_muscle
         
-        effective_cho_in = cho_in * SYNTHESIS_EFFICIENCY
-        
-        # Riempi Fegato
-        liver_deficit = max_liver - current_liver
-        
-        if effective_cho_in >= liver_deficit:
-            current_liver = max_liver # Pieno
-            remaining_cho = effective_cho_in - liver_deficit
-        else:
-            current_liver += effective_cho_in
-            remaining_cho = 0
+        # Bilancio Fegato
+        # Se input copre spese fegato + resto
+        if effective_input >= drain_liver_total:
+            surplus_after_liver_needs = effective_input - drain_liver_total
+            # Il fegato è "coperto" dal cibo, ma se era scarico si riempie?
+            # Assumiamo che il surplus vada a riempire
+            current_liver = current_liver # Mantiene livello (o si riempie col surplus)
             
-        # Riempi Muscolo
-        current_muscle += remaining_cho
+            # Refill Logic
+            liver_space = max_liver - current_liver
+            if surplus_after_liver_needs >= liver_space:
+                current_liver = max_liver
+                surplus_for_muscle = surplus_after_liver_needs - liver_space
+            else:
+                current_liver += surplus_after_liver_needs
+                surplus_for_muscle = 0
+                
+        else:
+            # Input non basta per il fegato/basale
+            deficit = drain_liver_total - effective_input
+            current_liver -= deficit
+            surplus_for_muscle = 0 # Niente per il muscolo
+            
+        # Bilancio Muscolo
+        # Il muscolo ha speso 'drain_muscle_total'.
+        # Se c'è surplus dal fegato, lo usiamo per recuperare o riempire
         
-        # Clamp ai massimi
+        current_muscle -= drain_muscle_total # Applica la spesa
+        current_muscle += surplus_for_muscle # Applica il refill (se c'è)
+        
+        # Clamp
         if current_muscle > max_muscle: current_muscle = max_muscle
-        if current_liver > max_liver: current_liver = max_liver # Già fatto, ma per sicurezza
+        if current_liver > max_liver: current_liver = max_liver
         
-        # Clamp ai minimi (non si può avere glicogeno negativo, significa catabolismo/fatica estrema)
-        # Se va sotto zero, rimane a zero (stato di deplezione totale)
         if current_muscle < 0: current_muscle = 0
         if current_liver < 0: current_liver = 0
             
@@ -746,7 +754,9 @@ def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_live
             "Glicogeno Epatico": round(current_liver),
             "Totale": round(current_muscle + current_liver),
             "Allenamento": f"{activity_type} ({duration} min)" if activity_type != "Riposo" else "Riposo",
-            "CHO In": cho_in
+            "CHO In": cho_in,
+            "Consumo Stimato": round(total_daily_consumption),
+            "Bilancio Netto": round(net_balance)
         })
         
     return pd.DataFrame(daily_status)
@@ -869,9 +879,7 @@ with tab1:
 
         with st.expander("Inserisci le Tue Soglie e Visualizza Zone", expanded=True):
             if s_sport == SportType.CYCLING:
-                # MODIFICA: FTP è l'input primario per IF
                 ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
-                st.caption(f"La FTP è usata come soglia per l'Intensity Factor (IF).")
                 
                 if zone_def_method == "Standard (Calcolate)":
                     zones_data = calculate_zones_cycling(ftp_watts_input)
@@ -893,10 +901,8 @@ with tab1:
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
-                # MODIFICA: Uso THR come dato primario per IF nella corsa
                 thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
-                st.caption(f"La Soglia Anaerobica è usata per calcolare l'IF (FC media / THR).")
                 
                 if zone_def_method == "Standard (Calcolate)":
                     zones_data = calculate_zones_running_hr(thr_hr_input)
@@ -915,13 +921,12 @@ with tab1:
                         {"Zona": "Z5+ - Sovrasoglia", "Range %": "Custom", "Valore": f"> {z4_lim} bpm"}
                     ]
 
-            else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
+            else: # Altri sport
                 c_thr, c_max = st.columns(2)
                 max_hr_input = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1, key='max_hr_input_general')
-                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') # Aggiungo soglia aerobica
-                st.caption("La FC Max è usata per il calcolo approssimativo dell'IF.")
+                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') 
                 if zone_def_method == "Standard (Calcolate)":
-                    zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback su zone HR
+                    zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback
                 else:
                     st.caption("Personalizzazione disponibile per Ciclismo e Corsa.")
 
@@ -1014,7 +1019,7 @@ with tab2:
         # SEZIONE 3: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
         # =========================================================================
         st.subheader("1. Stato Nutrizionale (Introito CHO 48h)")
-        st.success("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
+        st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
             "Metodo di Calcolo Ripristino Glicogeno:", 
@@ -1135,6 +1140,8 @@ with tab2:
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
         
+        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
+        # Visto che cho_g1/g2 sono definiti in entrambi i rami, possiamo chiamare la funzione qui:
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -1170,8 +1177,10 @@ with tab2:
         
         # --- RICALCOLO FINALE E CREAZIONE OGGETTO SUBJECT ---
         
+        # Recupera la struttura base creata nel Tab 1
         base_subject = st.session_state['base_subject_struct']
         
+        # Aggiorna solo i campi di stato dinamici
         subject = base_subject
         subject.liver_glycogen_g = liver_val
         subject.filling_factor = combined_filling
@@ -1299,7 +1308,6 @@ with tab3:
                         if filename.endswith('.zwo'):
                             # Logica per ZWO (XML)
                             st.info("Analisi di un allenamento strutturato ZWO (IF istantaneo calcolato).")
-                            # Passa lo sport type per i controlli di coerenza e la logica di soglia corretta
                             intensity_series, duration, avg_w_calc, avg_hr_calc = parse_zwo_file(uploaded_file, ftp_watts, thr_hr, subj.sport)
                             
                             if subj.sport == SportType.CYCLING:
@@ -1886,12 +1894,26 @@ with tab3:
             
             st.markdown("### 📉 Andamento Riserve Glicogeno (7 Giorni)")
             
-            # Grafico Altair
-            chart_weekly = alt.Chart(df_weekly).mark_line(point=True).encode(
+            # Grafico Altair (Linea Trend)
+            chart_weekly_line = alt.Chart(df_weekly).mark_line(point=True).encode(
                 x=alt.X('Giorno', sort=days),
                 y=alt.Y('Totale', title='Glicogeno Totale (g)'),
                 tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico', 'Allenamento', 'CHO In']
-            ).interactive()
+            )
             
-            st.altair_chart(chart_weekly, use_container_width=True)
+            # Grafico Altair (Bilancio Barre)
+            chart_balance = alt.Chart(df_weekly).mark_bar().encode(
+                x=alt.X('Giorno', sort=days),
+                y=alt.Y('Bilancio Netto', title='Bilancio (g)'),
+                color=alt.condition(
+                    alt.datum['Bilancio Netto'] > 0,
+                    alt.value("steelblue"),  # The positive color
+                    alt.value("orange")  # The negative color
+                )
+            )
+            
+            # Combinazione verticale
+            final_weekly_chart = alt.vconcat(chart_weekly_line, chart_balance).resolve_scale(x='shared')
+            
+            st.altair_chart(final_weekly_chart, use_container_width=True)
             st.table(df_weekly)
