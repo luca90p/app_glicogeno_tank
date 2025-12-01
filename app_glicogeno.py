@@ -355,35 +355,25 @@ with tab3:
         target_ftp = st.session_state['ftp_watts_input']
         
         if uploaded_file:
-            # Parsing del file (restituisce IF puro, es: 0.85)
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
             
             if series:
-                # --- FIX IMPORTANTE: CONVERSIONE IF -> VALORI ASSOLUTI ---
-                # La curva metabolica ragiona in Watt o BPM, non in IF.
-                # Convertiamo la serie di intensità nell'unità corretta.
-                
+                # Conversione IF -> Valori Assoluti per la curva
                 if subj.sport == SportType.CYCLING:
-                    # Se Ciclismo -> Convertiamo IF in WATT (IF * FTP)
                     intensity_series = [val * target_ftp for val in series]
                     st.success(f"File Bici: Convertito in Watt (Media ~{int(w_calc)} W)")
                 else:
-                    # Se Corsa -> Convertiamo IF in BPM (IF * Soglia)
-                    # Nota: Per la corsa l'IF è basato sulla soglia passo/fc. Usiamo la FC di soglia come riferimento.
                     intensity_series = [val * target_thresh_hr for val in series]
                     st.success(f"File Corsa: Convertito in BPM (Media ~{int(hr_calc)} bpm)")
                 
                 duration = dur_calc
         
-        # Input Manuale (Steady State)
+        # Input Manuale
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
-            params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0}
-            
-            # Se non c'è file, usiamo il valore manuale per la curva
+            params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} # Default eff, sovrascritto dopo
             if intensity_series is None:
-                params['avg_hr'] = val # Hack: Passiamo i Watt come 'avg_hr' perché la logica userà questo valore sulla curva (che per il ciclismo avrà Watt sull'asse X)
-                
+                params['avg_hr'] = val 
         else:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
@@ -394,29 +384,43 @@ with tab3:
         cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
         cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
-    # --- 3. FISIOLOGIA (Curve Metaboliche) ---
+    # --- 3. MOTORE METABOLICO (TEORICO O REALE) ---
     with c_s3:
         st.markdown("### 3. Motore Metabolico")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
-        # Recupero la Curva dal Session State
+        # Recupero Curva
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
         
+        # SETUP MODELLO
         if use_lab_active and curve_data:
-            st.success("✅ **Curva Metabolica Attiva**")
+            # --- CASO A: DATI LAB ---
+            st.success("✅ **Curva Reale Attiva**")
+            st.caption("Il consumo CHO/FAT sarà calcolato interpolando i dati del tuo test.")
             
-            # Debug visivo: mostra cosa sta usando il simulatore
-            if intensity_series:
-                avg_int = sum(intensity_series)/len(intensity_series)
-                st.caption(f"Input Dinamico: {int(avg_int)} (Media)")
-            else:
-                st.caption(f"Input Costante: {val}")
-            
+            # Parametri fissi/nascosti quando si usa il Lab
+            crossover_val = 70 
             tau = 20
             risk_thresh = 30
+            
         else:
-            st.info("Uso modello teorico standard (Curve non attive).")
+            # --- CASO B: MODELLO TEORICO ---
+            st.info("ℹ️ **Modello Teorico**")
+            st.caption("Regola i parametri per stimare il profilo metabolico.")
+            
+            # Slider Crossover Point (Determina la forma della curva RER)
+            crossover_val = st.slider(
+                "Crossover Point (% Soglia)", 
+                50, 90, 75, 
+                help="Intensità alla quale i CHO superano i Grassi. Un atleta 'Diesel' ha un valore più alto (es. 80%)."
+            )
+            
+            # Slider Efficienza (Solo Ciclismo)
+            if subj.sport == SportType.CYCLING:
+                eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5, help="Conversione energia in watt.")
+                params['efficiency'] = eff_mech
+            
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
@@ -424,20 +428,24 @@ with tab3:
     
     # 1. Scenario A: Strategia Integrata
     df_sim, stats_sim = logic.simulate_metabolism(
-        tank, duration, cho_h, cho_unit, 70, tau, subj, params, 
+        tank, duration, cho_h, cho_unit, 
+        crossover_val, # Passiamo il crossover scelto
+        tau, subj, params, 
         mix_type_input=mix_sel, 
         intensity_series=intensity_series,
-        metabolic_curve=curve_data 
+        metabolic_curve=curve_data if use_lab_active else None
     )
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
     # 2. Scenario B: Riferimento (Digiuno)
     df_no, _ = logic.simulate_metabolism(
-        tank, duration, 0, cho_unit, 70, tau, subj, params, 
+        tank, duration, 0, cho_unit, 
+        crossover_val, # Passiamo il crossover scelto
+        tau, subj, params, 
         mix_type_input=mix_sel, 
         intensity_series=intensity_series,
-        metabolic_curve=curve_data 
+        metabolic_curve=curve_data if use_lab_active else None
     )
     df_no['Scenario'] = 'Riferimento (Digiuno)'
     df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
@@ -449,7 +457,6 @@ with tab3:
     r1_c1, r1_c2 = st.columns([2, 1])
     with r1_c1:
         st.markdown("#### Bilancio Energetico")
-        # Grafico Stacked Area
         df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
         order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
         colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
@@ -468,10 +475,12 @@ with tab3:
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
         
         if use_lab_active:
-            st.metric("Fonte Dati", "Test Lab (Interpolato)")
+            st.metric("Fonte Dati", "Test Lab (Reale)")
         else:
-            st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
+            # Mostra i parametri teorici usati
+            st.metric("Modello Teorico", f"Crossover {crossover_val}%")
             
+        st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
         st.metric("CHO Ossidati", f"{int(stats_sim['total_exo_used'] + stats_sim['total_muscle_used'] + stats_sim['total_liver_used'])} g")
         st.metric("FAT Ossidati", f"{int(stats_sim['fat_total_g'])} g")
 
@@ -509,6 +518,7 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
 
 
 
