@@ -104,8 +104,6 @@ def interpolate_consumption(current_val, curve_data):
         extra = current_val - p3['hr']
         return p3['cho'] + (extra * 4.0), max(0.0, p3['fat'] - extra * 0.5)
 
-# --- MOTORE TAPERING ---
-
 def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState = GlycogenState.NORMAL):
     LIVER_DRAIN_24H = 4.0 * 24 
     NEAT_CHO_24H = 1.0 * subject.weight_kg 
@@ -185,22 +183,16 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     final_tank['fill_pct'] = (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
     return pd.DataFrame(trajectory), final_tank
 
-# --- MOTORE DI SIMULAZIONE (DEFINTIVO) ---
-
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
                         intensity_series=None, metabolic_curve=None):
     
-    # INIZIALIZZAZIONE RISULTATI (Qui, per evitare NameError)
     results = []
-    
-    # Setup Serbatoi
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
     current_muscle_glycogen = initial_muscle_glycogen
     current_liver_glycogen = subject_data['liver_glycogen_g']
     
-    # Parametri Base
     avg_watts = activity_params.get('avg_watts', 200)
     ftp_watts = activity_params.get('ftp_watts', 250)
     threshold_hr = activity_params.get('threshold_hr', 170)
@@ -212,7 +204,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     
     is_lab_data_active = True if metabolic_curve else False
     
-    # Cinetica Esogena
     base_rate = 0.8 
     if subject_obj.height_cm > 170: base_rate += (subject_obj.height_cm - 170) * 0.015
     if custom_max_exo_rate is not None:
@@ -220,7 +211,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     else:
         max_exo_rate_g_min = min(base_rate * mix_type_input.ox_factor, mix_type_input.max_rate_gh / 60)
     
-    # Accumulatori
     gut_accumulation_total = 0.0
     current_exo_oxidation_g_min = 0.0
     alpha = 1 - np.exp(-1.0 / tau_absorption)
@@ -237,14 +227,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     
     for t in range(int(duration_min) + 1):
         
-        # 1. INTENSITÀ
         current_val = base_val
         if intensity_series is not None and t < len(intensity_series):
             current_val = intensity_series[t]
             
         current_if = current_val / threshold_ref if threshold_ref > 0 else 0.8
         
-        # 2. CONSUMO (Lab o Teorico)
         if is_lab_data_active:
             cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve)
             
@@ -278,7 +266,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             total_cho_demand_g_min = (kcal_demand * cho_percent) / 4.1
             fat_burned_g_min = (kcal_demand * (1.0 - cho_percent)) / 9.3
 
-        # 3. ESOGENO
         instant_input_g = 0.0 
         if not is_input_zero and intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
             instant_input_g = cho_per_unit_g 
@@ -286,6 +273,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         target_exo = max_exo_rate_g_min * oxidation_efficiency_input
         
         if t > 0:
+            # FIX NAME ERROR: uso current_exo_oxidation_g_min, non current_exo_ox_rate
             if is_input_zero: current_exo_oxidation_g_min *= (1 - alpha)
             else: current_exo_oxidation_g_min += alpha * (target_exo - current_exo_oxidation_g_min)
             current_exo_oxidation_g_min = max(0.0, current_exo_oxidation_g_min)
@@ -295,44 +283,30 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
 
             total_intake_cumulative += instant_input_g
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
-        else:
-            # Al tempo 0 inizializziamo i cumulativi
-            total_intake_cumulative = 0
-            total_exo_oxidation_cumulative = 0
 
-        # --- 4. RIPARTIZIONE DINAMICA (MODELLO COGGAN) ---
-        
-        # Muscle Fading: Più è pieno, più contribuisce. Più è vuoto, più delega.
+        muscle_share_ratio = 0.6 + (max(0, current_if - 0.5) * 0.75)
+        muscle_share_ratio = min(0.95, muscle_share_ratio)
         muscle_fill_ratio = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
-        fading_factor = math.pow(muscle_fill_ratio, 0.6) # Curva convessa
+        fading_factor = math.pow(muscle_fill_ratio, 0.6)
         
-        # Intensity Override: Se spingi forte, il muscolo DEVE lavorare
         intensity_drive = min(1.0, current_if)
-        base_muscle_share = 0.5 + (0.5 * intensity_drive) # Range 50% -> 100%
-        
+        base_muscle_share = 0.5 + (0.5 * intensity_drive)
         target_muscle_share = base_muscle_share * fading_factor
         
-        # Quote Ideali
         ideal_muscle_draw = total_cho_demand_g_min * target_muscle_share
         ideal_blood_demand = total_cho_demand_g_min - ideal_muscle_draw
         
-        # A. Esogeno (Priorità assoluta per risparmiare Fegato)
         from_exogenous = min(ideal_blood_demand, current_exo_oxidation_g_min)
         
-        # B. Fegato (Copre il resto della richiesta ematica)
         remaining_blood_needed = ideal_blood_demand - from_exogenous
-        liver_cap = 1.5 # Max epatico 1.5 g/min
+        liver_cap = 1.5 
         from_liver = min(remaining_blood_needed, liver_cap)
         from_liver = min(from_liver, current_liver_glycogen)
         
-        # C. FAILSAFE (Se il Fegato non basta, il Muscolo deve coprire il buco)
         unmet_blood_demand = remaining_blood_needed - from_liver
-        
-        # Totale muscolare = Quota ideale + Gap ematico
         from_muscle = ideal_muscle_draw + unmet_blood_demand
-        from_muscle = min(from_muscle, current_muscle_glycogen) # Non può dare ciò che non ha
+        from_muscle = min(from_muscle, current_muscle_glycogen)
         
-        # Update
         if t > 0:
             current_liver_glycogen -= from_liver
             current_muscle_glycogen -= from_muscle
