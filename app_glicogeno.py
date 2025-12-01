@@ -638,9 +638,7 @@ def calculate_zones_running_hr(thr):
 # --- FUNZIONE DI CALCOLO SETTIMANALE ---
 def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, subject_weight, vo2max):
     
-    # Tasso basale fegato (brain+organs): ~4-5 g/h
     LIVER_DRAIN_RATE = 4.5 
-    # Costo basale attività quotidiana (NEAT): ~1.2 g/kg/die (variabile, ma stima conservativa)
     DAILY_NEAT_CHO = 1.2 * subject_weight
     
     SYNTHESIS_EFFICIENCY = 0.95
@@ -660,26 +658,19 @@ def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_live
         intensity = day_data['intensity'] 
         cho_in = day_data['cho_in']
         
-        # 1. Consumo Basale Totale (Fegato + NEAT)
-        # Il fegato si svuota costantemente. Il NEAT consuma glucosio ematico/epatico.
         total_basal_drain = (24 * LIVER_DRAIN_RATE) + DAILY_NEAT_CHO
         
-        # Ripartiamo il basale: 70% Fegato, 30% pool ematico (che drena fegato se non si mangia)
-        # Semplificazione: Tutto dal Fegato/Sangue. Se fegato vuoto -> neoglucogenesi (non modellata qui, stop a 0)
-        
-        # 2. Deplezione da Esercizio (Allenamento)
         exercise_drain_muscle = 0
         exercise_drain_liver = 0
         
         if activity_type != "Riposo" and duration > 0:
-            # Stima costo energetico (Kcal/min)
             if intensity == "Bassa (Z1-Z2)":
                 rel_intensity = 0.5
-                cho_pct = 0.25 # Aumentato leggermente
+                cho_pct = 0.25 
             elif intensity == "Media (Z3)":
                 rel_intensity = 0.7
                 cho_pct = 0.65 
-            else: # Alta (Z4+)
+            else: 
                 rel_intensity = 0.85
                 cho_pct = 0.95 
                 
@@ -692,34 +683,18 @@ def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_live
             exercise_drain_liver = total_cho_burned * liver_fraction
             exercise_drain_muscle = total_cho_burned * (1 - liver_fraction)
             
-        # 3. Bilancio
-        
         total_daily_consumption = total_basal_drain + exercise_drain_liver + exercise_drain_muscle
         net_balance = cho_in * SYNTHESIS_EFFICIENCY - total_daily_consumption
         
-        # Logica di aggiornamento scorte
-        # Prima soddisfiamo il fabbisogno immediato (esercizio + basale)
-        # Se avanza CHO -> Refill Fegato -> Refill Muscolo
-        # Se manca CHO -> Drena Fegato -> Drena Muscolo
-        
         effective_input = cho_in * SYNTHESIS_EFFICIENCY
-        
-        # Fase 1: Copertura Spese
-        # Le spese "basali" e "fegato-esercizio" intaccano il fegato.
-        # Le spese "muscolo-esercizio" intaccano il muscolo.
         
         drain_liver_total = total_basal_drain + exercise_drain_liver
         drain_muscle_total = exercise_drain_muscle
         
-        # Bilancio Fegato
-        # Se input copre spese fegato + resto
         if effective_input >= drain_liver_total:
             surplus_after_liver_needs = effective_input - drain_liver_total
-            # Il fegato è "coperto" dal cibo, ma se era scarico si riempie?
-            # Assumiamo che il surplus vada a riempire
-            current_liver = current_liver # Mantiene livello (o si riempie col surplus)
+            current_liver = current_liver 
             
-            # Refill Logic
             liver_space = max_liver - current_liver
             if surplus_after_liver_needs >= liver_space:
                 current_liver = max_liver
@@ -729,19 +704,13 @@ def calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_live
                 surplus_for_muscle = 0
                 
         else:
-            # Input non basta per il fegato/basale
             deficit = drain_liver_total - effective_input
             current_liver -= deficit
-            surplus_for_muscle = 0 # Niente per il muscolo
+            surplus_for_muscle = 0 
             
-        # Bilancio Muscolo
-        # Il muscolo ha speso 'drain_muscle_total'.
-        # Se c'è surplus dal fegato, lo usiamo per recuperare o riempire
+        current_muscle -= drain_muscle_total 
+        current_muscle += surplus_for_muscle 
         
-        current_muscle -= drain_muscle_total # Applica la spesa
-        current_muscle += surplus_for_muscle # Applica il refill (se c'è)
-        
-        # Clamp
         if current_muscle > max_muscle: current_muscle = max_muscle
         if current_liver > max_liver: current_liver = max_liver
         
@@ -787,7 +756,7 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     """)
 # --- FINE NOTE TECNICHE REINTRODOTTE ---
 
-tab1, tab2, tab3, tab4 = st.tabs(["1. Profilo Base & Capacità", "2. Stato Pre-Evento (Riempimento)", "3. Simulazione & Strategia", "4. Diario Settimanale"])
+tab1, tab2, tab3 = st.tabs(["1. Profilo Base & Capacità", "2. Preparazione & Diario", "3. Simulazione & Strategia"])
 
 # --- TAB 1: PROFILO BASE & CAPACITÀ ---
 with tab1:
@@ -879,7 +848,9 @@ with tab1:
 
         with st.expander("Inserisci le Tue Soglie e Visualizza Zone", expanded=True):
             if s_sport == SportType.CYCLING:
+                # MODIFICA: FTP è l'input primario per IF
                 ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
+                st.caption(f"La FTP è usata come soglia per l'Intensity Factor (IF).")
                 
                 if zone_def_method == "Standard (Calcolate)":
                     zones_data = calculate_zones_cycling(ftp_watts_input)
@@ -901,8 +872,10 @@ with tab1:
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
+                # MODIFICA: Uso THR come dato primario per IF nella corsa
                 thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
+                st.caption(f"La Soglia Anaerobica è usata per calcolare l'IF (FC media / THR).")
                 
                 if zone_def_method == "Standard (Calcolate)":
                     zones_data = calculate_zones_running_hr(thr_hr_input)
@@ -921,7 +894,7 @@ with tab1:
                         {"Zona": "Z5+ - Sovrasoglia", "Range %": "Custom", "Valore": f"> {z4_lim} bpm"}
                     ]
 
-            else: # Altri sport
+            else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
                 c_thr, c_max = st.columns(2)
                 max_hr_input = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1, key='max_hr_input_general')
                 thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') 
@@ -995,7 +968,7 @@ with tab1:
         st.caption(f"Concentrazione muscolare base: **{calculated_conc:.1f} g/kg**")
         st.caption(f"Fonte Massa Muscolare: {tank_data['muscle_source_note']}")
 
-# --- TAB 2: STATO PRE-EVENTO (RIEMPIMENTO) ---
+# --- TAB 2: PREPARAZIONE & DIARIO (UNITO) ---
 with tab2:
     if 'base_tank_data' not in st.session_state:
         st.warning("Completare prima il Tab '1. Profilo Base & Capacità'.")
@@ -1011,32 +984,24 @@ with tab2:
     cho_g1 = weight * DietType.NORMAL.ref_value
     cho_g2 = weight * DietType.NORMAL.ref_value
     
-    col_in_2, col_res_2 = st.columns([1, 2])
+    st.subheader("Stato Pre-Gara: Analisi Rapida (48h)")
+    
+    col_in_2, col_res_2 = st.columns([1, 1])
     
     with col_in_2:
-        
-        # =========================================================================
-        # SEZIONE 3: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
-        # =========================================================================
-        st.subheader("1. Stato Nutrizionale (Introito CHO 48h)")
+        # SEZIONE 3: STATO NUTRIZIONALE
+        st.markdown("**1. Stato Nutrizionale (Introito CHO 48h)**")
         st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
-            "Metodo di Calcolo Ripristino Glicogeno:", 
-            ["1. Seleziona Tipo di Dieta (Veloce)", "2. Inserisci CHO Totale (g) dei 2 giorni precedenti"], 
-            key='diet_calc_method'
+            "Metodo Calcolo:", 
+            ["1. Veloce (Tipo Dieta)", "2. Preciso (Grammi CHO)"], 
+            key='diet_calc_method', horizontal=True
         )
         
-        # --- METODO 1: TIPO DI DIETA ---
-        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
+        if diet_method == "1. Veloce (Tipo Dieta)":
             diet_options_map = {d.label: d for d in DietType}
-            for d in DietType:
-                daily_cho = int(weight * d.ref_value)
-                sign = ">" if d == DietType.HIGH_CARB else ("<" if d == DietType.LOW_CARB else "~")
-                label = f"{d.label} ({sign}{d.ref_value} g/kg/die) [~{daily_cho}g tot]"
-                diet_options_map[label] = d
-            
-            selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
+            selected_diet_label = st.selectbox("Introito Glucidico", list(diet_options_map.keys()), index=1, key='diet_type_select')
             
             s_diet = DietType.NORMAL
             for d in DietType:
@@ -1044,54 +1009,28 @@ with tab2:
                     s_diet = d
                     break
             
-            # Ora calcoliamo i CHO fittizi e li assegnamo a cho_g1/g2
             cho_g1 = weight * s_diet.ref_value
             cho_g2 = weight * s_diet.ref_value 
             
-            # I fattori di recupero sono gestiti più avanti (Punto 5)
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
             
-            # Calcoliamo il diet_factor in base ai CHO fittizi (per la visualizzazione)
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_g1,
                 cho_day_minus_2_g=cho_g2,
-                s_fatigue=temp_fatigue, # Neutro
-                s_sleep=temp_sleep,     # Neutro
-                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
+                s_fatigue=temp_fatigue, 
+                s_sleep=temp_sleep,     
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
             )
             
-            st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
-            s_fatigue = FatigueState.RESTED 
-            s_sleep = SleepQuality.GOOD     
-        
-        # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
-            st.markdown("#### Input Glicogeno Totale (g/die)")
-            col_d2, col_d1 = st.columns(2)
+            c_d2, c_d1 = st.columns(2)
+            cho_day_minus_2_g = c_d2.number_input("CHO Giorno -2 (g)", 50, 800, 370, 10)
+            cho_day_minus_1_g = c_d1.number_input("CHO Giorno -1 (g)", 50, 800, 370, 10)
             
-            cho_day_minus_2_g = col_d2.number_input(
-                "Grammi CHO Giorno -2 (g)", 
-                min_value=50, max_value=800, value=370, step=10,
-                help="Apporto totale di CHO del penultimo giorno."
-            )
-            
-            cho_day_minus_1_g = col_d1.number_input(
-                "Grammi CHO Giorno -1 (g)", 
-                min_value=50, max_value=800, value=370, step=10,
-                help="Apporto totale di CHO del giorno precedente."
-            )
-            
-            # Assegna i valori reali agli output
             cho_g1 = cho_day_minus_1_g
             cho_g2 = cho_day_minus_2_g
-
-            cho_day_minus_2_gk = cho_day_minus_2_g / weight
-            cho_day_minus_1_gk = cho_day_minus_1_g / weight
-
-            col_d2.caption(f"$\sim$ **{cho_day_minus_2_gk:.1f} g/kg/die**")
-            col_d1.caption(f"$\sim$ **{cho_day_minus_1_gk:.1f} g/kg/die**")
             
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
@@ -1100,48 +1039,26 @@ with tab2:
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
-                s_fatigue=temp_fatigue, # Neutro
-                s_sleep=temp_sleep,     # Neutro
-                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
+                s_fatigue=temp_fatigue, 
+                s_sleep=temp_sleep,     
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
             )
-            s_fatigue = FatigueState.RESTED 
-            s_sleep = SleepQuality.GOOD     
-            
-            st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
-        st.markdown("---")
-        
-        # =========================================================================
-        # SEZIONE 4: FATTORI DI RECUPERO (FATICA E SONNO) - ALTA IMPORTANZA
-        # =========================================================================
-        st.subheader("2. Condizione di Recupero (Fattori di Sottrazione)")
-        st.warning("Il sesso e la durata dell'esercizio sono i maggiori fattori che influenzano la scelta dei substrati in gara (Rothschild et al., 2022).")
-        
+        # SEZIONE 4: RECUPERO
+        st.markdown("**2. Condizione di Recupero**")
         default_sleep_label = "Sufficiente (6-7h)"
         default_sleep_index = list(sleep_map.keys()).index(default_sleep_label)
         
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=default_sleep_index, key='sleep_final')] 
         
-        
-        # --- INPUT ATTIVITÀ MOTORIA SPECIFICA (Opzionale) ---
-        with st.expander("Attività Motorio/Sportiva Effettuata (Giorno -1 e -2)"):
-            st.markdown("#### Fornisci dati oggettivi per calibrare il Fattore Fatica:")
-            
-            col_m2_steps, col_m2_act = st.columns(2)
-            steps_m2 = col_m2_steps.number_input("Passi Giorno -2", min_value=0, value=10000, step=500)
-            min_act_m2 = col_m2_act.number_input("Minuti Attività Sportiva Giorno -2", min_value=0, value=60, step=10)
+        with st.expander("Dettagli Attività Motorio/Sportiva (Opzionale)"):
+            c1, c2 = st.columns(2)
+            steps_m1 = c1.number_input("Passi Giorno -1", 0, 20000, 5000, 500)
+            min_act_m1 = c2.number_input("Minuti Sport Giorno -1", 0, 300, 30, 10)
+            steps_m2 = 0
+            min_act_m2 = 0
 
-            col_m1_steps, col_m1_act = st.columns(2)
-            steps_m1 = col_m1_steps.number_input("Passi Giorno -1", min_value=0, value=5000, step=500)
-            min_act_m1 = col_m1_act.number_input("Minuti Attività Sportiva Giorno -1", min_value=0, value=30, step=10)
-            
-            st.caption("Nota: Se l'attività è inserita, il fattore di deplezione (Carico di Lavoro) sarà calcolato oggettivamente. Altrimenti, viene usato il valore qualitativo selezionato sopra.")
-
-        # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
-        
-        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
-        # Visto che cho_g1/g2 sono definiti in entrambi i rami, possiamo chiamare la funzione qui:
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -1151,36 +1068,22 @@ with tab2:
             steps_m1=steps_m1, min_act_m1=min_act_m1, steps_m2=steps_m2, min_act_m2=min_act_m2
         )
         
-        st.markdown("---")
-        
-        # =========================================================================
-        # SEZIONE 5: PARAMETRI EPATICI/BIOMARKER (Acuti)
-        # =========================================================================
-        st.subheader("3. Stato Metabolico Acuto (Fegato/Glicemia)")
-        
-        has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
-        
+        # SEZIONE 5: METABOLICO ACUTO
+        st.markdown("**3. Stato Metabolico Acuto (Oggi)**")
+        has_glucose = st.checkbox("Ho misurato la Glicemia", key='has_glucose_tab2')
         glucose_val = None
         is_fasted = False
         
-        with st.expander("Dettagli Fegato/Glicemia"):
-            if has_glucose:
-                glucose_val = st.number_input("Glicemia Capillare a Digiuno (mg/dL)", 40, 200, 90, 1)
-
-            if not has_glucose:
-                is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", help="Riduzione fisiologica delle riserve epatiche post-riposo notturno.")
+        if has_glucose:
+            glucose_val = st.number_input("Glicemia (mg/dL)", 40, 200, 90, 1)
+        else:
+            is_fasted = st.checkbox("Allenamento a Digiuno (Morning Fasted)", key='is_fasted_tab2')
         
-        # Logica Fegato
         liver_val = 100.0
-        if is_fasted:
-            liver_val = 40.0 
+        if is_fasted: liver_val = 40.0 
         
-        # --- RICALCOLO FINALE E CREAZIONE OGGETTO SUBJECT ---
-        
-        # Recupera la struttura base creata nel Tab 1
+        # RICALCOLO SUBJECT E TANK
         base_subject = st.session_state['base_subject_struct']
-        
-        # Aggiorna solo i campi di stato dinamici
         subject = base_subject
         subject.liver_glycogen_g = liver_val
         subject.filling_factor = combined_filling
@@ -1190,53 +1093,67 @@ with tab2:
         st.session_state['tank_data'] = tank_data 
         st.session_state['tank_g'] = tank_data['actual_available_g']
         st.session_state['subject_struct'] = subject 
-    
-    # --- COLONNA RISULTATI TAB 2 ---
+
     with col_res_2:
-        
-        st.subheader("Stato del Serbatoio Pre-Evento")
-        
+        st.markdown("### Riserve Disponibili")
         fill_pct = tank_data['fill_pct']
-        st.write(f"**Livello di Riempimento Attuale:** {fill_pct:.1f}%")
+        st.metric("Livello Riempimento", f"{fill_pct:.1f}%")
         st.progress(int(fill_pct))
         
         if fill_pct < 60:
-            st.error("Attenzione: Riserve di glicogeno ridotte (<60%). Rischio Bonk elevato.")
+            st.error("Attenzione: Riserve ridotte. Rischio elevato.")
         elif fill_pct < 90:
-            st.warning("Stato nutrizionale nella norma, ma non ottimizzato per la performance massima.")
+            st.warning("Buono, ma non ottimale per gare lunghe.")
         else:
-            st.success("Condizione ottimale (Tapering/Carico).")
-
-        c1, c2 = st.columns(2)
-        c1.metric("Glicogeno Muscolare", f"{int(tank_data['muscle_glycogen_g'])} g", 
-                  help="Riserva attuale nel muscolo attivo.")
-        c2.metric("Glicogeno Epatico", f"{int(tank_data['liver_glycogen_g'])} g",
-                  help="Riserva attuale nel fegato.")
-        
-        st.markdown("---")
-        
-        factors_text = []
-        
-        # Logica di visualizzazione dei fattori
-        if diet_method == "1. Seleziona Tipo di Dieta (Veloce)": 
-            temp_diet_map = {d.label: d for d in DietType}
-            s_diet_label = st.session_state.get('diet_type_select', list(temp_diet_map.keys())[1])
-            s_diet = DietType.NORMAL
-            for d in DietType:
-                if selected_diet_label.startswith(d.label):
-                    s_diet = d
-                    break
-
-            if s_diet == DietType.HIGH_CARB: factors_text.append("Supercompensazione Attiva (+25%)")
+            st.success("Serbatoio Pieno (Ready to Race).")
             
-        elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
+        c1, c2 = st.columns(2)
+        c1.metric("Muscolo (g)", int(tank_data['muscle_glycogen_g']))
+        c2.metric("Fegato (g)", int(tank_data['liver_glycogen_g']))
 
-        if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
+    st.markdown("---")
+    
+    # --- DIARIO SETTIMANALE INTEGRATO ---
+    st.subheader("Diario Settimanale del Glicogeno (Pianificazione)")
+    st.info("Simula l'andamento del glicogeno su 7 giorni per pianificare la settimana di gara (Tapering).")
+    
+    with st.expander("Compila il Diario Settimanale", expanded=False):
+        days = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
+        weekly_schedule = []
         
-        if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
-        
-        if factors_text:
-            st.caption(f"**Fattori attuali applicati:** {'; '.join(factors_text)}")
+        # Layout a griglia per i giorni
+        for day in days:
+            st.markdown(f"**{day}**")
+            c1, c2, c3, c4 = st.columns([1.5, 1, 1.2, 1])
+            activity = c1.selectbox("Attività", ["Riposo", "Corsa", "Bici", "Altro"], key=f"{day}_act", label_visibility="collapsed")
+            duration = c2.number_input("Minuti", 0, 300, 0, key=f"{day}_dur", label_visibility="collapsed") if activity != "Riposo" else 0
+            intensity = c3.selectbox("Intensità", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key=f"{day}_int", label_visibility="collapsed") if activity != "Riposo" else "Riposo"
+            cho_in = c4.number_input("CHO (g)", 0, 1500, 300, key=f"{day}_cho", label_visibility="collapsed", help="Carboidrati totali assunti nella giornata")
+            
+            weekly_schedule.append({
+                "day": day, "activity": activity, "duration": duration, 
+                "intensity": intensity, "cho_in": cho_in
+            })
+            
+        if st.button("Calcola Trend Settimanale"):
+            initial_muscle = st.session_state['base_tank_data']['max_capacity_g'] - 100 
+            initial_liver = 100
+            max_muscle = st.session_state['base_tank_data']['max_capacity_g'] - 100
+            max_liver = 120 
+            vo2max_calc = st.session_state['base_subject_struct'].vo2max_absolute_l_min * 1000 / weight 
+
+            df_weekly = calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, weight, vo2max_calc)
+            
+            st.markdown("### 📉 Andamento Riserve Glicogeno (7 Giorni)")
+            
+            chart_weekly_line = alt.Chart(df_weekly).mark_line(point=True).encode(
+                x=alt.X('Giorno', sort=days),
+                y=alt.Y('Totale', title='Glicogeno Totale (g)'),
+                tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico', 'Allenamento', 'CHO In']
+            ).properties(height=300)
+            
+            st.altair_chart(chart_weekly_line, use_container_width=True)
+
 
 # --- TAB 3: SIMULAZIONE & STRATEGIA ---
 with tab3:
@@ -1496,9 +1413,6 @@ with tab3:
 
 
         h_cm = subj.height_cm 
-        
-        # Inserisco l'IF di riferimento nell'act_params
-        act_params['intensity_factor'] = intensity_factor_reference
         
         df_sim, stats = simulate_metabolism(
             tank_data, duration, carb_intake, cho_per_unit, crossover, 
@@ -1846,74 +1760,3 @@ with tab3:
                 st.warning("Verificare i parametri di integrazione.")
         else:
             st.info("Nessuna integrazione pianificata.")
-    
-    
-    # --- TAB 4: DIARIO SETTIMANALE (SCHELETRO) ---
-    with tab4:
-        st.subheader("Diario Settimanale del Glicogeno")
-        st.info("Modella la tua settimana per vedere come il glicogeno fluttua in base all'allenamento e alla dieta.")
-        
-        # Struttura Dati Settimanale (Inizializzazione)
-        days = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
-        weekly_schedule = []
-        
-        # Input per ogni giorno
-        for day in days:
-            with st.expander(f"{day}"):
-                c1, c2, c3, c4 = st.columns(4)
-                activity = c1.selectbox("Attività", ["Riposo", "Corsa", "Bici", "Altro"], key=f"{day}_act")
-                duration = c2.number_input("Durata (min)", 0, 300, 0, key=f"{day}_dur") if activity != "Riposo" else 0
-                intensity = c3.selectbox("Intensità", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key=f"{day}_int") if activity != "Riposo" else "Riposo"
-                cho_in = c4.number_input("CHO Assunti (g)", 0, 1500, 300, key=f"{day}_cho")
-                
-                weekly_schedule.append({
-                    "day": day, "activity": activity, "duration": duration, 
-                    "intensity": intensity, "cho_in": cho_in
-                })
-        
-        # Calcolo e Visualizzazione
-        if st.button("Calcola Trend Settimanale"):
-            # Recupera i dati iniziali dal Tab 1 (Tank pieno come start, o attuale?)
-            # Assumiamo start da Tank Pieno o da valori di default se Tab 1 non compilato
-            if 'base_tank_data' in st.session_state:
-                initial_muscle = st.session_state['base_tank_data']['max_capacity_g'] - 100 # Start un po' meno del max
-                initial_liver = 100
-                max_muscle = st.session_state['base_tank_data']['max_capacity_g'] - 100
-                max_liver = 120 # Approx
-                weight = st.session_state['base_subject_struct'].weight_kg
-                vo2max = st.session_state['base_subject_struct'].vo2max_absolute_l_min * 1000 / weight 
-            else:
-                initial_muscle = 500
-                initial_liver = 100
-                max_muscle = 600
-                max_liver = 120
-                weight = 74
-                vo2max = 60
-
-            df_weekly = calculate_weekly_balance(initial_muscle, initial_liver, max_muscle, max_liver, weekly_schedule, weight, vo2max)
-            
-            st.markdown("### 📉 Andamento Riserve Glicogeno (7 Giorni)")
-            
-            # Grafico Altair (Linea Trend)
-            chart_weekly_line = alt.Chart(df_weekly).mark_line(point=True).encode(
-                x=alt.X('Giorno', sort=days),
-                y=alt.Y('Totale', title='Glicogeno Totale (g)'),
-                tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico', 'Allenamento', 'CHO In']
-            )
-            
-            # Grafico Altair (Bilancio Barre)
-            chart_balance = alt.Chart(df_weekly).mark_bar().encode(
-                x=alt.X('Giorno', sort=days),
-                y=alt.Y('Bilancio Netto', title='Bilancio (g)'),
-                color=alt.condition(
-                    alt.datum['Bilancio Netto'] > 0,
-                    alt.value("steelblue"),  # The positive color
-                    alt.value("orange")  # The negative color
-                )
-            )
-            
-            # Combinazione verticale
-            final_weekly_chart = alt.vconcat(chart_weekly_line, chart_balance).resolve_scale(x='shared')
-            
-            st.altair_chart(final_weekly_chart, use_container_width=True)
-            st.table(df_weekly)
