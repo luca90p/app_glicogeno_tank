@@ -809,7 +809,7 @@ with tab2:
         # SEZIONE 3: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
         # =========================================================================
         st.subheader("1. Stato Nutrizionale (Introito CHO 48h)")
-        st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
+        st.success("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
             "Metodo di Calcolo Ripristino Glicogeno:", 
@@ -1075,21 +1075,17 @@ with tab3:
             
             file_upload_method = st.radio(
                 "Fonte dati attività:", 
-                ["Manuale (Media)", "Carica File (.gpx / .csv)"],
+                ["Manuale (Media)", "Carica File (.fit / .gpx / .csv)"],
                 key='file_upload_method'
             )
             
-            if file_upload_method == "Carica File (.gpx / .csv)":
-                uploaded_file = st.file_uploader("Carica file attività (.gpx o .csv)", type=['gpx', 'csv'])
+            if file_upload_method == "Carica File (.fit / .gpx / .csv)":
+                st.info("I file .gpx/.fit devono essere convertiti in .csv con colonne 'power' o 'heart_rate'.")
+                uploaded_file = st.file_uploader("Carica file attività", type=['gpx', 'csv', 'fit'])
                 
                 if uploaded_file is not None:
                     try:
-                        # Simuliamo l'estrazione dai dati (i file .gpx non sono leggibili direttamente da pd.read_csv)
-                        if uploaded_file.name.endswith('.gpx'):
-                             st.warning("ATTENZIONE: L'analisi di file .gpx richiede conversione in CSV con colonne 'power' o 'heart_rate'. Simulo l'estrazione.")
-                        
-                        # In un'applicazione reale, dovresti usare una libreria come gpxpy o xml.etree per .gpx
-                        # Qui simuliamo la lettura di un CSV ben formattato per la demo
+                        # Simuliamo l'estrazione dai dati (la lettura FIT/GPX è simulata come CSV per Streamlit)
                         df_activity = pd.read_csv(uploaded_file)
                         
                         # Simula l'estrazione di dati chiave (assumendo 5s per riga come proxy di risoluzione)
