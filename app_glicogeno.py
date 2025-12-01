@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import altair as alt
-from dataclasses import dataclass
+from dataclasses import dataclass, replace # Importa replace
 from enum import Enum
 import math
 import xml.etree.ElementTree as ET
@@ -728,16 +728,16 @@ def main():
                 steps_m1, min_act_m1, steps_m2, min_act_m2
             )
             
-            # Update Subject
-            subj_current = dataclass(frozen=False)(lambda: subj)() # Clone sporco o ricrea
-            # Ricreiamo per pulizia
-            subj.filling_factor = combined_filling
-            subj.glucose_mg_dl = gluc_val
-            if is_fasted: subj.liver_glycogen_g = 40.0
+            # Update Subject con copia corretta
+            subj_current = replace(subj)
+            subj_current.filling_factor = combined_filling
+            subj_current.glucose_mg_dl = gluc_val
+            if is_fasted: 
+                subj_current.liver_glycogen_g = 40.0
             
-            tank_current = calculate_tank(subj)
+            tank_current = calculate_tank(subj_current)
             st.session_state['tank_current'] = tank_current
-            st.session_state['subj_current'] = subj
+            st.session_state['subj_current'] = subj_current
 
         with col_res_2:
             st.subheader("Stato Pre-Evento")
