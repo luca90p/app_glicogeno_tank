@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 import math
 import xml.etree.ElementTree as ET
-import io # Necessario per leggere i file in memoria
+import io 
 
 # --- 0. SISTEMA DI PROTEZIONE (LOGIN) ---
 def check_password():
@@ -14,30 +14,26 @@ def check_password():
 
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["password"] == "glicogeno2025": # <--- CAMBIA QUI LA TUA PASSWORD
+        if st.session_state["password"] == "glicogeno2025": 
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # don't store password
+            del st.session_state["password"]  
         else:
             st.session_state["password_correct"] = False
 
     if "password_correct" not in st.session_state:
-        # First run, show input for password.
         st.text_input(
             "🔐 Inserisci la Password per accedere al Simulatore", type="password", on_change=password_entered, key="password"
         )
         return False
     elif not st.session_state["password_correct"]:
-        # Password incorrect, show input + error.
         st.text_input(
             "🔐 Inserisci la Password per accedere al Simulatore", type="password", on_change=password_entered, key="password"
         )
         st.error("😕 Password errata. Riprova.")
         return False
     else:
-        # Password correct.
         return True
 
-# Se la password non è corretta, ferma tutto qui.
 if not check_password():
     st.stop()
 
@@ -107,15 +103,14 @@ class MenstrualPhase(Enum):
         self.factor = factor
         self.label = label
 
-# --- NUOVO ENUM: TIPO DI MIX CARBOIDRATI ---
 class ChoMixType(Enum):
     GLUCOSE_ONLY = (1.0, 60.0, "Solo Glucosio/Maltodestrine (Standard)")
     MIX_2_1 = (1.5, 90.0, "Mix 2:1 (Maltodestrine:Fruttosio)")
     MIX_1_08 = (1.7, 105.0, "Mix 1:0.8 (High Frructose)")
 
     def __init__(self, ox_factor, max_rate_gh, label):
-        self.ox_factor = ox_factor # Fattore moltiplicativo rispetto al glucosio
-        self.max_rate_gh = max_rate_gh # Tasso massimo teorico g/h
+        self.ox_factor = ox_factor 
+        self.max_rate_gh = max_rate_gh 
         self.label = label
 
 @dataclass
@@ -132,7 +127,7 @@ class Subject:
     menstrual_phase: MenstrualPhase = MenstrualPhase.NONE
     glucose_mg_dl: float = None
     vo2max_absolute_l_min: float = 3.5 
-    muscle_mass_kg: float = None # Nuovo campo per l'input reale
+    muscle_mass_kg: float = None 
 
     @property
     def lean_body_mass(self) -> float:
@@ -154,64 +149,40 @@ def get_concentration_from_vo2max(vo2_max):
     return conc
 
 def calculate_depletion_factor(steps, activity_min, s_fatigue):
-    # Passi: 10k passi = neutro (0.0). Ogni 5k in più/meno -> +/- 0.1 di fattore.
-    # Attività: 60 min intensi = neutro (0.0). Ogni 60 min in più -> -0.1.
-    
-    # Fattore basato sui passi (peso 0.4)
-    # 5k passi -> -0.1, 15k passi -> 0.1, 20k passi -> 0.2
     steps_base = 10000 
     steps_factor = (steps - steps_base) / 5000 * 0.1 * 0.4
     
-    # Fattore basato sull'attività (peso 0.6)
-    # 0 min -> -0.1, 120 min -> 0.0, 180 min -> -0.1
-    activity_base = 120 # min/die
-    if activity_min < 60: # Se l'attività è molto bassa, c'è un piccolo bonus di recupero
+    activity_base = 120 
+    if activity_min < 60: 
         activity_factor = (1 - (activity_min / 60)) * 0.05 * 0.6
     else:
         activity_factor = (activity_min - activity_base) / 60 * -0.1 * 0.6
         
     depletion_impact = steps_factor + activity_factor
     
-    # Mappiamo l'impatto sul fattore di fatica qualitativo
-    # Base 1.0 (RESTED) + impatto
     estimated_depletion_factor = max(0.6, min(1.0, 1.0 + depletion_impact))
     
-    # Usiamo il fattore qualitativo s_fatigue se l'utente non ha inserito dati precisi
     if steps == 0 and activity_min == 0:
         return s_fatigue.factor
     else:
         return estimated_depletion_factor
 
 def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_minus_2_g, s_fatigue, s_sleep, steps_m1, min_act_m1, steps_m2, min_act_m2):
-    
-    # Logica ispirata agli studi Bergström/Sherman: il riempimento è dettato
-    # dall'introito degli ultimi 2 giorni.
-    
-    # Range di assunzione CHO (g/kg/die)
     CHO_BASE_GK = 5.0
     CHO_MAX_GK = 10.0
     CHO_MIN_GK = 2.5
     
-    # Conversione da Grammi Totali a Grammi/Kg
-    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0) # Protezione da divisione per zero
-    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0) # Protezione da divisione per zero
+    cho_day_minus_1_g = max(cho_day_minus_1_g, 1.0) 
+    cho_day_minus_2_g = max(cho_day_minus_2_g, 1.0) 
     
     cho_day_minus_1_gk = cho_day_minus_1_g / weight_kg
     cho_day_minus_2_gk = cho_day_minus_2_g / weight_kg
     
-    # --- NUOVA LOGICA: FATTORI DI DEPLEZIONE QUANTITATIVI ---
-    
-    # Calcola il fattore di deplezione (che viene applicato come sottrazione dal riempimento teorico)
-    # Se l'utente non ha inserito passi/minuti, il risultato è 1.0 (RESTED) o il fattore qualitativo di default.
     depletion_m1_factor = calculate_depletion_factor(steps_m1, min_act_m1, s_fatigue)
     depletion_m2_factor = calculate_depletion_factor(steps_m2, min_act_m2, s_fatigue)
     
-    # Per il fattore combinato, pesiamo l'effetto recupero/fatica
     recovery_factor = (depletion_m1_factor * 0.7) + (depletion_m2_factor * 0.3)
     
-    # 1. Calcolo del fattore di riempimento muscolare basato sul CHO ingerito (g/kg)
-    
-    # Peso dell'introito: Day -1 ha un impatto maggiore di Day -2
     avg_cho_gk = (cho_day_minus_1_gk * 0.7) + (cho_day_minus_2_gk * 0.3)
     
     if avg_cho_gk >= CHO_MAX_GK:
@@ -221,29 +192,22 @@ def calculate_filling_factor_from_diet(weight_kg, cho_day_minus_1_g, cho_day_min
     elif avg_cho_gk > CHO_MIN_GK:
         diet_factor_base = 0.5 + (avg_cho_gk - CHO_MIN_GK) * (0.5 / (CHO_BASE_GK - CHO_MIN_GK))
         diet_factor_base = max(0.5, diet_factor_base)
-    else: # Sotto CHO_MIN_GK o 2.5 g/kg
+    else: 
         diet_factor_base = 0.5
     
-    diet_factor_base = min(1.25, max(0.5, diet_factor_base)) # Clamp tra 0.5 e 1.25
+    diet_factor_base = min(1.25, max(0.5, diet_factor_base)) 
     
-    # Calcolo finale: Il fattore di riempimento viene moderato dal fattore di recupero/deplezione (recovery_factor)
-    # L'impatto di s_sleep è gestito separatamente nel combined_filling finale.
     final_diet_depletion_factor = diet_factor_base * recovery_factor 
-
-    # 2. Applicazione dei fattori di recupero
     combined_filling = final_diet_depletion_factor * s_sleep.factor
     
-    # Restituiamo il fattore combinato e il fattore dieta base calcolato e il rateo g/kg effettivo
     return combined_filling, final_diet_depletion_factor, avg_cho_gk, cho_day_minus_1_gk, cho_day_minus_2_gk
 
 
 def calculate_tank(subject: Subject):
-    # Nuova logica: Se muscle_mass_kg è fornito, usiamo quello per la massa muscolare totale.
     if subject.muscle_mass_kg is not None and subject.muscle_mass_kg > 0:
         total_muscle = subject.muscle_mass_kg
         muscle_source_note = "Massa Muscolare Totale (SMM) fornita dall'utente."
     else:
-        # Calcolo standard basato su LBM e frazione muscolare stimata
         lbm = subject.lean_body_mass
         total_muscle = lbm * subject.muscle_fraction
         muscle_source_note = "Massa Muscolare Totale stimata da Peso/BF/Sesso."
@@ -291,10 +255,7 @@ def calculate_tank(subject: Subject):
         "muscle_source_note": muscle_source_note
     }
 
-# Aggiornato per accettare il mix type
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: ChoMixType):
-    # Base rate per GLUCOSIO
-    # Iniziamo con la stima individuale (Podlogar/Body Size/Potenza)
     base_rate = 0.8 
     
     if height_cm > 170:
@@ -302,13 +263,11 @@ def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: 
     if ftp_watts > 200:
         base_rate += (ftp_watts - 200) * 0.0015
     
-    # Applichiamo il fattore moltiplicativo basato sul tipo di mix
     ox_factor = mix_type.ox_factor
     max_rate_gh = mix_type.max_rate_gh
     
     estimated_rate_gh = base_rate * 60 * ox_factor
     
-    # Tasso finale limitato dal limite fisiologico del mix (es. 1.7 g/min per 1:0.8)
     final_rate_g_min = min(estimated_rate_gh / 60, max_rate_gh / 60)
     
     return final_rate_g_min
@@ -338,7 +297,7 @@ def simulate_metabolism(
     oxidation_efficiency_input=0.80, 
     custom_max_exo_rate=None,
     mix_type_input=ChoMixType.GLUCOSE_ONLY,
-    intensity_series=None # Nuovo parametro: Serie di IF istantanei (0-1.5)
+    intensity_series=None
 ):
     tank_g = subject_data['actual_available_g']
     results = []
@@ -352,26 +311,21 @@ def simulate_metabolism(
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
     
-    # Recupero i parametri statici per l'IF dinamico
     avg_power = activity_params.get('avg_watts', 200)
     ftp_watts = activity_params.get('ftp_watts', 250) 
     avg_hr = activity_params.get('avg_hr', 150)
     max_hr = activity_params.get('max_hr', 185)
     
-    # Determino l'IF di riferimento (solo se non usiamo la serie dinamica)
     intensity_factor_reference = activity_params.get('intensity_factor', 0.8)
     
-    # Calcolo dei tassi base per le simulazioni basate su HR/Potenza
     if mode == 'cycling':
         kcal_per_min_base = (avg_power * 60) / 4184 / (gross_efficiency / 100.0)
     elif mode == 'running':
-        # Calcola kcal_per_min_base usando la velocità media o proxy HR
         speed_kmh = activity_params.get('speed_kmh', 10.0)
         weight = subject_obj.weight_kg
         kcal_per_hour = 1.0 * weight * speed_kmh
         kcal_per_min_base = kcal_per_hour / 60.0
     else:
-        # Usa un proxy basato su VO2max e IF di riferimento per calcolare kcal/min
         vo2_operating = subject_obj.vo2max_absolute_l_min * intensity_factor_reference
         kcal_per_min_base = vo2_operating * 5.0
         
@@ -382,7 +336,6 @@ def simulate_metabolism(
     crossover_pct = activity_params.get('crossover_pct', 70)
     crossover_if = crossover_pct / 100.0
     
-    # --- STIMA O USO DEL TASSO MASSIMO DI OSSIDAZIONE ESOGENA ---
     if custom_max_exo_rate is not None:
         max_exo_rate_g_min = custom_max_exo_rate 
     else:
@@ -415,19 +368,13 @@ def simulate_metabolism(
     
     for t in range(int(duration_min) + 1):
         
-        # --- 1. DETERMINAZIONE IF/RICHIESTA ISTANTANEA ---
-        
         current_intensity_factor = intensity_factor_reference
         if intensity_series is not None and t < len(intensity_series):
-            # Usa l'IF istantaneo fornito dal file strutturato
             current_intensity_factor = intensity_series[t]
         
-        # Aggiorna la richiesta calorica (con drift)
         current_kcal_demand = 0.0
         
-        # Ricalcolo Kcal Demand basato sull'IF istantaneo
         if mode == 'cycling':
-            # Se usiamo la serie IF, calcoliamo la potenza istantanea
             instant_power = current_intensity_factor * ftp_watts
             current_eff = gross_efficiency
             if t > 60: 
@@ -435,18 +382,14 @@ def simulate_metabolism(
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (instant_power * 60) / 4184 / (current_eff / 100.0)
             
-        else: # Running/Other
-            # Per corsa/altro, il costo base è kcal_per_min_base, ma lo scaliamo per l'IF istantaneo
+        else: 
             demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             
             drift_factor = 1.0
             if t > 60:
                 drift_factor += (t - 60) * 0.0005 
             
-            # Qui si usa la kcal_per_min_base derivata dall'Avg Speed/HR in Tab 3
             current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
-        
-        # Fine determinazione IF/Richiesta
         
         instantaneous_input_g_min = 0.0 
         
@@ -473,7 +416,6 @@ def simulate_metabolism(
             total_intake_cumulative += instantaneous_input_g_min 
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
-        # --- Ripartizione Substrati (Dinamico) ---
         if is_lab_data:
             fatigue_mult = 1.0 + ((t - 30) * 0.0005) if t > 30 else 1.0 
             total_cho_demand = lab_cho_rate * fatigue_mult 
@@ -488,7 +430,6 @@ def simulate_metabolism(
             rer = 0.7 + (0.3 * cho_ratio) 
         
         else:
-            # Calcola RER in base all'IF istantaneo
             effective_if_for_rer = current_intensity_factor + ((75.0 - crossover_pct) / 100.0)
             if effective_if_for_rer < 0.3: effective_if_for_rer = 0.3
             
@@ -548,7 +489,6 @@ def simulate_metabolism(
             
         exo_oxidation_g_h = from_exogenous * 60
         
-        # --- CALCOLO % TOTALE ENERGIA FORNITA (per tooltip) ---
         g_muscle = muscle_usage_g_min
         g_liver = from_liver
         g_exo = from_exogenous
@@ -611,7 +551,6 @@ def simulate_metabolism(
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     
     try:
-        # Leggi il contenuto del file
         xml_content = uploaded_file.getvalue().decode('utf-8')
         root = ET.fromstring(xml_content)
     except ET.ParseError:
@@ -621,10 +560,8 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
         st.error(f"Errore nella lettura del file: {e}")
         return [], 0, 0, 0
 
-    # 1. Estrazione del tipo di sport dal file ZWO
     zwo_sport_tag = root.findtext('sportType')
     
-    # Controllo di coerenza
     if zwo_sport_tag:
         if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
             st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per BICI. Uso i parametri di soglia per {sport_type.label} per coerenza.")
@@ -632,11 +569,10 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
             st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per CORSA. Uso i parametri di soglia per {sport_type.label} per coerenza.")
 
     
-    intensity_series = [] # Array degli IF (Intensity Factors) minuto per minuto
+    intensity_series = [] 
     total_duration_sec = 0
     total_weighted_if = 0
     
-    # 2. Parsing dei segmenti SteadyState
     for steady_state in root.findall('.//SteadyState'):
         try:
             duration_sec = int(steady_state.get('Duration'))
@@ -661,22 +597,45 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     if total_duration_min > 0:
         avg_if = total_weighted_if / total_duration_min
         
-        # 3. Mappatura AvgW/AvgHR in base alla Disciplina selezionata nel Tab 1
         if sport_type == SportType.CYCLING:
-            # Per il ciclismo usiamo l'FTP del Tab 1 per calcolare la potenza media effettiva
             avg_power = avg_if * ftp_watts
             avg_hr = 0
         elif sport_type == SportType.RUNNING:
-            # Per la corsa usiamo la THR (Soglia) del Tab 1 per calcolare la FC media effettiva
             avg_hr = avg_if * thr_hr
             avg_power = 0
-        else: # Altri sport
+        else: 
             avg_hr = avg_if * st.session_state.get('max_hr_input', 185) * 0.85 
             avg_power = 0
             
         return intensity_series, total_duration_min, avg_power, avg_hr
     
     return [], 0, 0, 0
+
+# --- FUNZIONI PER LE ZONE DI ALLENAMENTO ---
+
+def calculate_zones_cycling(ftp):
+    # Zone di Coggan (Potenza)
+    return [
+        {"Zona": "Z1 - Recupero Attivo", "Range %": "< 55%", "Valore": f"< {int(ftp*0.55)} W"},
+        {"Zona": "Z2 - Endurance (Fondo Lento)", "Range %": "56 - 75%", "Valore": f"{int(ftp*0.56)} - {int(ftp*0.75)} W"},
+        {"Zona": "Z3 - Tempo (Medio)", "Range %": "76 - 90%", "Valore": f"{int(ftp*0.76)} - {int(ftp*0.90)} W"},
+        {"Zona": "Z4 - Soglia (FTP)", "Range %": "91 - 105%", "Valore": f"{int(ftp*0.91)} - {int(ftp*1.05)} W"},
+        {"Zona": "Z5 - VO2max", "Range %": "106 - 120%", "Valore": f"{int(ftp*1.06)} - {int(ftp*1.20)} W"},
+        {"Zona": "Z6 - Capacità Anaerobica", "Range %": "121 - 150%", "Valore": f"{int(ftp*1.21)} - {int(ftp*1.50)} W"},
+        {"Zona": "Z7 - Potenza Neuromuscolare", "Range %": "> 150%", "Valore": f"> {int(ftp*1.50)} W"}
+    ]
+
+def calculate_zones_running_hr(thr):
+    # Zone di Joe Friel (FC) basate su LTHR (Soglia Anaerobica)
+    return [
+        {"Zona": "Z1 - Recupero", "Range %": "< 85% LTHR", "Valore": f"< {int(thr*0.85)} bpm"},
+        {"Zona": "Z2 - Aerobico (Fondo Lento)", "Range %": "85 - 89% LTHR", "Valore": f"{int(thr*0.85)} - {int(thr*0.89)} bpm"},
+        {"Zona": "Z3 - Tempo (Medio)", "Range %": "90 - 94% LTHR", "Valore": f"{int(thr*0.90)} - {int(thr*0.94)} bpm"},
+        {"Zona": "Z4 - Sub-Soglia", "Range %": "95 - 99% LTHR", "Valore": f"{int(thr*0.95)} - {int(thr*0.99)} bpm"},
+        {"Zona": "Z5a - Super-Soglia (FTP)", "Range %": "100 - 102% LTHR", "Valore": f"{int(thr*1.00)} - {int(thr*1.02)} bpm"},
+        {"Zona": "Z5b - Capacità Aerobica", "Range %": "103 - 106% LTHR", "Valore": f"{int(thr*1.03)} - {int(thr*1.06)} bpm"},
+        {"Zona": "Z5c - Potenza Anaerobica", "Range %": "> 106% LTHR", "Valore": f"> {int(thr*1.06)} bpm"}
+    ]
 
 # --- 3. INTERFACCIA UTENTE ---
 
@@ -788,12 +747,15 @@ with tab1:
         ftp_watts_input = 265 # DEFAULT
         thr_hr_input = 170 # DEFAULT
         max_hr_input = 185 # DEFAULT
+        
+        zones_data = [] # Dati per la tabella zone
 
-        with st.expander("Inserisci le Tue Soglie di Performance"):
+        with st.expander("Inserisci le Tue Soglie e Visualizza Zone", expanded=True):
             if s_sport == SportType.CYCLING:
                 # MODIFICA: FTP è l'input primario per IF
                 ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
                 st.caption(f"La FTP è usata come soglia per l'Intensity Factor (IF).")
+                zones_data = calculate_zones_cycling(ftp_watts_input)
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
@@ -801,12 +763,18 @@ with tab1:
                 thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
                 st.caption(f"La Soglia Anaerobica è usata per calcolare l'IF (FC media / THR).")
+                zones_data = calculate_zones_running_hr(thr_hr_input)
                 
             else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
                 c_thr, c_max = st.columns(2)
                 max_hr_input = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1, key='max_hr_input_general')
                 thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') # Aggiungo soglia aerobica
                 st.caption("La FC Max è usata per il calcolo approssimativo dell'IF.")
+                zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback su zone HR
+            
+            if zones_data:
+                st.markdown("**Le tue Zone di Allenamento Stimate:**")
+                st.table(pd.DataFrame(zones_data))
         
         # Salvataggio delle soglie nello stato di sessione per il Tab 3
         st.session_state['ftp_watts_input'] = ftp_watts_input
@@ -893,7 +861,7 @@ with tab2:
         # SEZIONE 3: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
         # =========================================================================
         st.subheader("1. Stato Nutrizionale (Introito CHO 48h)")
-        st.success("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
+        st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
             "Metodo di Calcolo Ripristino Glicogeno:", 
