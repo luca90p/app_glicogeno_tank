@@ -21,29 +21,6 @@ Supporta **Atleti Ibridi**, profili metabolici personalizzati e **Simulazione Sc
 if not utils.check_password():
     st.stop()
 
-def create_risk_zone_chart(df_data, title, max_y):
-    zones_df = pd.DataFrame({
-        'Zone': ['Sicurezza', 'Attenzione', 'Critico'],
-        'Start': [max_y * 0.35, max_y * 0.15, 0],
-        'End':   [max_y * 1.10, max_y * 0.35, max_y * 0.15],
-        'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
-    })
-    
-    background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
-        y=alt.Y('Start', title='Glicogeno Totale (g)', scale=alt.Scale(domain=[0, max_y])),
-        y2='End',
-        color=alt.Color('Color', scale=None, legend=None),
-        tooltip=['Zone']
-    )
-    
-    area = alt.Chart(df_data).mark_area(line=True, opacity=0.8).encode(
-        x=alt.X('Time (min)', title='Durata Esercizio (min)'),
-        y='Residuo Totale',
-        tooltip=['Time (min)', 'Residuo Totale', 'Scenario']
-    )
-    
-    return (background + area).properties(title=title, height=300)
-
 # Inizializzazione Session State
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
@@ -209,12 +186,14 @@ with tab2:
     
     st.subheader("🗓️ Diario di Avvicinamento (Multidisciplinare)")
     
+    # --- INPUT: STATO INIZIALE ---
     from data_models import GlycogenState
     st.markdown("#### Condizione di Partenza (-7 Giorni)")
     gly_states = list(GlycogenState)
     sel_state = st.selectbox("Livello di riempimento iniziale:", gly_states, format_func=lambda x: x.label, index=2)
     st.markdown("---")
     
+    # FIX SESSION STATE
     if "tapering_data" in st.session_state:
         if len(st.session_state["tapering_data"]) > 0:
             first_row = st.session_state["tapering_data"][0]
@@ -328,7 +307,7 @@ with tab3:
     tank_base = st.session_state['tank_data']
     subj = st.session_state['subject_struct']
     
-    # --- OVERRIDE MODE ---
+    # --- 🔴 OVERRIDE MODE ---
     st.markdown("### 🛠️ Modalità Test / Override")
     enable_override = st.checkbox("Abilita Override Livello Iniziale (Bypassa Tab 2)", value=False)
     
@@ -400,6 +379,7 @@ with tab3:
         st.markdown("### 3. Motore Metabolico")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
+        # Recupero Curva
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
         
@@ -426,6 +406,8 @@ with tab3:
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
     # --- ESECUZIONE SIMULAZIONI ---
+    
+    # 1. Strategia Integrata
     df_sim, stats_sim = logic.simulate_metabolism(
         tank, duration, cho_h, cho_unit, 
         crossover_val if not use_lab_active else 70, 
@@ -437,6 +419,7 @@ with tab3:
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
+    # 2. Riferimento (Digiuno)
     df_no, _ = logic.simulate_metabolism(
         tank, duration, 0, cho_unit, 
         crossover_val if not use_lab_active else 70, 
@@ -481,7 +464,7 @@ with tab3:
         st.metric("CHO Ossidati", f"{int(stats_sim['total_exo_used'] + stats_sim['total_muscle_used'] + stats_sim['total_liver_used'])} g")
         st.metric("FAT Ossidati", f"{int(stats_sim['fat_total_g'])} g")
 
-    # ROW 2: Ossidazione Lipidica (Nuova Sezione)
+    # ROW 2: Ossidazione Lipidica
     st.markdown("---")
     st.markdown("#### Ossidazione Lipidica (Tasso Orario)")
     chart_fat = alt.Chart(df_sim).mark_line(color='#FFC107', strokeWidth=3).encode(
@@ -491,19 +474,46 @@ with tab3:
     ).properties(height=250)
     st.altair_chart(chart_fat, use_container_width=True)
 
-    # ROW 3: Confronto Riserve (Nuova Sezione Separata)
+    # ROW 3: Confronto Riserve (STACKED + ZONES)
     st.markdown("---")
     st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
     st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
     
-    col_strat, col_digi = st.columns(2)
-    chart_strat = create_risk_zone_chart(df_sim, "Scenario: Con Integrazione", start_total)
-    chart_fast = create_risk_zone_chart(df_no, "Scenario: Digiuno", start_total)
+    # Preparazione Dati Stacked
+    reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
+    reserve_colors = ['#E57373', '#B71C1C'] # Chiaro = Muscolo, Scuro = Fegato
     
-    with col_strat:
-        st.altair_chart(chart_strat, use_container_width=True)
-    with col_digi:
-        st.altair_chart(chart_fast, use_container_width=True)
+    df_reserve_sim = df_sim.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
+    df_reserve_no = df_no.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
+    
+    # Background Zone
+    max_y = start_total * 1.05
+    zones_df = pd.DataFrame({
+        'Start': [max_y * 0.35, max_y * 0.15, 0],
+        'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
+        'Color': ['#66BB6A', '#FFA726', '#EF5350'] # Verde, Giallo, Rosso
+    })
+    
+    def create_reserve_stacked_chart(df_data, title):
+        bg = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
+            y=alt.Y('Start', scale=alt.Scale(domain=[0, max_y]), axis=None),
+            y2='End', color=alt.Color('Color', scale=None)
+        )
+        
+        area = alt.Chart(df_data).mark_area().encode(
+            x='Time (min)', 
+            y=alt.Y('Grammi', stack='zero', title='Residuo (g)'),
+            color=alt.Color('Tipo', scale=alt.Scale(domain=reserve_fields, range=reserve_colors)),
+            order=alt.Order('Tipo', sort='ascending'), # Epatico sotto, Muscolare sopra
+            tooltip=['Time (min)', 'Tipo', 'Grammi']
+        )
+        return (bg + area).properties(title=title, height=300)
+
+    c_strat, c_digi = st.columns(2)
+    with c_strat:
+        st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
+    with c_digi:
+        st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
 
     # ROW 4: Analisi Gut Load
     st.markdown("---")
@@ -514,7 +524,7 @@ with tab3:
     chart_gi = alt.layer(area_gut, rule).properties(height=350)
     st.altair_chart(chart_gi, use_container_width=True)
     
-    # Analisi Criticità & Timing (Reintrodotta)
+    # Analisi Criticità
     st.markdown("---")
     st.subheader("Analisi Criticità & Timing")
     
