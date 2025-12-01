@@ -98,7 +98,7 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     NEAT_CHO_24H = 1.0 * subject.weight_kg 
     MAX_SYNTHESIS_RATE_G_KG = 10.0 
     tank = calculate_tank(subject)
-    MAX_MUSCLE = tank['max_capacity_g'] - 120 
+    MAX_MUSCLE = tank['max_capacity_g'] - 100 
     MAX_LIVER = 100.0
     start_factor = start_state.factor
     current_muscle = min(MAX_MUSCLE * start_factor, MAX_MUSCLE)
@@ -342,4 +342,5 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         "cho_pct": cho_ratio * 100
     }
     return pd.DataFrame(results), stats
+
 
