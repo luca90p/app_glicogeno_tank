@@ -427,7 +427,6 @@ def simulate_metabolism(
         
         # Ricalcolo Kcal Demand basato sull'IF istantaneo
         if mode == 'cycling':
-            # Assumiamo che Avg_power sia un proxy del costo base quando non ci sono dati di file
             # Se usiamo la serie IF, calcoliamo la potenza istantanea
             instant_power = current_intensity_factor * ftp_watts
             current_eff = gross_efficiency
@@ -438,13 +437,13 @@ def simulate_metabolism(
             
         else: # Running/Other
             # Per corsa/altro, il costo base è kcal_per_min_base, ma lo scaliamo per l'IF istantaneo
-            # Per simulare l' aumento di richiesta energetica dovuto all'alta intensità del segmento
             demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             
             drift_factor = 1.0
             if t > 60:
                 drift_factor += (t - 60) * 0.0005 
             
+            # Qui si usa la kcal_per_min_base derivata dall'Avg Speed/HR in Tab 3
             current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
         
         # Fine determinazione IF/Richiesta
@@ -625,35 +624,33 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     # 1. Estrazione del tipo di sport dal file ZWO
     zwo_sport_tag = root.findtext('sportType')
     
+    # Controllo di coerenza
     if zwo_sport_tag:
         if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
-            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per {zwo_sport_tag.upper()}. Uso i parametri di soglia per il {sport_type.label}.")
+            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per BICI. Uso i parametri di soglia per {sport_type.label} per coerenza.")
         elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
-            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per {zwo_sport_tag.upper()}. Uso i parametri di soglia per il {sport_type.label}.")
+            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per CORSA. Uso i parametri di soglia per {sport_type.label} per coerenza.")
 
     
     intensity_series = [] # Array degli IF (Intensity Factors) minuto per minuto
-    total_duration_min = 0
-    total_weighted_if = 0
     total_duration_sec = 0
+    total_weighted_if = 0
     
-    # Lo ZWO ha la potenza espressa come frazione della Soglia (FTP/FTHR)
+    # 2. Parsing dei segmenti SteadyState
     for steady_state in root.findall('.//SteadyState'):
         try:
             duration_sec = int(steady_state.get('Duration'))
             power_ratio = float(steady_state.get('Power'))
             
-            # Arrotondiamo per eccesso per garantire che tutti i secondi siano coperti
             duration_min_segment = math.ceil(duration_sec / 60)
             
-            intensity_factor = power_ratio # Power Ratio = IF per ZWO
+            intensity_factor = power_ratio 
             
-            # Riempiamo la serie IF per ogni minuto
             for _ in range(duration_min_segment):
                 intensity_series.append(intensity_factor)
             
             total_duration_sec += duration_sec
-            total_weighted_if += intensity_factor * (duration_sec / 60) # Ponderiamo per i minuti esatti
+            total_weighted_if += intensity_factor * (duration_sec / 60) 
 
         except Exception as e:
             st.error(f"Errore durante l'analisi di un segmento SteadyState: {e}")
@@ -664,11 +661,13 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     if total_duration_min > 0:
         avg_if = total_weighted_if / total_duration_min
         
-        # Ricalcoliamo l'AvgW/AvgHR in base all'IF medio
+        # 3. Mappatura AvgW/AvgHR in base alla Disciplina selezionata nel Tab 1
         if sport_type == SportType.CYCLING:
+            # Per il ciclismo usiamo l'FTP del Tab 1 per calcolare la potenza media effettiva
             avg_power = avg_if * ftp_watts
             avg_hr = 0
         elif sport_type == SportType.RUNNING:
+            # Per la corsa usiamo la THR (Soglia) del Tab 1 per calcolare la FC media effettiva
             avg_hr = avg_if * thr_hr
             avg_power = 0
         else: # Altri sport
