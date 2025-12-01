@@ -358,42 +358,50 @@ with tab3:
         cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
         cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
-    # --- 3. FISIOLOGIA & METABOLIMETRO ---
+    # --- 3. FISIOLOGIA & METABOLIMETRO (RANGE UPDATE) ---
     with c_s3:
-        st.markdown("### 3. Fisiologia & Metabolismo")
+        st.markdown("### 3. Fisiologia & Lab Data")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
+        use_lab = st.checkbox("Usa Dati Test Metabolico")
         
-        # Opzioni Avanzate / Lab Data
-        st.markdown("**Calibrazione Avanzata**")
-        use_lab = st.checkbox("Usa Dati Metabolimetro (Test)")
-        
-        lab_cho = 0.0
-        lab_fat = 0.0
+        lab_cho_final = 0.0
+        lab_fat_final = 0.0
+        tau = 20
+        risk_thresh = 30
         
         if use_lab:
-            st.caption("Inserisci i consumi misurati al **ritmo gara** previsto.")
-            lab_cho = st.number_input("CHO Ossidati (g/h)", 0, 500, 150, step=5)
-            lab_fat = st.number_input("Grassi Ossidati (g/h)", 0, 200, 30, step=5)
+            st.caption("Inserisci la 'forbice' di consumo rilevata al ritmo gara (es. 152-159 bpm).")
+            
+            c_l1, c_l2 = st.columns(2)
+            # CHO Range
+            cho_min = c_l1.number_input("CHO Min (g/h)", 0, 600, 124)
+            cho_max = c_l2.number_input("CHO Max (g/h)", 0, 600, 148)
+            
+            # FAT Range
+            fat_min = c_l1.number_input("FAT Min (g/h)", 0, 300, 26)
+            fat_max = c_l2.number_input("FAT Max (g/h)", 0, 300, 36)
+            
+            # Calcolo Medio (o Prudenziale)
+            lab_cho_final = (cho_min + cho_max) / 2
+            lab_fat_final = (fat_min + fat_max) / 2
+            
+            st.info(f"Simulazione basata sulla media: **{lab_cho_final:.0f} g/h CHO** e **{lab_fat_final:.0f} g/h FAT**.")
+            
         else:
-            # Se non usa dati lab, mostriamo i parametri cinetici standard
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
     
-    # Aggiornamento Parametri con Dati Lab
+    # Aggiornamento Parametri
     if use_lab:
         params['use_lab_data'] = True
-        params['lab_cho_g_h'] = lab_cho
-        params['lab_fat_g_h'] = lab_fat
-        # Parametri standard di fallback se usiamo il lab
-        tau = 20 
-        risk_thresh = 30
+        params['lab_cho_g_h'] = lab_cho_final
+        params['lab_fat_g_h'] = lab_fat_final
     else:
         params['use_lab_data'] = False
 
-    # --- ESECUZIONE SIMULAZIONI ---
-    
-    # 1. Strategia Integrata
+    # --- ESECUZIONE SIMULAZIONE ---
+    # 1. Strategia
     df_sim, stats_sim = logic.simulate_metabolism(tank, duration, cho_h, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -406,7 +414,6 @@ with tab3:
     # --- DASHBOARD ---
     st.markdown("---")
     
-    # ROW 1: BILANCIO
     r1_c1, r1_c2 = st.columns([2, 1])
     with r1_c1:
         st.markdown("#### Bilancio Energetico")
@@ -425,9 +432,8 @@ with tab3:
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
         
-        # Mostra RER o Lab Flag
         if use_lab:
-            st.metric("Fonte Dati", "Metabolimetro (Lab)")
+            st.metric("Fonte Dati", "Test Lab (Media)")
         else:
             st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
             
@@ -435,8 +441,6 @@ with tab3:
         st.metric("FAT Ossidati", f"{int(stats_sim['fat_total_g'])} g")
 
     st.markdown("---")
-    
-    # ROW 2: RISCHI
     r2_c1, r2_c2 = st.columns(2)
     with r2_c1:
         st.markdown("#### Zone di Rischio")
@@ -466,5 +470,6 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
 
 
