@@ -399,8 +399,11 @@ def simulate_metabolism_cached(
         
         total_cho_g_min = kcal_cho_demand / 4.1
         kcal_from_exo = current_exo_oxidation_g_min * 3.75 
-        muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
+        
+        # --- FIX: Use correct parameter name initial_muscle_g instead of initial_muscle_glycogen
+        muscle_fill_state = current_muscle_glycogen / initial_muscle_g if initial_muscle_g > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
+        
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
