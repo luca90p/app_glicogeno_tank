@@ -196,28 +196,38 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     }
     return pd.DataFrame(results), stats
 
-# --- MODIFICA QUI: Aggiunta del parametro start_state ---
+# ... (le altre funzioni rimangono uguali, sostituisci solo calculate_tapering_trajectory)
+
 def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState = GlycogenState.NORMAL):
     """
-    Simula l'andamento del glicogeno.
-    Usa start_state per determinare il livello iniziale del serbatoio.
+    Simula l'andamento del glicogeno giorno per giorno con logica di risintesi avanzata.
+    Riferimenti: Jentjens & Jeukendrup (2003), Burke et al. (2017).
     """
-    LIVER_DRAIN_RATE_GH = 4.5 
-    DAILY_NEAT_CHO = 1.0 * subject.weight_kg 
+    # 1. PARAMETRI FISIOLOGICI BASALI
+    # Consumo epatico: ~4g/h per mantenere la glicemia a riposo (cervello + organi)
+    LIVER_DRAIN_24H = 4.0 * 24 
     
+    # NEAT (Non-Exercise Activity Thermogenesis): consumo CHO per muoversi/lavorare
+    # Stima conservativa: 1.5g per kg di peso corporeo
+    NEAT_CHO_24H = 1.5 * subject.weight_kg 
+    
+    # Limite fisiologico di risintesi giornaliera (g/kg/day)
+    # Burke (2017): Massimo stoccaggio in supercompensazione ~10-12g/kg/24h, ma il tasso medio è inferiore.
+    # Impostiamo un cap realistico di assorbimento muscolare netto.
+    MAX_SYNTHESIS_RATE_G_KG = 10.0 
+    
+    # Inizializzazione Serbatoi
     tank = calculate_tank(subject)
-    # Totale Teorico
     MAX_MUSCLE = tank['max_capacity_g'] - 120 
     MAX_LIVER = 120.0
     
-    # Inizializzazione basata sull'input utente (0.25 -> 1.10)
     start_factor = start_state.factor
     current_muscle = MAX_MUSCLE * start_factor 
-    current_liver = MAX_LIVER * start_factor # Assumiamo riempimento proporzionale
+    current_liver = MAX_LIVER * start_factor
     
-    # Check limiti iniziali
-    if current_muscle > MAX_MUSCLE: current_muscle = MAX_MUSCLE
-    if current_liver > MAX_LIVER: current_liver = MAX_LIVER
+    # Clip iniziale
+    current_muscle = min(current_muscle, MAX_MUSCLE)
+    current_liver = min(current_liver, MAX_LIVER)
     
     trajectory = []
     
@@ -227,50 +237,118 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
         cho_in = day['cho_in']
         sleep_factor = day['sleep_factor']
         
+        # --- A. DEPLEZIONE DA ESERCIZIO ---
         exercise_drain_muscle = 0
         exercise_drain_liver = 0
         
         if duration > 0 and intensity_if > 0:
+            # Stima VO2max relativo (ml/kg/min)
             max_vo2_ml = (subject.vo2max_absolute_l_min * 1000) / subject.weight_kg
+            
+            # Relazione IF -> %VO2max (semplificata per stima consumo)
             pct_vo2 = min(1.0, intensity_if * 0.95) 
             
+            # Mix Energetico (Crossover Concept)
             if intensity_if <= 0.55: cho_ox_pct = 0.20
             elif intensity_if <= 0.75: cho_ox_pct = 0.50 + (intensity_if - 0.55) * 1.5
             elif intensity_if <= 0.90: cho_ox_pct = 0.80 + (intensity_if - 0.75) * 1.0
-            else: cho_ox_pct = 1.0
+            else: cho_ox_pct = 1.0 # Sopra soglia è puramente glicolitico
             
+            # Calcolo Calorie e CHO bruciati
             kcal_min = (max_vo2_ml * pct_vo2 * subject.weight_kg / 1000) * 5.0
             total_kcal = kcal_min * duration
             total_cho_burned = (total_kcal * cho_ox_pct) / 4.0
             
-            liver_ratio = 0.20 if intensity_if < 0.7 else 0.10
+            # Ripartizione: Più alta è l'intensità, più il muscolo soffre rispetto al fegato
+            liver_ratio = 0.15 if intensity_if < 0.75 else 0.05
             exercise_drain_liver = total_cho_burned * liver_ratio
             exercise_drain_muscle = total_cho_burned * (1 - liver_ratio)
 
-        daily_liver_drain = (LIVER_DRAIN_RATE_GH * 24) + DAILY_NEAT_CHO
-        base_efficiency = 0.96 
-        synthesis_efficiency = base_efficiency * sleep_factor
-        effective_cho_available = cho_in * synthesis_efficiency
+        # --- B. RISINTESI (LOGICA MIGLIORATA) ---
         
-        liver_net = effective_cho_available - daily_liver_drain - exercise_drain_liver
-        surplus_for_muscle = 0
+        # 1. Efficienza di Assorbimento (Insulino-sensibilità)
+        # Base: 95% dei CHO ingeriti entrano in circolo.
+        # Malus Sonno: Se dormi male, la sensibilità insulinica cala (-15/20%).
+        absorption_efficiency = 0.95 * sleep_factor
         
-        if liver_net >= 0:
-            space_in_liver = MAX_LIVER - current_liver
-            if liver_net >= space_in_liver:
-                current_liver = MAX_LIVER
-                surplus_for_muscle = liver_net - space_in_liver
-            else:
-                current_liver += liver_net
-        else:
-            current_liver += liver_net 
-            if current_liver < 0: current_liver = 0
+        # 2. Finestra Anabolica (Bonus Risintesi post-workout)
+        # Se c'è stato allenamento, il muscolo è "affamato" (GLUT4 traslocati).
+        # Jentjens (2003): Il tasso di risintesi raddoppia nelle prime ore.
+        # Modelliamo questo come un aumento della priorità muscolare.
+        workout_bonus = 1.0
+        if duration > 30 and intensity_if > 0.6:
+            workout_bonus = 1.2 # +20% efficienza di stoccaggio muscolare diretto
             
-        current_muscle = current_muscle - exercise_drain_muscle + surplus_for_muscle
+        net_cho_available = cho_in * absorption_efficiency
         
-        if current_muscle > MAX_MUSCLE: current_muscle = MAX_MUSCLE
-        if current_muscle < 0: current_muscle = 0
+        # 3. Consumo Basale (Priorità 1: Sopravvivenza)
+        # Prima paghiamo il debito del fegato (cervello) e del NEAT
+        liver_maintenance_cost = LIVER_DRAIN_24H 
+        neat_cost = NEAT_CHO_24H
         
+        # Sottraiamo i costi "fissi" dall'introito
+        # Nota: Parte del NEAT è coperta dai grassi, assumiamo 50% CHO
+        daily_obligatory_drain = liver_maintenance_cost + (neat_cost * 0.5)
+        
+        remaining_cho = net_cho_available - daily_obligatory_drain
+        
+        # --- C. RIEMPIMENTO SERBATOI ---
+        
+        # Calcolo deplezione totale odierna
+        current_liver -= exercise_drain_liver
+        current_muscle -= exercise_drain_muscle
+        
+        # Clamp a zero (non puoi avere glicogeno negativo)
+        current_liver = max(0, current_liver)
+        current_muscle = max(0, current_muscle)
+        
+        # Fase di ricarica
+        if remaining_cho > 0:
+            # 1. Priorità al Fegato (fino a saturazione)
+            liver_space = MAX_LIVER - current_liver
+            to_liver = min(remaining_cho, liver_space)
+            current_liver += to_liver
+            
+            remaining_cho -= to_liver
+            
+            # 2. Il resto al Muscolo (con Tetto Massimo fisiologico)
+            if remaining_cho > 0:
+                muscle_space = MAX_MUSCLE - current_muscle
+                
+                # Applichiamo il Cap Fisiologico Giornaliero (Rate Limiting)
+                # Non puoi sintetizzare più di X g/kg al giorno
+                max_daily_synthesis = subject.weight_kg * MAX_SYNTHESIS_RATE_G_KG * workout_bonus
+                
+                # Se il serbatoio è quasi pieno (>80%), la sintesi rallenta (inibizione da prodotto)
+                fill_level = current_muscle / MAX_MUSCLE
+                if fill_level > 0.8:
+                    max_daily_synthesis *= 0.6 # Rallentamento finale
+                
+                real_synthesis = min(remaining_cho, max_daily_synthesis)
+                
+                # Se c'è spazio, stocca
+                to_muscle = min(real_synthesis, muscle_space)
+                current_muscle += to_muscle
+                
+                # Nota: (remaining_cho - real_synthesis) viene convertito in grasso (De Novo Lipogenesi) 
+                # e non contribuisce al glicogeno.
+        else:
+            # Deficit calorico: intacchiamo ulteriormente le riserve
+            deficit = abs(remaining_cho)
+            # Il fegato copre il deficit sistemico (glicemia)
+            current_liver -= deficit
+            if current_liver < 0:
+                # Se il fegato finisce, catabolismo muscolare (estremo) o gluconeogenesi
+                # Per il modello, assumiamo che intacchi il muscolo
+                muscle_debt = abs(current_liver)
+                current_liver = 0
+                current_muscle -= muscle_debt
+        
+        # Clamp finale
+        current_muscle = max(0, min(current_muscle, MAX_MUSCLE))
+        current_liver = max(0, min(current_liver, MAX_LIVER))
+        
+        # Salvataggio dati giornalieri
         trajectory.append({
             "Giorno": day['label'],
             "Muscolare": int(current_muscle),
@@ -278,7 +356,8 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
             "Totale": int(current_muscle + current_liver),
             "Pct": (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100,
             "Input CHO": cho_in,
-            "IF": intensity_if
+            "IF": intensity_if,
+            "Sleep": day['sleep_factor']
         })
         
     final_state = trajectory[-1]
@@ -290,3 +369,4 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     updated_tank['fill_pct'] = final_state['Pct']
     
     return pd.DataFrame(trajectory), updated_tank
+
