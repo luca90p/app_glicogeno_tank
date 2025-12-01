@@ -562,7 +562,6 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
 
     zwo_sport_tag = root.findtext('sportType')
     
-    # Controllo di coerenza sport
     if zwo_sport_tag:
         if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
             st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per BICI. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
@@ -598,12 +597,10 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     if total_duration_min > 0:
         avg_if = total_weighted_if / total_duration_min
         
-        # Ricalcoliamo l'AvgW/AvgHR in base all'IF medio E allo sport selezionato nel Tab 1
         if sport_type == SportType.CYCLING:
             avg_power = avg_if * ftp_watts
             avg_hr = 0
         elif sport_type == SportType.RUNNING:
-            # Per la corsa usiamo la THR (Soglia) del Tab 1
             avg_hr = avg_if * thr_hr
             avg_power = 0
         else: 
@@ -617,7 +614,6 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
 # --- FUNZIONI PER LE ZONE DI ALLENAMENTO ---
 
 def calculate_zones_cycling(ftp):
-    # Zone di Coggan (Potenza)
     return [
         {"Zona": "Z1 - Recupero Attivo", "Range %": "< 55%", "Valore": f"< {int(ftp*0.55)} W"},
         {"Zona": "Z2 - Endurance (Fondo Lento)", "Range %": "56 - 75%", "Valore": f"{int(ftp*0.56)} - {int(ftp*0.75)} W"},
@@ -629,7 +625,6 @@ def calculate_zones_cycling(ftp):
     ]
 
 def calculate_zones_running_hr(thr):
-    # Zone di Joe Friel (FC) basate su LTHR (Soglia Anaerobica)
     return [
         {"Zona": "Z1 - Recupero", "Range %": "< 85% LTHR", "Valore": f"< {int(thr*0.85)} bpm"},
         {"Zona": "Z2 - Aerobico (Fondo Lento)", "Range %": "85 - 89% LTHR", "Valore": f"{int(thr*0.85)} - {int(thr*0.89)} bpm"},
@@ -752,31 +747,64 @@ with tab1:
         max_hr_input = 185 # DEFAULT
         
         zones_data = [] # Dati per la tabella zone
+        
+        zone_def_method = st.radio("Definizione Zone:", ["Standard (Calcolate)", "Personalizzate (Manuale)"], horizontal=True)
 
         with st.expander("Inserisci le Tue Soglie e Visualizza Zone", expanded=True):
             if s_sport == SportType.CYCLING:
-                # MODIFICA: FTP è l'input primario per IF
                 ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
-                st.caption(f"La FTP è usata come soglia per l'Intensity Factor (IF).")
-                zones_data = calculate_zones_cycling(ftp_watts_input)
+                
+                if zone_def_method == "Standard (Calcolate)":
+                    zones_data = calculate_zones_cycling(ftp_watts_input)
+                else:
+                    # Input manuale per zone personalizzate (semplificato a 5 zone per brevità)
+                    st.caption("Inserisci il limite SUPERIORE di ogni zona in Watt.")
+                    z1_lim = st.number_input("Limite Z1 (Recupero)", 0, 1000, int(ftp_watts_input*0.55))
+                    z2_lim = st.number_input("Limite Z2 (Endurance)", 0, 1000, int(ftp_watts_input*0.75))
+                    z3_lim = st.number_input("Limite Z3 (Tempo)", 0, 1000, int(ftp_watts_input*0.90))
+                    z4_lim = st.number_input("Limite Z4 (Soglia)", 0, 1000, int(ftp_watts_input*1.05))
+                    
+                    zones_data = [
+                        {"Zona": "Z1 - Recupero", "Range %": "Custom", "Valore": f"< {z1_lim} W"},
+                        {"Zona": "Z2 - Endurance", "Range %": "Custom", "Valore": f"{z1_lim+1} - {z2_lim} W"},
+                        {"Zona": "Z3 - Tempo", "Range %": "Custom", "Valore": f"{z2_lim+1} - {z3_lim} W"},
+                        {"Zona": "Z4 - Soglia", "Range %": "Custom", "Valore": f"{z3_lim+1} - {z4_lim} W"},
+                        {"Zona": "Z5+ - Sovrasoglia", "Range %": "Custom", "Valore": f"> {z4_lim} W"}
+                    ]
             
             elif s_sport == SportType.RUNNING:
                 c_thr, c_max = st.columns(2)
-                # MODIFICA: Uso THR come dato primario per IF nella corsa
                 thr_hr_input = c_thr.number_input("Soglia Anaerobica (THR/LT2) [BPM]", 100, 220, 170, 1)
                 max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
-                st.caption(f"La Soglia Anaerobica è usata per calcolare l'IF (FC media / THR).")
-                zones_data = calculate_zones_running_hr(thr_hr_input)
                 
-            else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
+                if zone_def_method == "Standard (Calcolate)":
+                    zones_data = calculate_zones_running_hr(thr_hr_input)
+                else:
+                    st.caption("Inserisci il limite SUPERIORE di ogni zona in BPM.")
+                    z1_lim = st.number_input("Limite Z1 (Recupero)", 0, 250, int(thr_hr_input*0.85))
+                    z2_lim = st.number_input("Limite Z2 (Aerobico)", 0, 250, int(thr_hr_input*0.89))
+                    z3_lim = st.number_input("Limite Z3 (Tempo)", 0, 250, int(thr_hr_input*0.94))
+                    z4_lim = st.number_input("Limite Z4 (Soglia)", 0, 250, int(thr_hr_input*0.99))
+                    
+                    zones_data = [
+                        {"Zona": "Z1 - Recupero", "Range %": "Custom", "Valore": f"< {z1_lim} bpm"},
+                        {"Zona": "Z2 - Aerobico", "Range %": "Custom", "Valore": f"{z1_lim+1} - {z2_lim} bpm"},
+                        {"Zona": "Z3 - Tempo", "Range %": "Custom", "Valore": f"{z2_lim+1} - {z3_lim} bpm"},
+                        {"Zona": "Z4 - Soglia", "Range %": "Custom", "Valore": f"{z3_lim+1} - {z4_lim} bpm"},
+                        {"Zona": "Z5+ - Sovrasoglia", "Range %": "Custom", "Valore": f"> {z4_lim} bpm"}
+                    ]
+
+            else: # Altri sport
                 c_thr, c_max = st.columns(2)
                 max_hr_input = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1, key='max_hr_input_general')
-                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') # Aggiungo soglia aerobica
-                st.caption("La FC Max è usata per il calcolo approssimativo dell'IF.")
-                zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback su zone HR
-            
+                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') 
+                if zone_def_method == "Standard (Calcolate)":
+                    zones_data = calculate_zones_running_hr(thr_hr_input) # Fallback
+                else:
+                    st.caption("Personalizzazione disponibile per Ciclismo e Corsa.")
+
             if zones_data:
-                st.markdown("**Le tue Zone di Allenamento Stimate:**")
+                st.markdown("**Le tue Zone di Allenamento:**")
                 st.table(pd.DataFrame(zones_data))
         
         # Salvataggio delle soglie nello stato di sessione per il Tab 3
@@ -1342,9 +1370,6 @@ with tab3:
 
 
         h_cm = subj.height_cm 
-        
-        # Inserisco l'IF di riferimento nell'act_params
-        act_params['intensity_factor'] = intensity_factor_reference
         
         df_sim, stats = simulate_metabolism(
             tank_data, duration, carb_intake, cho_per_unit, crossover, 
