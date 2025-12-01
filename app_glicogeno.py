@@ -564,7 +564,7 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     
     if zwo_sport_tag:
         if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
-            st.warning(f⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per BICI. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
+            st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per BICI. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
         elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
             st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per CORSA. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
 
