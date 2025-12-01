@@ -183,31 +183,81 @@ with tab2:
     subj_base = st.session_state['base_subject_struct']
     weight = subj_base.weight_kg
     
-    st.subheader("Stato Nutrizionale Attuale (Ultime 48h)")
-    col_p1, col_p2 = st.columns(2)
+    st.subheader("Stato Nutrizionale e Fisico (Ultime 48h)")
+    st.markdown("Inserisci i dati reali degli ultimi due giorni per calcolare il livello di riempimento attuale.")
+    
+    col_p1, col_p2 = st.columns([1.2, 1])
     
     with col_p1:
-        st.markdown("**Carico Carboidrati Recente**")
-        cho_g1 = st.number_input("CHO Ieri (g)", 0, 1500, 400, step=50, help="Carboidrati totali assunti nelle 24h precedenti")
-        cho_g2 = st.number_input("CHO Altroieri (g)", 0, 1500, 400, step=50)
+        st.markdown("#### 1. Alimentazione (Carico CHO)")
+        cho_g1 = st.number_input("CHO Assunti Ieri (-1 Giorno) [g]", 0, 1500, 400, step=50)
+        cho_g2 = st.number_input("CHO Assunti Altroieri (-2 Giorni) [g]", 0, 1500, 350, step=50)
         
-        f_map = {f.label: f for f in FatigueState}
-        s_fatigue = f_map[st.selectbox("Livello di Affaticamento", list(f_map.keys()))]
+        st.markdown("---")
+        st.markdown("#### 2. Attività Svolta (Fatigue Detector)")
         
+        # --- INPUT ATTIVITÀ GIORNO -1 (IERI) ---
+        c_a1, c_a2 = st.columns(2)
+        act_m1 = c_a1.radio("Attività Ieri (-1)", ["Riposo", "Allenamento"], horizontal=True, key="act_m1_radio")
+        dur_m1 = 0
+        int_m1 = "Riposo"
+        
+        if act_m1 == "Allenamento":
+            dur_m1 = c_a2.number_input("Minuti (-1)", 0, 300, 45, step=15, key="dur_m1_input")
+            int_m1 = c_a1.selectbox("Intensità (-1)", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key="int_m1_input")
+        else:
+            c_a2.info("Giornata di scarico totale.")
+
+        # --- INPUT ATTIVITÀ GIORNO -2 (ALTROIERI) ---
+        # (Opzionale per l'utente, ma utile per il calcolo fine)
+        with st.expander("Dettagli Altroieri (-2 Giorni)"):
+            c_b1, c_b2 = st.columns(2)
+            act_m2 = c_b1.radio("Attività (-2)", ["Riposo", "Allenamento"], horizontal=True, key="act_m2_radio", index=1)
+            dur_m2 = 0
+            int_m2 = "Riposo"
+            if act_m2 == "Allenamento":
+                dur_m2 = c_b2.number_input("Minuti (-2)", 0, 300, 60, step=15, key="dur_m2_input")
+                int_m2 = c_b1.selectbox("Intensità (-2)", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key="int_m2_input")
+
+        # --- LOGICA AUTOMATICA DETERMINAZIONE FATICA ---
+        # Algoritmo interno per convertire l'attività in FatigueState
+        calc_fatigue = FatigueState.RESTED # Default
+        
+        # Logica: Se ieri ho fatto alta intensità O lungo volume (>90min) -> Stanco
+        if act_m1 == "Allenamento":
+            if int_m1 == "Alta (Z4+)" or dur_m1 >= 90:
+                calc_fatigue = FatigueState.TIRED
+            elif int_m1 == "Media (Z3)" or dur_m1 >= 45:
+                calc_fatigue = FatigueState.ACTIVE
+            else:
+                calc_fatigue = FatigueState.RESTED # Recupero attivo leggero conta come riposo ai fini del glicogeno
+        
+        # Se ieri riposo ma l'altro ieri massacrante, consideriamo un residuo (Active)
+        elif act_m2 == "Allenamento" and (int_m2 == "Alta (Z4+)" or dur_m2 > 120):
+            calc_fatigue = FatigueState.ACTIVE
+
+        # Feedback visivo dell'automatismo
+        st.caption(f"Status Fisico Rilevato: **{calc_fatigue.label}**")
+        
+        st.markdown("---")
         s_map = {s.label: s for s in SleepQuality}
-        s_sleep = s_map[st.selectbox("Qualità del Sonno", list(s_map.keys()))]
+        s_sleep = s_map[st.selectbox("Qualità del Sonno (Stanotte)", list(s_map.keys()))]
         
-        # Calcolo riempimento puntuale
-        comb_fill, _, _, _, _ = logic.calculate_filling_factor_from_diet(weight, cho_g1, cho_g2, s_fatigue, s_sleep, 0,0,0,0)
+        # CALCOLO PROFILO
+        # Passiamo i passi stimati a 0 perché usiamo duration/intensity specifiche
+        comb_fill, _, _, _, _ = logic.calculate_filling_factor_from_diet(
+            weight, cho_g1, cho_g2, calc_fatigue, s_sleep, 
+            0, dur_m1, 0, dur_m2 # Passiamo i minuti reali
+        )
         
-        # Aggiornamento stato
         subj_prep = st.session_state['base_subject_struct']
         subj_prep.filling_factor = comb_fill
         curr_tank = logic.calculate_tank(subj_prep)
         st.session_state.update({'tank_data': curr_tank, 'subject_struct': subj_prep})
         
     with col_p2:
-        st.metric("Riempimento Attuale (Filling Factor)", f"{curr_tank['fill_pct']:.1f}%")
+        st.markdown("#### Risultato Stima")
+        st.metric("Livello Riempimento Attuale", f"{curr_tank['fill_pct']:.1f}%")
         st.progress(curr_tank['fill_pct'] / 100.0)
         
         m_val = int(curr_tank['muscle_glycogen_g'])
@@ -230,30 +280,19 @@ with tab2:
         )
         st.altair_chart(pie + text, use_container_width=True)
 
-    st.markdown("---")
-    
-    # --- DIARIO SETTIMANALE (FUNZIONALITA' RECUPERATA) ---
-    st.subheader("Diario di Tapering (Pianificazione Settimanale)")
     # --- DIARIO DI TAPERING (COUNTDOWN) ---
     st.markdown("---")
     st.subheader("Diario di Tapering (Countdown Gara)")
-    st.markdown("""
-    Pianifica la settimana di avvicinamento. 
-    **Nota:** I giorni **-2** e **-1** sono bloccati e sincronizzati con i dati inseriti nel pannello "Stato Nutrizionale" in alto per garantire coerenza.
-    """)
+    st.info("I giorni **-1** e **-2** sono sincronizzati automaticamente con i dati inseriti sopra.")
     
-    with st.expander("Apri/Chiudi Pianificatore Countdown", expanded=True):
-        # Definizione labels relative all'evento
-        days_labels = [
-            "-6 Giorni", "-5 Giorni", "-4 Giorni", "-3 Giorni", 
-            "-2 Giorni", "-1 Giorno", "Race Day (Gara)"
-        ]
+    with st.expander("Apri Pianificatore Countdown", expanded=True):
+        days_labels = ["-6 Giorni", "-5 Giorni", "-4 Giorni", "-3 Giorni", "-2 Giorni", "-1 Giorno", "Race Day"]
         
         weekly_schedule = []
         
-        # Intestazione Colonne
+        # Header
         c_h1, c_h2, c_h3, c_h4 = st.columns([1.2, 1.5, 1.5, 1])
-        c_h1.markdown("**Meno...**")
+        c_h1.markdown("**Timing**")
         c_h2.markdown("**Attività**")
         c_h3.markdown("**Intensità**")
         c_h4.markdown("**CHO (g)**")
@@ -261,89 +300,79 @@ with tab2:
         for i, d_label in enumerate(days_labels):
             c1, c2, c3, c4 = st.columns([1.2, 1.5, 1.5, 1])
             
-            # Stile visuale per evidenziare i giorni bloccati
-            is_day_minus_2 = (i == 4) # Indice 4 è "-2 Giorni"
-            is_day_minus_1 = (i == 5) # Indice 5 è "-1 Giorno"
-            is_locked = is_day_minus_2 or is_day_minus_1
+            # Identificazione giorni bloccati (lock)
+            is_d2 = (i == 4) # -2 Giorni
+            is_d1 = (i == 5) # -1 Giorno
+            is_locked = is_d2 or is_d1
             
-            # Label Giorno
-            if is_locked:
-                c1.info(f"**{d_label}**")
-            elif i == 6:
-                c1.error(f"**{d_label}**") # Rosso per la gara
-            else:
-                c1.write(f"**{d_label}**")
+            if is_locked: c1.info(f"**{d_label}**")
+            elif i == 6: c1.error(f"**{d_label}**")
+            else: c1.write(f"**{d_label}**")
             
-            # Chiavi univoche per i widget
-            act_key = f"act_d{i}"
-            dur_key = f"dur_d{i}"
-            int_key = f"int_d{i}"
-            cho_key = f"cho_d{i}"
+            # Setup valori bloccati
+            def_act = "Attivo"
+            def_dur = 60
+            def_int = "Bassa (Z1-Z2)"
+            def_cho = 350
             
-            # Logica Attività
-            # Default: Attivo per tutti tranne magari i primi giorni di scarico, ma lasciamo scelta
-            activity = c2.selectbox("", ["Riposo", "Attivo"], key=act_key, label_visibility="collapsed")
+            if is_d1:
+                def_act = "Attivo" if act_m1 == "Allenamento" else "Riposo"
+                def_dur = dur_m1
+                def_int = int_m1
+                def_cho = int(cho_g1)
+            elif is_d2:
+                def_act = "Attivo" if act_m2 == "Allenamento" else "Riposo"
+                def_dur = dur_m2
+                def_int = int_m2
+                def_cho = int(cho_g2)
+                
+            # WIDGETS
+            # 1. Attività
+            opts_act = ["Riposo", "Attivo"]
+            idx_act = 0 if def_act == "Riposo" else 1
+            activity = c2.selectbox("", opts_act, index=idx_act, key=f"a_{i}", disabled=is_locked, label_visibility="collapsed")
             
+            # 2. Durata & Intensità
             duration = 0
             intensity = "Riposo"
             
             if activity == "Attivo":
-                duration = c2.number_input(f"Min {i}", 0, 600, 60, key=dur_key, label_visibility="collapsed")
-                intensity = c3.selectbox(f"Int {i}", ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"], key=int_key, label_visibility="collapsed")
+                duration = c2.number_input(f"min{i}", 0, 600, def_dur, key=f"d_{i}", disabled=is_locked, label_visibility="collapsed")
+                
+                opts_int = ["Bassa (Z1-Z2)", "Media (Z3)", "Alta (Z4+)"]
+                try:
+                    idx_int = opts_int.index(def_int)
+                except:
+                    idx_int = 0
+                intensity = c3.selectbox(f"i_{i}", opts_int, index=idx_int, key=f"int_{i}", disabled=is_locked, label_visibility="collapsed")
             else:
-                c3.write(" - ")
+                c3.write("-")
             
-            # Logica CHO (Gestione Lock)
-            default_cho = 350
-            if is_day_minus_2:
-                default_cho = int(cho_g2) # Prende dal blocco superiore
-            elif is_day_minus_1:
-                default_cho = int(cho_g1) # Prende dal blocco superiore
-            
-            # Il widget è disabilitato se è un giorno lock
-            cho_in = c4.number_input(
-                f"CHO {i}", 
-                0, 1500, 
-                value=default_cho, 
-                key=cho_key, 
-                disabled=is_locked, # QUI AVVIENE IL BLOCCO
-                label_visibility="collapsed"
-            )
+            # 3. Carboidrati
+            cho_in = c4.number_input(f"c_{i}", 0, 1500, def_cho, key=f"c_{i}", disabled=is_locked, label_visibility="collapsed")
             
             weekly_schedule.append({
-                "day": d_label, 
-                "activity": activity, 
-                "duration": duration, 
-                "intensity": intensity, 
-                "cho_in": cho_in
+                "day": d_label, "activity": activity, "duration": duration, 
+                "intensity": intensity, "cho_in": cho_in
             })
             
-        if st.button("Calcola Trend Tapering"):
-            # Parametri simulazione settimanale
-            # Assumiamo che a -7 giorni si parta con riserve non piene (allenamento cronico)
+        if st.button("Simula Andamento Tapering"):
             init_muscle = tank_data['max_capacity_g'] * 0.60 
-            init_liver = 80
+            init_liver = 90
             max_muscle = tank_data['max_capacity_g']
             max_liver = 120
-            
-            # Stima VO2 relativo per calcoli consumo giornaliero
             vo2_calc = subj_base.vo2max_absolute_l_min * 1000 / weight 
             
             df_week = logic.calculate_weekly_balance(init_muscle, init_liver, max_muscle, max_liver, weekly_schedule, weight, vo2_calc)
             
-            # Grafico Trend
-            # Usiamo un grafico a step o linea per mostrare l'accumulo
             chart_trend = alt.Chart(df_week).mark_line(point=True, strokeWidth=3).encode(
-                x=alt.X('Giorno', sort=days_labels, title='Countdown'),
-                y=alt.Y('Totale', title='Glicogeno Totale (g)', scale=alt.Scale(zero=False)),
+                x=alt.X('Giorno', sort=days_labels, title=None),
+                y=alt.Y('Totale', title='Glicogeno (g)', scale=alt.Scale(zero=False)),
                 color=alt.value('#2E7D32'),
-                tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico']
-            ).properties(height=300, title="Carico Glicogeno Pre-Gara (Simulazione)")
+                tooltip=['Giorno', 'Totale', 'Glicogeno Muscolare']
+            ).properties(height=250, title="Carico Glicogeno Pre-Gara")
             
             st.altair_chart(chart_trend, use_container_width=True)
-            
-            # Tabella riassuntiva pulita
-            st.dataframe(df_week[['Giorno', 'Totale', 'Glicogeno Muscolare', 'Glicogeno Epatico']], hide_index=True, use_container_width=True)
 
 # =============================================================================
 # TAB 3: SIMULAZIONE GARA & STRATEGIA
@@ -521,4 +550,5 @@ with tab3:
             st.warning("La durata dell'evento è troppo breve per la frequenza di integrazione impostata.")
     else:
         st.info("Nessuna strategia di integrazione definita (Target CHO = 0).")
+
 
