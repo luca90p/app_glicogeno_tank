@@ -74,6 +74,18 @@ class ChoMixType(Enum):
         self.max_rate_gh = max_rate_gh 
         self.label = label
 
+# --- NUOVA ENUM PER LIVELLO INIZIALE ---
+class GlycogenState(Enum):
+    EMPTY = (0.25, "Esausto (Post-Gara/Lungo)")
+    LOW = (0.45, "Basso (Blocco Carico Intenso)")
+    NORMAL = (0.60, "Normale (Routine Standard)")
+    HIGH = (0.80, "Alto (Ben Nutrito/Riposato)")
+    FULL = (1.10, "Supercompensato (Glicogeno Loading)")
+
+    def __init__(self, factor, label):
+        self.factor = factor
+        self.label = label
+
 @dataclass
 class Subject:
     weight_kg: float
