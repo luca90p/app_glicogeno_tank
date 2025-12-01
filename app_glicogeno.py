@@ -289,6 +289,7 @@ def calculate_tank(subject: Subject):
         "muscle_source_note": muscle_source_note
     }
 
+# Aggiornato per accettare il mix type
 def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: ChoMixType):
     # Base rate per GLUCOSIO
     # Iniziamo con la stima individuale (Podlogar/Body Size/Potenza)
@@ -817,7 +818,7 @@ with tab2:
         
         # --- METODO 1: TIPO DI DIETA ---
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)":
-            diet_options_map = {}
+            diet_options_map = {d.label: d for d in DietType}
             for d in DietType:
                 daily_cho = int(weight * d.ref_value)
                 sign = ">" if d == DietType.HIGH_CARB else ("<" if d == DietType.LOW_CARB else "~")
@@ -1057,15 +1058,63 @@ with tab3:
         carb_intake = 60  # Default
         
         with col_param:
-            st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
+            st.subheader(f"1. Parametri Sforzo ({sport_mode.capitalize()})")
             
+            # NUOVA LOGICA: CARICAMENTO FILE O INSERIMENTO MANUALE
+            st.markdown("#### Caratteristiche dell'Attività")
+            
+            file_upload_method = st.radio(
+                "Fonte dati attività:", 
+                ["Manuale (Media)", "Carica File (.csv sim.)"],
+                key='file_upload_method'
+            )
+            
+            avg_w = 200
+            avg_hr = 150
+            
+            if file_upload_method == "Carica File (.csv sim.)":
+                uploaded_file = st.file_uploader("Carica file .csv con dati attività (Tempo, Potenza/HR)", type=['csv'])
+                
+                if uploaded_file is not None:
+                    try:
+                        df_activity = pd.read_csv(uploaded_file)
+                        
+                        # Simula l'estrazione di dati chiave
+                        if sport_mode == 'cycling':
+                            # Esempio: calcola la potenza media e la durata in minuti
+                            if 'power' in df_activity.columns:
+                                avg_w = df_activity['power'].mean()
+                                duration_sec = df_activity.shape[0] * 5 # Assumendo 5s per riga
+                                duration = round(duration_sec / 60)
+                                st.success(f"Dati caricati: Potenza media: {avg_w:.1f} W, Durata: {duration} min.")
+                            else:
+                                st.error("Il file CSV deve contenere una colonna 'power'.")
+                        
+                        elif sport_mode == 'running' or sport_mode == 'other':
+                             # Esempio: calcola HR media e durata
+                            if 'heart_rate' in df_activity.columns:
+                                avg_hr = df_activity['heart_rate'].mean()
+                                duration_sec = df_activity.shape[0] * 5 
+                                duration = round(duration_sec / 60)
+                                st.success(f"Dati caricati: FC media: {avg_hr:.1f} BPM, Durata: {duration} min.")
+                            else:
+                                st.error("Il file CSV deve contenere una colonna 'heart_rate'.")
+                        
+                        else:
+                            st.warning("Tipo di sport non supportato per l'analisi da file.")
+                            
+                    except Exception as e:
+                        st.error(f"Errore nella lettura del file: {e}")
+                        
+                # Nota: gli input manuali sottostanti verranno sovrascritti dai dati del file se caricato.
+            
+            # --- INPUT MANUALE / RIEPILOGO DATI ---
             if sport_mode == 'cycling':
-                # I DEFAULT ora vengono da Tab 1
-                avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
+                avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, int(avg_w), step=5)
                 act_params['ftp_watts'] = ftp_watts
                 act_params['avg_watts'] = avg_w
                 act_params['efficiency'] = st.slider("Efficienza Meccanica [%]", 16.0, 26.0, 22.0, 0.5)
-                duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
+                duration = st.slider("Durata Attività (min)", 30, 420, int(duration), step=10)
                 
             elif sport_mode == 'running':
                 run_input_mode = st.radio("Modalità Obiettivo:", ["Imposta Passo & Distanza", "Imposta Tempo & Distanza"], horizontal=True)
@@ -1096,20 +1145,20 @@ with tab3:
 
                 act_params['speed_kmh'] = speed_kmh
                 
-                # Le soglie vengono dal Tab 1
-                avg_hr = st.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
+                # Input HR media per calcolo IF (usa il default o il valore estratto dal file)
+                avg_hr = st.number_input("Frequenza Cardiaca Media", 80, 220, int(avg_hr), 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['threshold_hr'] = thr_hr
                 
             else: 
-                # Le soglie vengono dal Tab 1
-                avg_hr = st.number_input("Frequenza Cardiaca Media Gara", 80, 220, 140, 1)
+                # Input HR media per calcolo IF (usa il default o il valore estratto dal file)
+                avg_hr = st.number_input("Frequenza Cardiaca Media Gara", 80, 220, int(avg_hr), 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['max_hr'] = max_hr
-                duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
+                duration = st.slider("Durata Attività (min)", 30, 420, int(duration), step=10)
             
         with col_meta:
-            st.subheader("Profilo Metabolico & Nutrizione")
+            st.subheader("2. Strategia di Integrazione e Calibrazione")
             
             # NUTRIZIONE PRATICA
             st.subheader("Gestione Nutrizione Pratica")
@@ -1152,11 +1201,11 @@ with tab3:
                 else: st.caption("Profilo: Bilanciato / Misto")
             
             st.markdown("---")
-            st.subheader("Parametri Cinetici Avanzati")
+            st.subheader("3. Calibrazione Fisiologica (Utenti Esperti)")
 
             # CHECKBOX PER PARAMETRI AVANZATI
             use_custom_kinetic = st.checkbox(
-                "Usa parametri cinetici/fisiologici personalizzati (Utenti Esperti)",
+                "Usa parametri cinetici/fisiologici personalizzati",
                 help="Attiva questa opzione per calibrare τ (assorbimento), Rischio GI, Efficienza Ossidativa e Picco Ossidazione.",
                 value=False
             )
