@@ -14,8 +14,8 @@ from data_models import (
 st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("""
-Applicazione avanzata per la modellazione delle riserve di glicogeno muscolare ed epatico. 
-Il sistema utilizza equazioni differenziali per stimare i tassi di ossidazione, l'accumulo intestinale e la cinetica di assorbimento dei carboidrati.
+Applicazione avanzata per la modellazione delle riserve di glicogeno. 
+Supporta **Atleti Ibridi** con gestione differenziata delle soglie (Potenza/FC).
 """)
 
 if not utils.check_password():
@@ -45,13 +45,13 @@ def create_risk_zone_chart(df_data, title, max_y):
     return (background + area).properties(title=title, height=350)
 
 tab1, tab2, tab3 = st.tabs([
-    "1. Profilo Fisiologico & Capacità", 
-    "2. Diario di Tapering", 
-    "3. Simulazione Gara & Strategia"
+    "1. Profilo & Soglie", 
+    "2. Diario Ibrido (Tapering)", 
+    "3. Simulazione Gara"
 ])
 
 # =============================================================================
-# TAB 1: PROFILO
+# TAB 1: PROFILO & SOGLIE
 # =============================================================================
 with tab1:
     col_in, col_res = st.columns([1, 2])
@@ -63,23 +63,23 @@ with tab1:
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 11.0, 0.5) / 100.0
         
         sex_map = {s.value: s for s in Sex}
-        s_sex = sex_map[st.radio("Sesso Biologico", list(sex_map.keys()), horizontal=True)]
+        s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
-        use_smm = st.checkbox("Usa Massa Muscolare (SMM) da Bioimpedenza/DEXA")
+        use_smm = st.checkbox("Usa Massa Muscolare (SMM) misurata")
         muscle_mass_input = None
         if use_smm:
             muscle_mass_input = st.number_input("SMM Misurata [kg]", 10.0, 60.0, 37.4, 0.1)
         
         st.markdown("---")
-        st.subheader("Stima Capacità di Stoccaggio")
+        st.subheader("Capacità & Sport Target")
         
-        est_method = st.radio("Metodo di Stima Densità Glicogeno:", ["Basato su Livello Atletico (Consigliato)", "Basato su VO2max (Lab)"])
+        est_method = st.radio("Metodo Stima Densità:", ["Livello Atletico", "VO2max (Lab)"], horizontal=True)
         calculated_conc = 0.0
         vo2_derived = 0.0
         
-        if est_method == "Basato su Livello Atletico (Consigliato)":
+        if est_method == "Livello Atletico":
             status_map = {s.label: s for s in TrainingStatus}
-            s_status = status_map[st.selectbox("Livello di Allenamento", list(status_map.keys()), index=3)]
+            s_status = status_map[st.selectbox("Livello", list(status_map.keys()), index=3)]
             calculated_conc = s_status.val
             vo2_derived = 30 + ((calculated_conc - 13.0) / 0.24)
         else:
@@ -90,28 +90,28 @@ with tab1:
         
 
         sport_map = {s.label: s for s in SportType}
-        s_sport = sport_map[st.selectbox("Disciplina", list(sport_map.keys()))]
+        s_sport = sport_map[st.selectbox("Sport Gara (Target)", list(sport_map.keys()))]
         
-        ftp_watts = 265
-        thr_hr = 170
-        max_hr = 185
+        # --- SEZIONE SOGLIE IBRIDE ---
+        st.markdown("---")
+        st.subheader("Soglie Atleta Ibrido")
+        st.info("Inserisci entrambe le soglie per calcolare correttamente l'intensità (IF) sia per uscite in bici che per la corsa.")
         
-        if s_sport == SportType.CYCLING:
-            ftp_watts = st.number_input("FTP (Watt)", 100, 600, 265)
-        elif s_sport == SportType.RUNNING:
-            thr_hr = st.number_input("Soglia Anaerobica (BPM)", 100, 220, 170)
-            max_hr = st.number_input("FC Max (BPM)", 100, 230, 185)
-        else:
-            max_hr = st.number_input("FC Max (BPM)", 100, 230, 185)
+        # Input sempre visibili
+        c_ftp, c_hr = st.columns(2)
+        ftp_watts = c_ftp.number_input("FTP Ciclismo (Watt)", 100, 600, 265, step=5)
+        thr_hr = c_hr.number_input("Soglia Anaerobica Corsa (BPM)", 100, 220, 170, step=1)
+        max_hr = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 230, 185, step=1)
             
         st.session_state.update({'ftp_watts_input': ftp_watts, 'thr_hr_input': thr_hr, 'max_hr_input': max_hr})
         
-        with st.expander("Variabili Aggiuntive"):
-            use_creatine = st.checkbox("Supplementazione Creatina (+10% Stoccaggio)")
+        # Setup soggetto
+        with st.expander("Opzioni Avanzate"):
+            use_creatine = st.checkbox("Creatina")
             s_menstrual = MenstrualPhase.NONE
             if s_sex == Sex.FEMALE:
                 m_map = {m.label: m for m in MenstrualPhase}
-                s_menstrual = m_map[st.selectbox("Fase Ciclo Mestruale", list(m_map.keys()))]
+                s_menstrual = m_map[st.selectbox("Fase Ciclo", list(m_map.keys()))]
 
         subject = Subject(
             weight_kg=weight, height_cm=height, body_fat_pct=bf, sex=s_sex,
@@ -126,154 +126,150 @@ with tab1:
         st.session_state['base_tank_data'] = tank_data
 
     with col_res:
-        st.subheader("Analisi Capacità di Stoccaggio (Tank)")
+        st.subheader("Analisi Tank")
         max_cap = tank_data['max_capacity_g']
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Capacità Totale", f"{int(max_cap)} g")
-        c2.metric("Energia Equivalente", f"{int(max_cap*4.1)} kcal")
-        c3.metric("Massa Muscolare Attiva", f"{tank_data['active_muscle_kg']:.1f} kg")
+        c2.metric("Energia", f"{int(max_cap*4.1)} kcal")
+        c3.metric("Massa Attiva", f"{tank_data['active_muscle_kg']:.1f} kg")
         
         st.progress(1.0)
         
-        st.markdown("### Zone di Allenamento")
-        if s_sport == SportType.CYCLING:
-            zones = utils.calculate_zones_cycling(ftp_watts)
-        else:
-            zones = utils.calculate_zones_running_hr(thr_hr if s_sport == SportType.RUNNING else max_hr*0.85)
-        st.table(pd.DataFrame(zones))
+        # Mostra entrambe le tabelle zone per l'atleta ibrido
+        st.markdown("### Zone di Allenamento (Ibrido)")
+        t_cyc, t_run = st.tabs(["Ciclismo (Power)", "Corsa (Heart Rate)"])
+        
+        with t_cyc:
+            zones_c = utils.calculate_zones_cycling(ftp_watts)
+            st.table(pd.DataFrame(zones_c))
+            
+        with t_run:
+            zones_r = utils.calculate_zones_running_hr(thr_hr)
+            st.table(pd.DataFrame(zones_r))
 
 # =============================================================================
-# TAB 2: DIARIO DI TAPERING
+# TAB 2: DIARIO IBRIDO
 # =============================================================================
 with tab2:
     if 'base_tank_data' not in st.session_state:
-        st.warning("⚠️ Completa prima il Tab 1 (Profilo Atleta).")
+        st.warning("⚠️ Completa prima il Tab 1.")
         st.stop()
         
     subj_base = st.session_state['base_subject_struct']
     
-    # Recuperiamo le soglie dal session state (definite nel Tab 1)
-    # Default fallback se non settate (ma dovrebbero esserlo dal Tab 1)
+    # Recupero soglie
     user_ftp = st.session_state.get('ftp_watts_input', 250)
     user_thr = st.session_state.get('thr_hr_input', 170)
-    user_max_hr = st.session_state.get('max_hr_input', 185)
     
-    st.subheader("🗓️ Diario di Avvicinamento (Countdown)")
+    st.subheader("🗓️ Diario di Avvicinamento (Multidisciplinare)")
     st.markdown("""
-    Compila il diario. Seleziona **Allenamento** per inserire i dati specifici (Watt o FC). 
-    Il sistema calcolerà automaticamente l'**Intensity Factor (IF)** basandosi sulle tue soglie.
+    Pianifica il tapering. Seleziona **Ciclismo** (Watt) o **Corsa/Altro** (BPM) per calcolare l'**IF** corretto in base allo sport svolto.
     """)
     
-    # Inizializzazione dati
+    # --- FIX SESSION STATE ---
+    # Resetta se la struttura è vecchia o incompatibile
+    if "tapering_data" in st.session_state:
+        if len(st.session_state["tapering_data"]) > 0:
+            first_row = st.session_state["tapering_data"][0]
+            # Se la vecchia 'type' era "Allenamento", resettiamo per passare a "Ciclismo"/"Corsa"
+            if "type" not in first_row or first_row["type"] == "Allenamento":
+                del st.session_state["tapering_data"]
+                st.rerun()
+
     if "tapering_data" not in st.session_state:
-        # Struttura di default
         st.session_state["tapering_data"] = [
-            {"day": -7, "label": "-7 Giorni", "type": "Allenamento", "val": 180, "dur": 60, "cho": 350, "sleep": "Sufficiente (6-7h)"},
-            {"day": -6, "label": "-6 Giorni", "type": "Allenamento", "val": 160, "dur": 60, "cho": 350, "sleep": "Sufficiente (6-7h)"},
+            {"day": -7, "label": "-7 Giorni", "type": "Ciclismo", "val": 180, "dur": 60, "cho": 350, "sleep": "Sufficiente (6-7h)"},
+            {"day": -6, "label": "-6 Giorni", "type": "Corsa/Altro", "val": 145, "dur": 45, "cho": 350, "sleep": "Sufficiente (6-7h)"},
             {"day": -5, "label": "-5 Giorni", "type": "Riposo", "val": 0, "dur": 0, "cho": 350, "sleep": "Sufficiente (6-7h)"},
             {"day": -4, "label": "-4 Giorni", "type": "Riposo", "val": 0, "dur": 0, "cho": 300, "sleep": "Ottimale (>7h)"},
-            {"day": -3, "label": "-3 Giorni", "type": "Allenamento", "val": 200, "dur": 30, "cho": 400, "sleep": "Ottimale (>7h)"},
+            {"day": -3, "label": "-3 Giorni", "type": "Ciclismo", "val": 200, "dur": 30, "cho": 400, "sleep": "Ottimale (>7h)"},
             {"day": -2, "label": "-2 Giorni", "type": "Riposo", "val": 0, "dur": 0, "cho": 400, "sleep": "Ottimale (>7h)"},
             {"day": -1, "label": "-1 Giorno", "type": "Riposo", "val": 0, "dur": 0, "cho": 500, "sleep": "Ottimale (>7h)"}
         ]
 
-    # --- DEFINIZIONE COLONNE ---
-    # Layout griglia più largo per ospitare i dati tecnici
-    cols = st.columns([1, 1.2, 1, 1.2, 1, 1.2])
+    # --- HEADER COLONNE ---
+    cols = st.columns([1, 1.3, 1, 1.3, 1, 1.2])
     cols[0].markdown("**Countdown**")
     cols[1].markdown("**Attività**")
     cols[2].markdown("**Minuti**")
-    
-    # Etichetta dinamica in base allo sport
-    intensity_label = "Valore"
-    if subj_base.sport == SportType.CYCLING:
-        intensity_label = "Watt Medi"
-    elif subj_base.sport == SportType.RUNNING:
-        intensity_label = "FC Media"
-    else:
-        intensity_label = "FC Media"
-        
-    cols[3].markdown(f"**{intensity_label}**")
+    cols[3].markdown("**Intensità (Watt o FC)**")
     cols[4].markdown("**CHO (g)**")
     cols[5].markdown("**Sonno**")
     
     sleep_opts = {"Ottimale (>7h)": 1.0, "Sufficiente (6-7h)": 0.95, "Insufficiente (<6h)": 0.85}
+    type_opts = ["Riposo", "Ciclismo", "Corsa/Altro"] # Opzioni Ibride
+    
     input_result_data = []
     
-    # --- CICLO DI INPUT ---
     for i, row in enumerate(st.session_state["tapering_data"]):
-        c1, c2, c3, c4, c5, c6 = st.columns([1, 1.2, 1, 1.2, 1, 1.2])
+        c1, c2, c3, c4, c5, c6 = st.columns([1, 1.3, 1, 1.3, 1, 1.2])
         
-        # 1. Label Giorno
+        # 1. Label
         if row['day'] >= -2: c1.error(f"**{row['label']}**")
         else: c1.write(f"**{row['label']}**")
             
-        # 2. Aut/Aut Attività (Selectbox)
-        type_opts = ["Riposo", "Allenamento"]
-        curr_type_idx = 1 if row['type'] == "Allenamento" else 0
-        act_type = c2.selectbox(f"t_{i}", type_opts, index=curr_type_idx, key=f"type_{i}", label_visibility="collapsed")
+        # 2. Select Sport
+        # Troviamo l'indice corretto anche se i dati salvati sono diversi
+        try:
+            curr_idx = type_opts.index(row['type'])
+        except:
+            curr_idx = 0
+        act_type = c2.selectbox(f"t_{i}", type_opts, index=curr_idx, key=f"type_{i}", label_visibility="collapsed")
         
-        # Variabili per i calcoli
         duration = 0
         intensity_val = 0
         calc_if = 0.0
         
-        # 3 & 4. Logica Condizionale (Solo se Allenamento)
-        if act_type == "Allenamento":
-            # Durata
-            duration = c3.number_input(f"d_{i}", 0, 600, row['dur'], step=10, key=f"dur_{i}", label_visibility="collapsed")
+        # 3 & 4. Logica Condizionale Ibrida
+        if act_type != "Riposo":
+            duration = c3.number_input(f"d_{i}", 0, 600, row.get('dur', 0), step=10, key=f"dur_{i}", label_visibility="collapsed")
             
-            # Valore Intensità (Watt o FC)
-            val_default = row['val'] if row['val'] > 0 else 150 # Default sensato se si passa da Riposo ad Attivo
-            intensity_val = c4.number_input(f"v_{i}", 0, 500, val_default, step=5, key=f"val_{i}", label_visibility="collapsed")
+            # Label dinamica per l'input valore
+            val_default = row.get('val', 0) if row.get('val', 0) > 0 else 140
+            intensity_val = c4.number_input(f"v_{i}", 0, 600, val_default, step=5, key=f"val_{i}", label_visibility="collapsed")
             
-            # --- CALCOLO LIVE IF ---
-            if subj_base.sport == SportType.CYCLING:
-                calc_if = intensity_val / user_ftp if user_ftp > 0 else 0
-            elif subj_base.sport == SportType.RUNNING:
-                calc_if = intensity_val / user_thr if user_thr > 0 else 0
-            else:
-                # Per altri sport usiamo FC su Max HR come proxy grezzo o soglia se disponibile
-                ref_hr = user_thr if user_thr > 0 else (user_max_hr * 0.85)
-                calc_if = intensity_val / ref_hr if ref_hr > 0 else 0
-            
-            # Feedback visivo IF immediato
-            if calc_if > 0:
-                c4.caption(f"IF: **{calc_if:.2f}**")
-                
+            # --- CALCOLO IF IBRIDO ---
+            if act_type == "Ciclismo":
+                # Usa FTP
+                if user_ftp > 0:
+                    calc_if = intensity_val / user_ftp
+                    c4.caption(f"IF: **{calc_if:.2f}** (su {user_ftp}W)")
+                else:
+                    c4.warning("FTP = 0")
+            elif act_type == "Corsa/Altro":
+                # Usa THR
+                if user_thr > 0:
+                    calc_if = intensity_val / user_thr
+                    c4.caption(f"IF: **{calc_if:.2f}** (su {user_thr}bpm)")
+                else:
+                    c4.warning("Soglia FC = 0")
         else:
             c3.write("-")
             c4.write("-")
         
-        # 5. Carboidrati
+        # 5 & 6. Resto
         new_cho = c5.number_input(f"c_{i}", 0, 1500, row['cho'], step=50, key=f"cho_{i}", label_visibility="collapsed")
         
-        # 6. Sonno
         sl_idx = list(sleep_opts.keys()).index(row['sleep']) if row['sleep'] in sleep_opts else 0
         new_sleep_label = c6.selectbox(f"s_{i}", list(sleep_opts.keys()), index=sl_idx, key=f"sl_{i}", label_visibility="collapsed")
         
-        # Salvataggio dati per la logica
         input_result_data.append({
             "label": row['label'],
             "duration": duration,
-            "calculated_if": calc_if, # Passiamo l'IF calcolato
+            "calculated_if": calc_if, # Passiamo l'IF calcolato correttamente in base allo sport
             "cho_in": new_cho,
             "sleep_factor": sleep_opts[new_sleep_label]
         })
 
     st.markdown("---")
     
-    # Validazione base: controlla se i giorni -2 e -1 hanno CHO (dato che sono critici per il carboloading)
     cho_d2 = input_result_data[5]['cho_in']
     cho_d1 = input_result_data[6]['cho_in']
-    
-    is_valid = True
     if cho_d2 == 0 and cho_d1 == 0:
-        st.warning("⚠️ Non hai inserito carboidrati per i giorni **-2** e **-1**. Il riempimento sarà probabilmente basso.")
+        st.warning("⚠️ Carboidrati giorni -2/-1 a zero. Carico assente.")
     
     if st.button("🚀 Simula Stato Glicogeno (Race Ready)", type="primary"):
-        # Chiamata alla logica aggiornata
         df_trend, final_tank = logic.calculate_tapering_trajectory(subj_base, input_result_data)
         
         st.session_state['tank_data'] = final_tank
@@ -281,26 +277,22 @@ with tab2:
         
         st.subheader("Risultato Tapering")
         r1, r2 = st.columns([2, 1])
-        
         with r1:
-            # Grafico Linea
             chart = alt.Chart(df_trend).mark_line(point=True, strokeWidth=3).encode(
                 x=alt.X('Giorno', sort=[d['label'] for d in input_result_data], title=None),
-                y=alt.Y('Totale', title='Glicogeno Totale (g)', scale=alt.Scale(zero=False)),
+                y=alt.Y('Totale', title='Glicogeno (g)', scale=alt.Scale(zero=False)),
                 color=alt.value('#43A047'),
                 tooltip=['Giorno', 'Totale', 'Muscolare', 'Epatico', 'Input CHO', alt.Tooltip('IF', format='.2f')]
-            ).properties(height=300, title="Evoluzione Riserve Settimanali")
+            ).properties(height=300, title="Evoluzione Riserve")
             st.altair_chart(chart, use_container_width=True)
             
         with r2:
             final_pct = final_tank['fill_pct']
             st.metric("Riempimento Gara", f"{final_pct:.1f}%", delta=f"{int(final_tank['actual_available_g'])}g Totali")
             st.progress(final_pct / 100)
-            
-            if final_pct >= 90: st.success("✅ **CONDIZIONE OTTIMALE**")
-            elif final_pct >= 75: st.info("⚠️ **CONDIZIONE BUONA**")
-            else: st.error("❌ **RISERVE BASSE**")
-            
+            if final_pct >= 90: st.success("✅ OTTIMALE")
+            elif final_pct >= 75: st.info("⚠️ BUONO")
+            else: st.error("❌ BASSO")
             st.write(f"- Muscolo: **{int(final_tank['muscle_glycogen_g'])} g**")
             st.write(f"- Fegato: **{int(final_tank['liver_glycogen_g'])} g**")
 
@@ -325,17 +317,23 @@ with tab3:
         intensity_series = None
         
         if uploaded_file:
-            series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, st.session_state['ftp_watts_input'], st.session_state['thr_hr_input'], subj.sport)
+            # Qui passiamo la soglia corretta in base allo sport TARGET selezionato nel Tab 1
+            # Se l'utente è ibrido ma fa una gara di bici, userà FTP.
+            target_thresh_hr = st.session_state['thr_hr_input']
+            target_ftp = st.session_state['ftp_watts_input']
+            
+            series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
             if series:
                 intensity_series = series
                 duration = dur_calc
                 st.success(f"File importato: {dur_calc} min.")
         
+        # Input manuale differenziato in base allo sport TARGET
         if subj.sport == SportType.CYCLING:
-            val = st.number_input("Potenza Media (Watt)", 100, 500, 200)
+            val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
             params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': st.session_state['ftp_watts_input'], 'efficiency': 22.0}
         else:
-            val = st.number_input("FC Media (BPM)", 100, 220, 150)
+            val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': st.session_state['thr_hr_input']}
             
     with c_s2:
@@ -360,9 +358,8 @@ with tab3:
 
     st.markdown("---")
     r1_c1, r1_c2 = st.columns([2, 1])
-    
     with r1_c1:
-        st.markdown("#### Bilancio Energetico e Substrati")
+        st.markdown("#### Bilancio Energetico")
         df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
         order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
         colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
@@ -373,7 +370,7 @@ with tab3:
         st.altair_chart(chart_stack, use_container_width=True)
         
     with r1_c2:
-        st.markdown("#### KPI Prestazionali")
+        st.markdown("#### KPI")
         fin_gly = stats_sim['final_glycogen']
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
@@ -384,23 +381,17 @@ with tab3:
     st.markdown("---")
     r2_c1, r2_c2 = st.columns(2)
     with r2_c1:
-        st.markdown("#### Analisi Deplezione (Zone di Rischio)")
+        st.markdown("#### Zone di Rischio")
         chart_strat = create_risk_zone_chart(df_sim, "Scenario: Con Integrazione", start_total)
-        chart_fast = create_risk_zone_chart(df_no, "Scenario: Digiuno (Controllo)", start_total)
+        chart_fast = create_risk_zone_chart(df_no, "Scenario: Digiuno", start_total)
         st.altair_chart(alt.vconcat(chart_strat, chart_fast), use_container_width=True)
-        if fin_gly < 50: st.error("⚠️ CRITICITÀ RILEVATA: Riserve finali prossime all'esaurimento.")
-        else: st.success("✅ STRATEGIA SOSTENIBILE: Riserve energetiche sufficienti.")
     with r2_c2:
-        st.markdown("#### Analisi Tolleranza Gastrointestinale")
+        st.markdown("#### Analisi Gut Load")
         base = alt.Chart(df_sim).encode(x='Time (min)')
         area_gut = base.mark_area(color='#795548', opacity=0.6).encode(y=alt.Y('Gut Load', title='Accumulo (g)'), tooltip=['Gut Load'])
         rule = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
-        line_intake = base.mark_line(color='#1E88E5', interpolate='step-after').encode(y=alt.Y('Intake Cumulativo (g)', axis=alt.Axis(title='Flusso (g)', orient='right')))
-        line_ox = base.mark_line(color='#43A047').encode(y=alt.Y('Ossidazione Cumulativa (g)', axis=None))
-        chart_gi = alt.layer(area_gut, rule, line_intake, line_ox).resolve_scale(y='independent').properties(height=350)
+        chart_gi = alt.layer(area_gut, rule).properties(height=350)
         st.altair_chart(chart_gi, use_container_width=True)
-        max_gut = df_sim['Gut Load'].max()
-        if max_gut > risk_thresh: st.warning(f"⚠️ Rischio Distress GI: Il picco ({int(max_gut)}g) supera la soglia.")
 
     st.markdown("---")
     st.markdown("### 📋 Cronotabella Operativa")
@@ -412,11 +403,8 @@ with tab3:
         total_ingested = 0
         while current_time <= duration:
             total_ingested += cho_unit
-            schedule.append({"Timing (Min)": current_time, "Azione": f"Assumere 1 unità ({cho_unit}g CHO)", "Totale (g)": total_ingested})
+            schedule.append({"Min": current_time, "Azione": f"1 unità ({cho_unit}g)", "Tot": total_ingested})
             current_time += interval_rounded
         if schedule:
             st.table(pd.DataFrame(schedule))
-            st.info(f"Portare **{len(schedule)}** gel totali. Alert ogni **{interval_rounded}** minuti.")
-    else:
-        st.info("Nessuna strategia di integrazione definita.")
-
+            st.info(f"Portare **{len(schedule)}** unità.")
