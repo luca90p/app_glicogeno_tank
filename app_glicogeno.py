@@ -562,11 +562,12 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
 
     zwo_sport_tag = root.findtext('sportType')
     
+    # Controllo di coerenza sport
     if zwo_sport_tag:
         if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
-            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per BICI. Uso i parametri di soglia per {sport_type.label} per coerenza.")
+            st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per BICI. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
         elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
-            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per CORSA. Uso i parametri di soglia per {sport_type.label} per coerenza.")
+            st.warning(f"⚠️ ATTENZIONE: Hai selezionato {sport_type.label} nel Tab 1, ma il file ZWO è per CORSA. I calcoli useranno la soglia di {sport_type.label}, ma potrebbero essere imprecisi.")
 
     
     intensity_series = [] 
@@ -597,10 +598,12 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     if total_duration_min > 0:
         avg_if = total_weighted_if / total_duration_min
         
+        # Ricalcoliamo l'AvgW/AvgHR in base all'IF medio E allo sport selezionato nel Tab 1
         if sport_type == SportType.CYCLING:
             avg_power = avg_if * ftp_watts
             avg_hr = 0
         elif sport_type == SportType.RUNNING:
+            # Per la corsa usiamo la THR (Soglia) del Tab 1
             avg_hr = avg_if * thr_hr
             avg_power = 0
         else: 
@@ -1150,6 +1153,7 @@ with tab3:
                         if filename.endswith('.zwo'):
                             # Logica per ZWO (XML)
                             st.info("Analisi di un allenamento strutturato ZWO (IF istantaneo calcolato).")
+                            # Passa lo sport type per i controlli di coerenza e la logica di soglia corretta
                             intensity_series, duration, avg_w_calc, avg_hr_calc = parse_zwo_file(uploaded_file, ftp_watts, thr_hr, subj.sport)
                             
                             if subj.sport == SportType.CYCLING:
