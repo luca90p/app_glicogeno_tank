@@ -438,7 +438,7 @@ def simulate_metabolism(
             
         else: # Running/Other
             # Per corsa/altro, il costo base è kcal_per_min_base, ma lo scaliamo per l'IF istantaneo
-            # Per simulare l'aumento di richiesta energetica dovuto all'alta intensità del segmento
+            # Per simulare l' aumento di richiesta energetica dovuto all'alta intensità del segmento
             demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             
             drift_factor = 1.0
@@ -580,7 +580,7 @@ def simulate_metabolism(
             "CHO %": cho_ratio * 100,
             "Intake Cumulativo (g)": total_intake_cumulative,
             "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative,
-            "Intensity Factor (IF)": current_intensity_factor # Aggiungo l'IF istantaneo
+            "Intensity Factor (IF)": current_intensity_factor 
         })
         
     total_kcal_final = current_kcal_demand * 60 
@@ -610,33 +610,57 @@ def simulate_metabolism(
 # --- LOGICA DI PARSING ZWO ---
 
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
-    # La logica è semplificata e si basa sulla lettura dei tag SteadyState
     
-    tree = ET.parse(io.StringIO(uploaded_file.getvalue().decode('utf-8')))
-    root = tree.getroot()
+    try:
+        # Leggi il contenuto del file
+        xml_content = uploaded_file.getvalue().decode('utf-8')
+        root = ET.fromstring(xml_content)
+    except ET.ParseError:
+        st.error("Errore di parsing: il file ZWO non è un XML valido.")
+        return [], 0, 0, 0
+    except Exception as e:
+        st.error(f"Errore nella lettura del file: {e}")
+        return [], 0, 0, 0
+
+    # 1. Estrazione del tipo di sport dal file ZWO
+    zwo_sport_tag = root.findtext('sportType')
+    
+    if zwo_sport_tag:
+        if zwo_sport_tag.lower() == 'bike' and sport_type != SportType.CYCLING:
+            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per {zwo_sport_tag.upper()}. Uso i parametri di soglia per il {sport_type.label}.")
+        elif zwo_sport_tag.lower() == 'run' and sport_type != SportType.RUNNING:
+            st.warning(f"Attenzione: La Disciplina selezionata nel Tab 1 è {sport_type.label}, ma il file ZWO è per {zwo_sport_tag.upper()}. Uso i parametri di soglia per il {sport_type.label}.")
+
     
     intensity_series = [] # Array degli IF (Intensity Factors) minuto per minuto
     total_duration_min = 0
     total_weighted_if = 0
+    total_duration_sec = 0
     
     # Lo ZWO ha la potenza espressa come frazione della Soglia (FTP/FTHR)
     for steady_state in root.findall('.//SteadyState'):
-        duration_sec = int(steady_state.get('Duration'))
-        power_ratio = float(steady_state.get('Power'))
-        
-        # Per semplicità, convertiamo tutto in minuti e usiamo l'IF come proxy
-        duration_min = round(duration_sec / 60)
-        if duration_min == 0: continue
+        try:
+            duration_sec = int(steady_state.get('Duration'))
+            power_ratio = float(steady_state.get('Power'))
             
-        intensity_factor = power_ratio # Power Ratio = IF per ZWO
-        
-        # Riempiamo la serie IF per ogni minuto
-        for _ in range(duration_min):
-            intensity_series.append(intensity_factor)
-        
-        total_duration_min += duration_min
-        total_weighted_if += intensity_factor * duration_min
+            # Arrotondiamo per eccesso per garantire che tutti i secondi siano coperti
+            duration_min_segment = math.ceil(duration_sec / 60)
+            
+            intensity_factor = power_ratio # Power Ratio = IF per ZWO
+            
+            # Riempiamo la serie IF per ogni minuto
+            for _ in range(duration_min_segment):
+                intensity_series.append(intensity_factor)
+            
+            total_duration_sec += duration_sec
+            total_weighted_if += intensity_factor * (duration_sec / 60) # Ponderiamo per i minuti esatti
 
+        except Exception as e:
+            st.error(f"Errore durante l'analisi di un segmento SteadyState: {e}")
+            continue
+
+    total_duration_min = math.ceil(total_duration_sec / 60)
+    
     if total_duration_min > 0:
         avg_if = total_weighted_if / total_duration_min
         
@@ -645,12 +669,10 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
             avg_power = avg_if * ftp_watts
             avg_hr = 0
         elif sport_type == SportType.RUNNING:
-            # Per la corsa, usiamo la THR per mappare l'IF in HR
-            # IF = AvgHR / THR -> AvgHR = IF * THR
             avg_hr = avg_if * thr_hr
             avg_power = 0
         else: # Altri sport
-            avg_hr = avg_if * st.session_state.get('max_hr_input', 185) * 0.85 # Proxy max HR
+            avg_hr = avg_if * st.session_state.get('max_hr_input', 185) * 0.85 
             avg_power = 0
             
         return intensity_series, total_duration_min, avg_power, avg_hr
@@ -783,8 +805,8 @@ with tab1:
                 
             else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
                 c_thr, c_max = st.columns(2)
-                max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
-                thr_hr_input = c_thr.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1) # Aggiungo soglia aerobica
+                max_hr_input = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1, key='max_hr_input_general')
+                thr_hr_input = st.number_input("Soglia Aerobica (LT1/VT1) [BPM]", 80, max_hr_input-5, 150, 1, key='thr_hr_input_general') # Aggiungo soglia aerobica
                 st.caption("La FC Max è usata per il calcolo approssimativo dell'IF.")
         
         # Salvataggio delle soglie nello stato di sessione per il Tab 3
@@ -1125,11 +1147,18 @@ with tab3:
         avg_w = 200
         avg_hr = 150
         intensity_series = None # Inizializzazione della serie IF
+        intensity_factor_reference = 0.8 # Inizializzazione IF di riferimento
         
         if sport_mode == 'cycling':
             avg_w = 200
-        elif sport_mode == 'running' or sport_mode == 'other':
+            intensity_factor_reference = avg_w / ftp_watts if ftp_watts > 0 else 0.8
+        elif sport_mode == 'running':
             avg_hr = 150
+            intensity_factor_reference = avg_hr / thr_hr if thr_hr > 0 else 0.8
+        elif sport_mode == 'other':
+            avg_hr = 150
+            intensity_factor_reference = avg_hr / max_hr if max_hr > 0 else 0.8
+
         
         with col_param:
             st.subheader(f"1. Parametri Sforzo ({sport_mode.capitalize()})")
@@ -1154,7 +1183,14 @@ with tab3:
                         if filename.endswith('.zwo'):
                             # Logica per ZWO (XML)
                             st.info("Analisi di un allenamento strutturato ZWO (IF istantaneo calcolato).")
-                            intensity_series, duration, avg_w, avg_hr = parse_zwo_file(uploaded_file, ftp_watts, thr_hr, subj.sport)
+                            intensity_series, duration, avg_w_calc, avg_hr_calc = parse_zwo_file(uploaded_file, ftp_watts, thr_hr, subj.sport)
+                            
+                            if subj.sport == SportType.CYCLING:
+                                st.success(f"Dati estratti: Potenza media: {avg_w_calc:.1f} W, Durata: {duration} min.")
+                                avg_w = avg_w_calc
+                            elif subj.sport == SportType.RUNNING:
+                                st.success(f"Dati estratti: FC media: {avg_hr_calc:.1f} BPM, Durata: {duration} min.")
+                                avg_hr = avg_hr_calc
                             
                         else:
                             # Logica per CSV/GPX/FIT (lettura semplificata in CSV)
