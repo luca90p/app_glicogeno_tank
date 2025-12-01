@@ -269,7 +269,44 @@ with tab3:
         else:
             st.success(f"✅ Tolleranza GI rispettata. Picco accumulo: {int(max_gut)}g")
 
-    # PIANO D'AZIONE
-    if cho_h > 0:
-        units_tot = int((duration/60) * (cho_h/cho_unit))
-        st.info(f"📋 **Piano Integrazione:** Assumere **1 unità ({cho_unit}g CHO)** ogni **{int(60/(cho_h/cho_unit))} minuti** (Totale stimato: {units_tot} unità).")
+    # ... (tutto il codice precedente del Tab 3 rimane uguale)
+
+    # PIANO D'AZIONE E CRONOTABELLA
+    st.markdown("---")
+    st.markdown("### 📋 Cronotabella di Integrazione")
+
+    if cho_h > 0 and cho_unit > 0:
+        # Calcolo frequenza di assunzione
+        units_per_hour = cho_h / cho_unit
+        interval_minutes = 60 / units_per_hour
+        interval_rounded = int(interval_minutes)
+        
+        schedule = []
+        current_time = interval_rounded
+        total_ingested = 0
+        
+        # Generazione della tabella temporale
+        while current_time <= duration:
+            total_ingested += cho_unit
+            schedule.append({
+                "Timing Gara": f"Minuto {current_time}",
+                "Azione Richiesta": f"Assumere 1 unità ({cho_unit}g CHO)",
+                "Totale Cumulativo": f"{total_ingested}g"
+            })
+            current_time += interval_rounded
+            
+        if schedule:
+            # Visualizzazione tabellare pulita
+            df_schedule = pd.DataFrame(schedule)
+            st.table(df_schedule)
+            
+            # Riepilogo logistico
+            total_units = len(schedule)
+            st.info(
+                f"**Riepilogo Logistico:** Preparare **{total_units} unità** totali. "
+                f"Impostare un alert sull'orologio ogni **{interval_rounded} minuti**."
+            )
+        else:
+            st.warning("La durata dell'evento è inferiore all'intervallo di assunzione calcolato. Nessuna integrazione necessaria.")
+    else:
+        st.info("Nessuna strategia di integrazione impostata (Target CHO = 0).")
