@@ -312,6 +312,7 @@ with tab2:
                 tooltip=['Giorno', 'Totale', 'Muscolare', 'Epatico', 'Input CHO', alt.Tooltip('IF', format='.2f')]
             ).properties(height=300, title="Evoluzione Riserve")
             st.altair_chart(chart, use_container_width=True)
+            
         with r2:
             final_pct = final_tank['fill_pct']
             st.metric("Riempimento Gara", f"{final_pct:.1f}%", delta=f"{int(final_tank['actual_available_g'])}g Totali")
@@ -332,38 +333,31 @@ with tab3:
     tank_base = st.session_state['tank_data']
     subj = st.session_state['subject_struct']
     
-    # --- 🔴 NUOVA FUNZIONALITÀ: OVERRIDE/TEST MODE ---
+    # --- 🔴 OVERRIDE MODE ---
     st.markdown("### 🛠️ Modalità Test / Override")
     enable_override = st.checkbox("Abilita Override Livello Iniziale (Bypassa Tab 2)", value=False)
     
+    # FIX: Definisco start_total e tank indipendentemente dal path
     if enable_override:
-        # Calcoliamo il Max Teorico dal Tab 1
         max_cap = tank_base['max_capacity_g']
-        st.warning(f"Modalità Test Attiva. Ignoro il calcolo del tapering. Max Capacità: {int(max_cap)}g")
+        st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
+        force_pct = st.slider("Forza Livello Riempimento (%)", 0, 120, 100, 5)
         
-        force_pct = st.slider("Forza Livello Riempimento Iniziale (%)", 0, 120, 100, 5)
+        forced_muscle = (max_cap - 100) * (force_pct / 100.0)
+        forced_liver = 100 * (force_pct / 100.0)
         
-        # Ricalcolo Tank Forzato
-        # Assumiamo che la % si applichi uniformemente a muscolo e fegato rispetto ai loro massimi teorici
-        max_muscle = max_cap - 100 # Approx (fegato standard ~100g)
-        max_liver = 100
-        
-        forced_muscle = max_muscle * (force_pct / 100.0)
-        forced_liver = max_liver * (force_pct / 100.0)
-        
-        # Creiamo un nuovo oggetto tank temporaneo per la simulazione
         tank = tank_base.copy()
         tank['muscle_glycogen_g'] = forced_muscle
         tank['liver_glycogen_g'] = forced_liver
         tank['actual_available_g'] = forced_muscle + forced_liver
         tank['fill_pct'] = force_pct
+        start_total = tank['actual_available_g']
         
-        st.metric("Nuovo Start Glicogeno", f"{int(tank['actual_available_g'])} g")
-        
+        st.metric("Nuovo Start Glicogeno", f"{int(start_total)} g")
     else:
-        # Uso i dati normali dal Tab 2
         tank = tank_base
-        st.info(f"**Condizione di Partenza (da Tab 2):** {int(tank['actual_available_g'])}g di glicogeno disponibile.")
+        start_total = tank['actual_available_g']
+        st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
     
     # --- FINE OVERRIDE ---
     
@@ -487,6 +481,7 @@ with tab3:
     with r1_c2:
         st.markdown("#### KPI")
         fin_gly = stats_sim['final_glycogen']
+        # Calcolo delta usando start_total (ora sempre definito)
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
         
