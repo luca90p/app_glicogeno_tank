@@ -328,6 +328,8 @@ with tab3:
     st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
     
     c_s1, c_s2, c_s3 = st.columns(3)
+    
+    # --- 1. PROFILO SFORZO ---
     with c_s1:
         st.markdown("### 1. Profilo Sforzo")
         duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
@@ -335,18 +337,14 @@ with tab3:
         intensity_series = None
         
         if uploaded_file:
-            # Qui passiamo la soglia corretta in base allo sport TARGET selezionato nel Tab 1
-            # Se l'utente è ibrido ma fa una gara di bici, userà FTP.
             target_thresh_hr = st.session_state['thr_hr_input']
             target_ftp = st.session_state['ftp_watts_input']
-            
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
             if series:
                 intensity_series = series
                 duration = dur_calc
                 st.success(f"File importato: {dur_calc} min.")
         
-        # Input manuale differenziato in base allo sport TARGET
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
             params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': st.session_state['ftp_watts_input'], 'efficiency': 22.0}
@@ -354,27 +352,61 @@ with tab3:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': st.session_state['thr_hr_input']}
             
+    # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
         cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
         cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
+    # --- 3. FISIOLOGIA & METABOLIMETRO ---
     with c_s3:
-        st.markdown("### 3. Fisiologia Digestiva")
+        st.markdown("### 3. Fisiologia & Metabolismo")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
-        tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
-        risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
+        
+        # Opzioni Avanzate / Lab Data
+        st.markdown("**Calibrazione Avanzata**")
+        use_lab = st.checkbox("Usa Dati Metabolimetro (Test)")
+        
+        lab_cho = 0.0
+        lab_fat = 0.0
+        
+        if use_lab:
+            st.caption("Inserisci i consumi misurati al **ritmo gara** previsto.")
+            lab_cho = st.number_input("CHO Ossidati (g/h)", 0, 500, 150, step=5)
+            lab_fat = st.number_input("Grassi Ossidati (g/h)", 0, 200, 30, step=5)
+        else:
+            # Se non usa dati lab, mostriamo i parametri cinetici standard
+            tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
+            risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
+    
+    # Aggiornamento Parametri con Dati Lab
+    if use_lab:
+        params['use_lab_data'] = True
+        params['lab_cho_g_h'] = lab_cho
+        params['lab_fat_g_h'] = lab_fat
+        # Parametri standard di fallback se usiamo il lab
+        tau = 20 
+        risk_thresh = 30
+    else:
+        params['use_lab_data'] = False
 
+    # --- ESECUZIONE SIMULAZIONI ---
+    
+    # 1. Strategia Integrata
     df_sim, stats_sim = logic.simulate_metabolism(tank, duration, cho_h, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
+    # 2. Riferimento (Digiuno)
     df_no, _ = logic.simulate_metabolism(tank, duration, 0, cho_unit, 70, tau, subj, params, mix_type_input=mix_sel, intensity_series=intensity_series)
     df_no['Scenario'] = 'Riferimento (Digiuno)'
     df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
+    # --- DASHBOARD ---
     st.markdown("---")
+    
+    # ROW 1: BILANCIO
     r1_c1, r1_c2 = st.columns([2, 1])
     with r1_c1:
         st.markdown("#### Bilancio Energetico")
@@ -392,11 +424,19 @@ with tab3:
         fin_gly = stats_sim['final_glycogen']
         delta = fin_gly - start_total
         st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
-        st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
+        
+        # Mostra RER o Lab Flag
+        if use_lab:
+            st.metric("Fonte Dati", "Metabolimetro (Lab)")
+        else:
+            st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
+            
         st.metric("CHO Ossidati", f"{int(stats_sim['total_exo_used'] + stats_sim['total_muscle_used'] + stats_sim['total_liver_used'])} g")
         st.metric("FAT Ossidati", f"{int(stats_sim['fat_total_g'])} g")
 
     st.markdown("---")
+    
+    # ROW 2: RISCHI
     r2_c1, r2_c2 = st.columns(2)
     with r2_c1:
         st.markdown("#### Zone di Rischio")
