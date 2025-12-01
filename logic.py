@@ -117,14 +117,14 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     # Parametri Attività
     mode = activity_params.get('mode', 'cycling')
     gross_efficiency = activity_params.get('efficiency', 22.0)
-    avg_power = activity_params.get('avg_watts', 200)
+    avg_power = activity_params.get('avg_power', 200)
     ftp_watts = activity_params.get('ftp_watts', 250) 
     avg_hr = activity_params.get('avg_hr', 150)
     threshold_hr = activity_params.get('threshold_hr', 170)
     
     # Selezione soglie
     threshold_ref = ftp_watts if mode == 'cycling' else threshold_hr
-    base_val = avg_watts if mode == 'cycling' else avg_hr
+    base_val = avg_power if mode == 'cycling' else avg_hr
     
     # Calcolo IF di riferimento
     intensity_factor_reference = base_val / threshold_ref if threshold_ref > 0 else 0.8
@@ -387,3 +387,4 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     final_tank['actual_available_g'] = current_muscle + current_liver
     final_tank['fill_pct'] = (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
     return pd.DataFrame(trajectory), final_tank
+
