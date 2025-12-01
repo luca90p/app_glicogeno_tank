@@ -236,9 +236,6 @@ with tab2:
             ).properties(height=250)
             st.altair_chart(chart_week, use_container_width=True)
 
-# =============================================================================
-# TAB 3: SIMULAZIONE & STRATEGIA
-# =============================================================================
 with tab3:
     if 'tank_data' not in st.session_state:
         st.warning("Completa i Tab precedenti.")
@@ -334,6 +331,8 @@ with tab3:
         oxidation_efficiency_input=eff_ox, mix_type_input=s_mix, intensity_series=intensity_series
     )
     df_sim['Scenario'] = 'Con Integrazione'
+    # FIX: Calcolo esplicito del totale
+    df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
     # Scenario B: Digiuno (Confronto)
     df_no, stats_no = logic.simulate_metabolism(
@@ -341,6 +340,8 @@ with tab3:
         oxidation_efficiency_input=eff_ox, mix_type_input=s_mix, intensity_series=intensity_series
     )
     df_no['Scenario'] = 'Digiuno'
+    # FIX: Calcolo esplicito del totale
+    df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
     
     # --- RISULTATI VISUALI ---
     st.markdown("---")
@@ -408,15 +409,14 @@ with tab3:
         
         st.altair_chart((base_gut + line_risk).properties(title=f"Soglia Rischio: {risk_val}g"), use_container_width=True)
         
-    # ALERT FINALI
+    # ALERT FINALI (FIX: Usiamo i dati dal DataFrame per sicurezza)
     min_res = stats_sim['final_glycogen']
+    final_liver = df_sim['Residuo Epatico'].iloc[-1] # Lettura diretta dal DF
+    
     if min_res < 50:
         st.error(f"⚠️ **ATTENZIONE:** Rischio 'Bonk' elevato! Riserve finali critiche ({int(min_res)}g).")
-    elif stats_sim['final_liver'] < 15: # Nota: logic.py ritorna dizionari, devo assicurarmi che le chiavi esistano
-        # Controllo manuale sui dati raw se la chiave non esiste nello stats (il logic semplificato potrebbe non averla)
-        min_liver = df_sim['Residuo Epatico'].min()
-        if min_liver < 15:
-            st.warning("⚠️ **Ipoglicemia:** Le riserve epatiche sono pericolosamente basse.")
+    elif final_liver < 15: 
+        st.warning("⚠️ **Ipoglicemia:** Le riserve epatiche sono pericolosamente basse.")
     else:
         st.success("✅ **Strategia Sostenibile:** Arrivi al traguardo con energia residua.")
 
