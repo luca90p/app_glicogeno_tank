@@ -470,7 +470,7 @@ def simulate_metabolism(
             min_endo = total_cho_demand * 0.2 
             if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
             fat_burned_per_min = lab_fat_rate 
-            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_burned_per_min) > 0 else 0
+            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_هَاburn_per_min) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
         
         else:
@@ -547,7 +547,9 @@ def simulate_metabolism(
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
+            # Correzione: Uso la quantità EFFETTIVA prelevata (exo_oxidation_g_h)
             "Carboidrati Esogeni (g)": exo_oxidation_g_h, 
+            # Calcolo corretto dell'Ossidazione Lipidica (g/h)
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             
             # Campi Percentuali per Tooltip
@@ -608,11 +610,11 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     
     ---
     
-    **2. Sviluppi Recenti & Personalizzazione**
+    **2. Sviluppi Recenti & Personalizzazione (Rothschild et al., 2022)**
     
-    * **A) Efficienza Metabolica Individuale:** Studi recenti (Podlogar et al., 2025) evidenziano un'alta variabilità nell'ossidazione dei CHO esogeni ($0.5-1.5 \text{ g/min}$). L'app permette ora di personalizzare questo parametro.
-    * **B) Rischio Gastrointestinale:** L'accumulo di CHO non ossidati è il predittore principale di distress GI. Il modello stima questo rischio calcolando il delta tra assunzione e ossidazione (Podlogar et al., 2025).
-    * **C) Mix di Carboidrati:** L'uso di miscele Glucosio:Fruttosio (es. 2:1 o 1:0.8) sfrutta trasportatori multipli (SGLT1 e GLUT5), aumentando il limite di ossidazione fino a $1.5-1.7 \text{ g/min}$ (Jeukendrup, 2004).
+    * **Importanza del Carico Dieta:** Studi di modellazione (Rothschild et al., 2022) indicano che la **dieta CHO/Fat giornaliera** ha un'influenza maggiore sul mix energetico (RER) rispetto all'assunzione CHO *durante* l'esercizio.
+    * **Variabilità e Rischio GI:** L'alta variabilità nell'ossidazione dei CHO esogeni ($\text{0.5-1.5 g/min}$) e l'accumulo conseguente sono i predittori principali del distress GI (Podlogar et al., 2025).
+    * **Mix di Carboidrati:** L'uso di miscele Glucosio:Fruttosio (es. 2:1 o 1:0.8) sfrutta trasportatori multipli (SGLT1 e GLUT5), aumentando il limite di ossidazione fino a $1.5-1.7 \text{ g/min}$ (Jeukendrup, 2004).
     """)
 # --- FINE NOTE TECNICHE REINTRODOTTE ---
 
@@ -719,9 +721,10 @@ with tab1:
         cho_g2 = weight * DietType.NORMAL.ref_value
         
         # =========================================================================
-        # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta)
+        # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
         # =========================================================================
         st.subheader("3. Stato Nutrizionale (Introito CHO 48h)")
+        st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
             "Metodo di Calcolo Ripristino Glicogeno:", 
@@ -774,14 +777,12 @@ with tab1:
             st.markdown("#### Input Glicogeno Totale (g/die)")
             col_d2, col_d1 = st.columns(2)
             
-            # DEFAULT CHO DAY -2 (74kg * 5 g/kg = 370g)
             cho_day_minus_2_g = col_d2.number_input(
                 "Grammi CHO Giorno -2 (g)", 
                 min_value=50, max_value=800, value=370, step=10,
                 help="Apporto totale di CHO del penultimo giorno."
             )
             
-            # DEFAULT CHO DAY -1 (74kg * 5 g/kg = 370g)
             cho_day_minus_1_g = col_d1.number_input(
                 "Grammi CHO Giorno -1 (g)", 
                 min_value=50, max_value=800, value=370, step=10,
@@ -817,17 +818,16 @@ with tab1:
         st.markdown("---")
         
         # =========================================================================
-        # SEZIONE 5: FATTORI DI RECUPERO (FATICA E SONNO)
+        # SEZIONE 5: FATTORI DI RECUPERO (FATICA E SONNO) - ALTA IMPORTANZA
         # =========================================================================
         st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
+        st.warning("Il sesso e la durata dell'esercizio sono i maggiori fattori che influenzano la scelta dei substrati in gara (Rothschild et al., 2022).")
         
-        # Mappa per l'indice di default del Sonno (Sufficiente)
-        default_sleep_label = "Sufficiente (6-7h)"
-        default_sleep_index = list(sleep_map.keys()).index(default_sleep_label)
-
         # Selezione qualitativa per default
         s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
-        s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=default_sleep_index, key='sleep_final')] # DEFAULT: Sufficiente
+        default_sleep_label = "Sufficiente (6-7h)"
+        default_sleep_index = list(sleep_map.keys()).index(default_sleep_label)
+        s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=default_sleep_index, key='sleep_final')] 
         
         
         # --- INPUT ATTIVITÀ MOTORIA SPECIFICA (Opzionale) ---
@@ -1297,7 +1297,7 @@ with tab2:
         
         col_strat, col_digi = st.columns(2)
 
-        def create_reserve_chart(df_data, title, background_df, max_y):
+        def create_reserve_chart(df_data, title, background_df):
             
             # Layer Sfondo
             background = alt.Chart(background_df).mark_rect(opacity=0.15).encode(
@@ -1307,12 +1307,12 @@ with tab2:
                 tooltip=['Zone']
             ).properties(
                 title=title
-            ).encode(x=alt.X('Time (min)', axis=None)) # Rimuove l'asse X dallo sfondo
+            )
 
             # Layer Area Accatastata
             area_chart = alt.Chart(df_data).mark_area().encode(
                 x=alt.X('Time (min)', title='Durata (min)'),
-                y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_y])),
+                y=alt.Y('Residuo (g)', title='Glicogeno Residuo (g)', stack="zero", scale=alt.Scale(domain=[0, max_total])),
                 color=alt.Color('Tipo Glicogeno', scale=alt.Scale(domain=reserve_fields, range=[reserve_color_map[f] for f in reserve_fields])),
                 order=alt.Order('Tipo Glicogeno', sort='ascending'), # Epatico in basso, Muscolare sopra
                 tooltip=['Time (min)', 'Tipo Glicogeno', 'Residuo (g)', 'Stato']
@@ -1322,14 +1322,14 @@ with tab2:
             
         # Grafico 1: Strategia con Integrazione
         df_strat = df_reserve_long[df_reserve_long['Scenario'] == 'Con Integrazione (Strategia)']
-        chart_strat = create_reserve_chart(df_strat, 'Con Integrazione (Strategia)', zones_df, max_total)
+        chart_strat = create_reserve_chart(df_strat, 'Con Integrazione (Strategia)', zones_df)
         
         with col_strat:
             st.altair_chart(chart_strat, use_container_width=True)
 
         # Grafico 2: Senza Integrazione
         df_digi = df_reserve_long[df_reserve_long['Scenario'] == 'Senza Integrazione (Digiuno)']
-        chart_digi = create_reserve_chart(df_digi, 'Senza Integrazione (Digiuno)', zones_df, max_total)
+        chart_digi = create_reserve_chart(df_digi, 'Senza Integrazione (Digiuno)', zones_df)
         
         with col_digi:
             st.altair_chart(chart_digi, use_container_width=True)
@@ -1341,87 +1341,89 @@ with tab2:
         """, unsafe_allow_html=True)
         # --- FINE LOGICA GRAFICO RISERVE NETTE ---
         
-        # =========================================================================
-        # SEZIONE AGGIUNTIVA: ANALISI AVANZATA DIAGNOSTICA
-        # =========================================================================
         st.markdown("---")
-        st.subheader("🔬 Analisi Avanzata Diagnostica")
+        
+        st.markdown("### ⚠️ Accumulo Intestinale (Rischio GI) & Flusso CHO")
+        
+        st.caption(f"""
+        **Interpretazione:** La distanza verticale tra la Linea Blu (Ingerito) e la Linea Verde (Ossidato) crea l'**Accumulo CHO (g)**, ovvero il carico intestinale istantaneo. Se l'area supera la Soglia di Rischio GI ({risk_threshold_input} g), la strategia di assunzione è troppo aggressiva.
+        """)
 
-        # 1. Analisi Margine Temporale (Minuti Guadagnati)
-        # Trova il bonk time per lo scenario SENZA CHO
-        liver_bonk_no_cho = df_no_cho[df_no_cho['Residuo Epatico'] <= 0]['Time (min)'].min()
-        muscle_bonk_no_cho = df_no_cho[df_no_cho['Residuo Muscolare'] <= 20]['Time (min)'].min()
-        
-        bonk_no_cho = min(filter(lambda x: not np.isnan(x), [liver_bonk_no_cho, muscle_bonk_no_cho]), default=duration)
-        
-        # Margine di Tempo Guadagnato
-        margin_minutes = max(0, bonk_time - bonk_no_cho) if bonk_time is not None else (duration - bonk_no_cho if bonk_no_cho < duration else 0)
-        
-        # 2. Tasso di Deplezione Rimanente (se non c'è bonk)
-        if bonk_time is None and duration > 0:
-            # Calcola il tasso medio di consumo del glicogeno endogeno (Muscolo + Fegato) nell'ultima ora
-            if duration >= 60:
-                last_hour_data = df_sim[df_sim['Time (min)'] >= duration - 60]
-            else:
-                last_hour_data = df_sim
-                
-            glycogen_used_last_hour = last_hour_data['Glicogeno Muscolare (g)'].mean() + last_hour_data['Glicogeno Epatico (g)'].mean()
+        with st.expander("Dettagli Modello Flusso CHO e Rischio GI"):
+            st.markdown(f"""
+            Questo grafico visualizza il **bilancio dinamico** tra ciò che ingerisci e ciò che il tuo corpo riesce ad ossidare (bruciare), indicando il rischio di *Distress Gastrointestinale (GI)*.
             
-            if glycogen_used_last_hour > 0:
-                minutes_remaining = (stats['final_glycogen'] / (glycogen_used_last_hour / 60))
-            else:
-                minutes_remaining = np.inf
-        else:
-            minutes_remaining = 0
+            **Linee Cumulative (Asse Destro):**
+            * **Linea Blu (Intake):** Apporto totale di CHO (a gradini, riflette le assunzioni discrete).
+            * **Linea Verde (Ossidazione):** CHO totale bruciato (curva smussata, limitata dalla cinetica di assorbimento).
             
-        # 3. Efficienza della Strategia (Ingerito vs Accumulato)
-        total_ingested = df_sim['Intake Cumulativo (g)'].max()
+            **Area di Rischio (Asse Sinistro):**
+            * L'area sottesa è l'**Accumulo Intestinale (Gut Load)**: $\\text{{Intake}} - \\text{{Ossidazione}}$.
+            * **τ Cinetica (Tempo di Smussamento):** {tau_absorption_input:.1f} min. Determina quanto velocemente la curva di Ossidazione (Verde) risponde all'Ingestione (Blu).
+            * **Soglia di Rischio GI:** {risk_threshold_input} g (Linea Rossa Tratteggiata). Superarla indica un alto rischio di sintomi GI.
+            """)
         
-        # L'accumulo massimo è Gut Load max. L'ossidazione totale è total_exo_used
-        total_accumulated_at_max = df_sim['Gut Load'].max()
+        RISK_THRESHOLD = risk_threshold_input
         
-        if total_ingested > 0:
-            accumulated_pct = (total_accumulated_at_max / total_ingested) * 100
-        else:
-            accumulated_pct = 0
-            
-        c_diag1, c_diag2, c_diag3 = st.columns(3)
+        df_sim['Rischio'] = np.where(df_sim['Gut Load'] >= RISK_THRESHOLD, 'Alto Rischio', 'Basso Rischio')
         
-        # Metrica 1: Tempo Guadagnato (Focus sulla performance)
-        c_diag1.metric(
-            "Tempo Guadagnato vs. Digiuno",
-            f"{int(margin_minutes)} min",
-            help="Minuti extra di autonomia ottenuti grazie alla strategia di integrazione rispetto all'opzione senza CHO."
+        max_gut_load = df_sim['Gut Load'].max()
+        max_gut_load_time = df_sim[df_sim['Gut Load'] == max_gut_load]['Time (min)'].iloc[0] if max_gut_load > 0 else 0
+        max_df = pd.DataFrame([{'Time (min)': max_gut_load_time, 'Gut Load': max_gut_load}])
+
+        gut_area = alt.Chart(df_sim).mark_area(opacity=0.8, color='#8D6E63').encode(
+            x=alt.X('Time (min)'), 
+            y=alt.Y('Gut Load', title='Accumulo CHO (g)', axis=alt.Axis(titleColor='#8D6E63')),
+            tooltip=['Time (min)', 'Gut Load', 'Rischio']
         )
         
-        # Metrica 2: Rischio GI Effettivo
-        c_diag2.metric(
-            "Accumulo GI Massimo",
-            f"{max_gut_load:.1f} g",
-            delta=f"Rischio: {total_accumulated_at_max > RISK_THRESHOLD}",
-            delta_color="inverse" if total_accumulated_at_max > RISK_THRESHOLD else "normal",
-            help=f"Massimo carico non assorbito nell'intestino. La soglia di allerta è {RISK_THRESHOLD} g."
+        risk_line = alt.Chart(pd.DataFrame({'y': [RISK_THRESHOLD]})).mark_rule(color='#F44336', strokeDash=[4,4], size=2).encode(
+            y=alt.Y('y', axis=None)
+        )
+        
+        max_point = alt.Chart(max_df).mark_circle(size=80, color='black').encode(
+            x=alt.X('Time (min)'), 
+            y=alt.Y('Gut Load'),
+            tooltip=[alt.Tooltip('Time (min)', title='Max Time'), alt.Tooltip('Gut Load', title='Max Accumulo')]
+        )
+        
+        gut_layer_base = alt.layer(gut_area, risk_line, max_point)
+
+        df_cumulative = df_sim.melt('Time (min)', value_vars=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
+                                   var_name='Flusso', value_name='Grammi')
+
+        intake_oxidation_lines = alt.Chart(df_cumulative).mark_line(strokeWidth=3.5).encode(
+            x=alt.X('Time (min)'), 
+            y=alt.Y('Grammi', title='G Ingeriti/Ossidati (g)', axis=alt.Axis(titleColor='#1976D2')),
+            color=alt.Color('Flusso', 
+                            scale=alt.Scale(domain=['Intake Cumulativo (g)', 'Ossidazione Cumulativa (g)'],
+                                            range=['#1976D2', '#4CAF50'])
+                           ),
+            strokeDash=alt.condition(alt.datum.Flusso == 'Ossidazione Cumulativa (g)', alt.value([5, 5]), alt.value([0])),
+            tooltip=['Time (min)', 'Flusso', 'Grammi']
         )
 
-        # Metrica 3: Margine di Esaurimento
-        if minutes_remaining > 60:
-             c_diag3.metric(
-                "Margine di Esaurimento",
-                "Ottimale",
-                help="Riserve sufficienti per diverse ore al ritmo attuale dopo la fine della simulazione."
-            )
-        elif minutes_remaining > 0:
-            c_diag3.metric(
-                "Margine di Esaurimento",
-                f"{int(minutes_remaining)} min",
-                help="Minuti stimati di autonomia rimanente se la prova fosse continuata al tasso di consumo dell'ultima ora."
-            )
-        else:
-             c_diag3.metric(
-                "Margine di Esaurimento",
-                "Non Applicabile / Esaurito",
-                help="La prova si è conclusa con Bonk o è stata troppo breve per stimare il margine."
-            )
+        cumulative_layer = intake_oxidation_lines.encode(
+            y=alt.Y('Grammi', 
+                    axis=alt.Axis(title='G Ingeriti/Ossidati (g)', titleColor='#1976D2', orient='right'), 
+                    scale=alt.Scale(domain=[0, df_sim['Intake Cumulativo (g)'].max() * 1.1])
+                    )
+        )
+        
+        final_gut_chart = alt.layer(
+            gut_layer_base,
+            cumulative_layer
+        ).resolve_scale(
+            y='independent'
+        ).properties(
+            title="Accumulo Intestinale vs Flusso CHO (Doppio Asse Y)"
+        )
+
+
+        st.altair_chart(final_gut_chart, use_container_width=True)
+        
+        st.caption("Ossidazione Lipidica (Tasso Orario)")
+        st.line_chart(df_sim.set_index("Time (min)")["Ossidazione Lipidica (g)"], color="#FFA500")
         
         st.markdown("---")
         
