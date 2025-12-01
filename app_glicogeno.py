@@ -164,8 +164,26 @@ with tab2:
     user_max_hr = st.session_state.get('max_hr_input', 185)
     
     st.subheader("🗓️ Diario di Avvicinamento (Countdown)")
+    
+    # --- NUOVO EXPANDER CON SPIEGAZIONE SCIENTIFICA ---
+    with st.expander("🧬 Come funziona il Modello di Risintesi? (Dettagli Scientifici)"):
+        st.markdown("""
+        Il simulatore utilizza un modello fisiologico non-lineare basato sulla letteratura sportiva recente (Burke et al., 2017; Jentjens & Jeukendrup, 2003).
+        Ecco le logiche applicate al tuo diario:
+
+        1.  **Tetto Fisiologico (Rate Limiting):** Non puoi stoccare carboidrati all'infinito in un solo giorno. Il muscolo ha un limite di sintesi di circa **10-12 g/kg/die**. Qualsiasi eccesso oltre questa soglia viene ossidato o convertito in lipidi, non in glicogeno.
+        2.  **Legge della Saturazione (Inibizione da Prodotto):** Più il tuo serbatoio si avvicina al 100%, più lenta diventa la risintesi. Gli ultimi grammi (il "topping off") sono i più difficili da ottenere perché l'enzima *glicogeno-sintasi* viene inibito dall'accumulo stesso di glicogeno.
+        3.  **Tassa Metabolica (Costo Basale):** Prima di riempire i muscoli, il corpo deve "pagare" le spese fisse:
+            * **Fegato:** ~4g/h per mantenere la glicemia stabile per il cervello.
+            * **NEAT:** Consumo per attività non sportiva.
+            * *Risultato:* Se mangi poco, copri a malapena le spese vive e non ricarichi i muscoli.
+        4.  **Finestra Anabolica & Sonno:** * L'allenamento svuota le riserve ma aumenta la sensibilità insulinica (traslocazione GLUT4), accelerando la ricarica successiva.
+            * Un sonno insufficiente (<6h) riduce questa sensibilità, penalizzando l'efficienza di stoccaggio del **~15-20%**.
+        """)
+        
     st.markdown("""
     Pianifica il tapering. Definisci il tuo stato iniziale e compila la settimana.
+    Il sistema calcolerà l'accumulo progressivo rispettando i vincoli fisiologici sopra descritti.
     """)
     
     # --- FIX SESSION STATE ---
@@ -188,12 +206,10 @@ with tab2:
         ]
 
     # --- NUOVO INPUT: STATO INIZIALE ---
-    # Usiamo la nuova Enum GlycogenState (assicurati di aver aggiornato data_models.py)
     from data_models import GlycogenState
     
     st.markdown("#### Condizione di Partenza (-7 Giorni)")
     gly_states = list(GlycogenState)
-    # Default su 'Normal' (Indice 2)
     sel_state = st.selectbox(
         "Livello di riempimento iniziale:", 
         gly_states, 
@@ -272,7 +288,6 @@ with tab2:
         st.warning("⚠️ Carboidrati giorni -2/-1 a zero. Carico assente.")
     
     if st.button("🚀 Simula Stato Glicogeno (Race Ready)", type="primary"):
-        # Passiamo il nuovo parametro sel_state alla funzione
         df_trend, final_tank = logic.calculate_tapering_trajectory(subj_base, input_result_data, start_state=sel_state)
         
         st.session_state['tank_data'] = final_tank
@@ -411,4 +426,5 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
 
