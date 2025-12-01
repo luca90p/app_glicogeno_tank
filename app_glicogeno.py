@@ -470,7 +470,7 @@ def simulate_metabolism(
             min_endo = total_cho_demand * 0.2 
             if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
             fat_burned_per_min = lab_fat_rate 
-            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + fat_هَاburn_per_min) > 0 else 0
+            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + lab_fat_rate) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
         
         else:
@@ -547,9 +547,7 @@ def simulate_metabolism(
             "Time (min)": t,
             "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
             "Glicogeno Epatico (g)": from_liver * 60,
-            # Correzione: Uso la quantità EFFETTIVA prelevata (exo_oxidation_g_h)
             "Carboidrati Esogeni (g)": exo_oxidation_g_h, 
-            # Calcolo corretto dell'Ossidazione Lipidica (g/h)
             "Ossidazione Lipidica (g)": lab_fat_rate * 60 if is_lab_data else ((current_kcal_demand * (1.0 - cho_ratio)) / 9.0) * 60,
             
             # Campi Percentuali per Tooltip
@@ -618,9 +616,9 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     """)
 # --- FINE NOTE TECNICHE REINTRODOTTE ---
 
-tab1, tab2 = st.tabs(["Analisi Riserve (Tank)", "Simulazione Metabolica (Burn)"])
+tab1, tab2, tab3 = st.tabs(["1. Profilo Base & Capacità", "2. Stato Pre-Evento (Riempimento)", "3. Simulazione & Strategia"])
 
-# --- TAB 1: CALCOLO SERBATOIO ---
+# --- TAB 1: PROFILO BASE & CAPACITÀ ---
 with tab1:
     col_in, col_res = st.columns([1, 2])
     
@@ -706,24 +704,76 @@ with tab1:
         
         st.markdown("---")
         
-        # Inizializza i dizionari per la selezione
-        fatigue_map = {f.label: f for f in FatigueState}
-        sleep_map = {s.label: s for s in SleepQuality}
+        # Le variabili di Sesso, Concentrazione, Sport, Creatina, Ciclo Mestruale sono ora definite.
+        # Creiamo la struttura Subject PARZIALE per calcolare il Tank Max.
         
         # Variabili necessarie per il calcolo finale (inizializzate)
         combined_filling = 1.0 
-        diet_factor = 1.0
-        avg_cho_gk = 5.0
-        steps_m1, min_act_m1, steps_m2, min_act_m2 = 0, 0, 0, 0 
+        
+        # Creazione Struttura Subject e Calcolo finale del Tank (PARZIALE)
+        vo2_abs = (vo2_input * weight) / 1000
+        
+        subject = Subject(
+            weight_kg=weight, 
+            height_cm=height,
+            body_fat_pct=bf, sex=s_sex, 
+            glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
+            liver_glycogen_g=100.0, # Valore di riposo per calcolo max
+            filling_factor=combined_filling, 
+            uses_creatine=use_creatine,
+            menstrual_phase=s_menstrual,
+            glucose_mg_dl=None,
+            vo2max_absolute_l_min=vo2_abs,
+            muscle_mass_kg=muscle_mass_input 
+        )
+        
+        tank_data = calculate_tank(subject)
+        # Salviamo la struttura base e i dati del tank per il prossimo tab
+        st.session_state['base_subject_struct'] = subject
+        st.session_state['base_tank_data'] = tank_data 
 
-        # Variabili CHO Inizializzate per prevenire NameError
-        cho_g1 = weight * DietType.NORMAL.ref_value
-        cho_g2 = weight * DietType.NORMAL.ref_value
+    with col_res:
+        st.subheader("Riepilogo Capacità Massima (Tank Max)")
+        
+        max_capacity_g = tank_data['max_capacity_g']
+        
+        st.write(f"**Capacità di Stoccaggio Teorica:** {int(max_capacity_g)} g")
+        st.progress(100)
+        
+        c1, c2 = st.columns(2)
+        c1.metric("Massa Muscolare Attiva", f"{tank_data['active_muscle_kg']:.1f} kg",
+                  help="Massa muscolare che contribuisce all'attività fisica.")
+        c2.metric("Energia Max Disponibile (CHO)", f"{int(max_capacity_g * 4.1)} kcal",
+                  help="Calcolato assumendo pieno riempimento (fattore 1.25) e glicogeno epatico standard.")
+
+        st.markdown("---")
+        st.caption(f"Concentrazione muscolare base: **{calculated_conc:.1f} g/kg**")
+        st.caption(f"Fonte Massa Muscolare: {tank_data['muscle_source_note']}")
+
+# --- TAB 2: STATO PRE-EVENTO (RIEMPIMENTO) ---
+with tab2:
+    if 'base_tank_data' not in st.session_state:
+        st.warning("Completare prima il Tab '1. Profilo Base & Capacità'.")
+        st.stop()
+        
+    weight = st.session_state['base_subject_struct'].weight_kg
+    
+    # Inizializza i dizionari per la selezione
+    fatigue_map = {f.label: f for f in FatigueState}
+    sleep_map = {s.label: s for s in SleepQuality}
+
+    # Variabili CHO Inizializzate per prevenire NameError
+    cho_g1 = weight * DietType.NORMAL.ref_value
+    cho_g2 = weight * DietType.NORMAL.ref_value
+    
+    col_in_2, col_res_2 = st.columns([1, 2])
+    
+    with col_in_2:
         
         # =========================================================================
-        # SEZIONE 4: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
+        # SEZIONE 3: STATO NUTRIZIONALE (Fattore Dieta) - ALTA IMPORTANZA
         # =========================================================================
-        st.subheader("3. Stato Nutrizionale (Introito CHO 48h)")
+        st.subheader("1. Stato Nutrizionale (Introito CHO 48h)")
         st.info("La dieta degli ultimi 2 giorni ha l'influenza maggiore sul tuo metabolismo in gara (Rothschild et al., 2022).")
         
         diet_method = st.radio(
@@ -743,35 +793,29 @@ with tab1:
             
             selected_diet_label = st.selectbox("Introito Glucidico (48h prec.)", list(diet_options_map.keys()), index=1, key='diet_type_select')
             
-            # Recupera l'enum corretto dal label completo
             s_diet = DietType.NORMAL
             for d in DietType:
                 if selected_diet_label.startswith(d.label):
                     s_diet = d
                     break
             
-            # Ora calcoliamo i CHO fittizi e li assegnamo a cho_g1/g2
             cho_g1 = weight * s_diet.ref_value
             cho_g2 = weight * s_diet.ref_value 
             
-            # I fattori di recupero sono gestiti più avanti (Punto 5)
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
             
-            # Calcoliamo il diet_factor in base ai CHO fittizi (per la visualizzazione)
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_g1,
                 cho_day_minus_2_g=cho_g2,
-                s_fatigue=temp_fatigue, # Neutro
-                s_sleep=temp_sleep,     # Neutro
-                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
+                s_fatigue=temp_fatigue, 
+                s_sleep=temp_sleep,     
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
             )
             
             st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
-            s_fatigue = FatigueState.RESTED 
-            s_sleep = SleepQuality.GOOD     
-        
+            
         # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
             st.markdown("#### Input Glicogeno Totale (g/die)")
@@ -789,7 +833,6 @@ with tab1:
                 help="Apporto totale di CHO del giorno precedente."
             )
             
-            # Assegna i valori reali agli output
             cho_g1 = cho_day_minus_1_g
             cho_g2 = cho_day_minus_2_g
 
@@ -806,27 +849,24 @@ with tab1:
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
-                s_fatigue=temp_fatigue, # Neutro
-                s_sleep=temp_sleep,     # Neutro
-                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
+                s_fatigue=temp_fatigue, 
+                s_sleep=temp_sleep,     
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
             )
-            s_fatigue = FatigueState.RESTED 
-            s_sleep = SleepQuality.GOOD     
-            
             st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         st.markdown("---")
         
         # =========================================================================
-        # SEZIONE 5: FATTORI DI RECUPERO (FATICA E SONNO) - ALTA IMPORTANZA
+        # SEZIONE 4: FATTORI DI RECUPERO (FATICA E SONNO) - ALTA IMPORTANZA
         # =========================================================================
-        st.subheader("4. Condizione di Recupero (Fattori di Sottrazione)")
+        st.subheader("2. Condizione di Recupero (Fattori di Sottrazione)")
         st.warning("Il sesso e la durata dell'esercizio sono i maggiori fattori che influenzano la scelta dei substrati in gara (Rothschild et al., 2022).")
         
-        # Selezione qualitativa per default
-        s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         default_sleep_label = "Sufficiente (6-7h)"
         default_sleep_index = list(sleep_map.keys()).index(default_sleep_label)
+        
+        s_fatigue = fatigue_map[st.selectbox("Carico di Lavoro (24h prec.)", list(fatigue_map.keys()), index=0, key='fatigue_final')]
         s_sleep = sleep_map[st.selectbox("Qualità del Sonno (24h prec.)", list(sleep_map.keys()), index=default_sleep_index, key='sleep_final')] 
         
         
@@ -846,8 +886,6 @@ with tab1:
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
         
-        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
-        # Visto che cho_g1/g2 sono definiti in entrambi i rami, possiamo chiamare la funzione qui:
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -860,9 +898,9 @@ with tab1:
         st.markdown("---")
         
         # =========================================================================
-        # SEZIONE 6: PARAMETRI EPATICI/BIOMARKER (Acuti)
+        # SEZIONE 5: PARAMETRI EPATICI/BIOMARKER (Acuti)
         # =========================================================================
-        st.subheader("5. Stato Metabolico Acuto (Fegato/Glicemia)")
+        st.subheader("3. Stato Metabolico Acuto (Fegato/Glicemia)")
         
         has_glucose = st.checkbox("Dispongo di misurazione Glicemia", help="Utile per valutare lo stato acuto del fegato.")
         
@@ -881,56 +919,41 @@ with tab1:
         if is_fasted:
             liver_val = 40.0 
         
-        # Creazione Struttura Subject e Calcolo finale del Tank
-        vo2_abs = (vo2_input * weight) / 1000
+        # --- RICALCOLO FINALE E CREAZIONE OGGETTO SUBJECT ---
         
-        subject = Subject(
-            weight_kg=weight, 
-            height_cm=height,
-            body_fat_pct=bf, sex=s_sex, 
-            glycogen_conc_g_kg=calculated_conc, sport=s_sport, 
-            liver_glycogen_g=liver_val,
-            filling_factor=combined_filling, # Usa il fattore che include la deplezione oggettiva/qualitativa
-            uses_creatine=use_creatine,
-            menstrual_phase=s_menstrual,
-            glucose_mg_dl=glucose_val,
-            vo2max_absolute_l_min=vo2_abs,
-            muscle_mass_kg=muscle_mass_input # Passa il nuovo input qui
-        )
+        base_subject = st.session_state['base_subject_struct']
+        
+        subject = base_subject
+        subject.liver_glycogen_g = liver_val
+        subject.filling_factor = combined_filling
+        subject.glucose_mg_dl = glucose_val
         
         tank_data = calculate_tank(subject)
-        st.session_state['tank_data'] = tank_data # Salvo tank_data completo
+        st.session_state['tank_data'] = tank_data 
         st.session_state['tank_g'] = tank_data['actual_available_g']
         st.session_state['subject_struct'] = subject 
-
-    with col_res:
-        st.subheader("Bilancio Riserve Energetiche")
+    
+    # --- COLONNA RISULTATI TAB 2 ---
+    with col_res_2:
+        
+        st.subheader("Stato del Serbatoio Pre-Evento")
         
         fill_pct = tank_data['fill_pct']
         st.write(f"**Livello di Riempimento Attuale:** {fill_pct:.1f}%")
         st.progress(int(fill_pct))
         
         if fill_pct < 60:
-            st.warning("Attenzione: Riserve di glicogeno ridotte (<60%).")
+            st.error("Attenzione: Riserve di glicogeno ridotte (<60%). Rischio Bonk elevato.")
         elif fill_pct < 90:
-            st.info("Stato nutrizionale nella norma.")
+            st.warning("Stato nutrizionale nella norma, ma non ottimizzato per la performance massima.")
         else:
             st.success("Condizione ottimale (Tapering/Carico).")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Glicogeno Disponibile", f"{int(tank_data['actual_available_g'])} g", 
-                  help="Quantità totale stimata disponibile per l'attività.")
-        c2.metric("Capacità di Stoccaggio", f"{int(tank_data['max_capacity_g'])} g",
-                  delta=f"{int(tank_data['actual_available_g'] - tank_data['max_capacity_g'])} g",
-                  help="Capacità massima teorica in condizioni di Supercompensazione.")
-        c3.metric("Energia Disponibile (CHO)", f"{int(tank_data['actual_available_g'] * 4.1)} kcal")
-        
-        st.caption("Analisi comparativa: Capacità Teorica vs Disponibilità Reale")
-        chart_df = pd.DataFrame({
-            "Stato": ["Capacità Teorica (Carico)", "Disponibilità Reale"],
-            "Glicogeno (g)": [tank_data['max_capacity_g'], tank_data['actual_available_g']]
-        })
-        st.bar_chart(chart_df, x="Stato", y="Glicogeno (g)", color="Stato")
+        c1, c2 = st.columns(2)
+        c1.metric("Glicogeno Muscolare", f"{int(tank_data['muscle_glycogen_g'])} g", 
+                  help="Riserva attuale nel muscolo attivo.")
+        c2.metric("Glicogeno Epatico", f"{int(tank_data['liver_glycogen_g'])} g",
+                  help="Riserva attuale nel fegato.")
         
         st.markdown("---")
         
@@ -940,8 +963,6 @@ with tab1:
         if diet_method == "1. Seleziona Tipo di Dieta (Veloce)": 
             temp_diet_map = {d.label: d for d in DietType}
             s_diet_label = st.session_state.get('diet_type_select', list(temp_diet_map.keys())[1])
-            
-            # Recupera l'enum corretto (qui si usano i cho fittizi)
             s_diet = DietType.NORMAL
             for d in DietType:
                 if selected_diet_label.startswith(d.label):
@@ -953,19 +974,17 @@ with tab1:
         elif diet_method == "2. Inserisci CHO Totale (g) dei 2 giorni precedenti": factors_text.append(f"Fattore dieta calcolato: {diet_factor:.2f} (Media $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         if combined_filling < 1.0: factors_text.append(f"Riduzione da fattori nutrizionali/recupero (Disponibilità: {int(combined_filling*100)}%)")
-        if use_creatine: factors_text.append("Bonus volume plasmatico/creatina (+10% Cap)")
-        if s_menstrual == MenstrualPhase.LUTEAL: factors_text.append("Fase Luteale (-5% filling)")
+        
         if tank_data.get('liver_note'): factors_text.append(f"**{tank_data['liver_note']}**")
         
-        factors_text.append(f"Fonte Massa Muscolare: {tank_data['muscle_source_note']}")
-
         if factors_text:
-            st.caption(f"**Fattori correttivi applicati:** {'; '.join(factors_text)}")
+            st.caption(f"**Fattori attuali applicati:** {'; '.join(factors_text)}")
 
-# --- TAB 2: SIMULAZIONE CONSUMO ---
-with tab2:
+# --- TAB 3: SIMULAZIONE & STRATEGIA ---
+with tab3:
     if 'tank_g' not in st.session_state:
-        st.warning("Calcolare prima le riserve nel Tab 'Analisi Riserve'.")
+        st.warning("Completare prima i Tab '1. Profilo Base & Capacità' e '2. Stato Pre-Evento (Riempimento)'.")
+        st.stop()
     else:
         # Recupero i dati completi
         tank_data = st.session_state['tank_data']
