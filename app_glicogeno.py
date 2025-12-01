@@ -470,7 +470,7 @@ def simulate_metabolism(
             min_endo = total_cho_demand * 0.2 
             if glycogen_burned_per_min < min_endo: glycogen_burned_per_min = min_endo
             fat_burned_per_min = lab_fat_rate 
-            cho_ratio = total_cho_demand / (total_cho_demand + fat_burned_per_min) if (total_cho_demand + lab_fat_rate) > 0 else 0
+            cho_ratio = total_cho_demand / (total_cho_demand + lab_fat_rate) if (total_cho_demand + lab_fat_rate) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
         
         else:
@@ -608,9 +608,9 @@ with st.expander("📘 Note Tecniche & Fonti Scientifiche"):
     
     ---
     
-    **2. Sviluppi Recenti & Personalizzazione (Rothschild et al., 2022)**
+    **2. Sviluppi Recenti & Personalizzazione**
     
-    * **Importanza del Carico Dieta:** Studi di modellazione (Rothschild et al., 2022) indicano che la **dieta CHO/Fat giornaliera** ha un'influenza maggiore sul mix energetico (RER) rispetto all'assunzione CHO *durante* l'esercizio.
+    * **Peso dei Fattori (RER):** Studi di modellazione (Rothschild et al., 2022) indicano che **Sesso** e **Durata** sono i maggiori determinanti del mix energetico in gara. La **Dieta CHO/Fat giornaliera** ha un'influenza sul mix energetico *maggiore* rispetto all'assunzione CHO *durante* l'esercizio.
     * **Variabilità e Rischio GI:** L'alta variabilità nell'ossidazione dei CHO esogeni ($\text{0.5-1.5 g/min}$) e l'accumulo conseguente sono i predittori principali del distress GI (Podlogar et al., 2025).
     * **Mix di Carboidrati:** L'uso di miscele Glucosio:Fruttosio (es. 2:1 o 1:0.8) sfrutta trasportatori multipli (SGLT1 e GLUT5), aumentando il limite di ossidazione fino a $1.5-1.7 \text{ g/min}$ (Jeukendrup, 2004).
     """)
@@ -693,6 +693,38 @@ with tab1:
         s_sport = sport_map[st.selectbox("Disciplina Sportiva", list(sport_map.keys()), index=default_sport_index)]
         
         # =========================================================================
+        # SEZIONE 2c: DATI DI SOGLIA SPECIFICI PER DISCIPLINA (Nuova posizione)
+        # =========================================================================
+        st.markdown("#### Dati di Soglia per la Simulazione")
+        
+        # Inizializzazione delle variabili di soglia per l'uso nel Tab 3
+        ftp_watts_input = 265 # DEFAULT
+        thr_hr_input = 170 # DEFAULT
+        max_hr_input = 185 # DEFAULT
+
+        with st.expander("Inserisci le Tue Soglie di Performance"):
+            if s_sport == SportType.CYCLING:
+                ftp_watts_input = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5)
+                st.caption(f"Il tuo VO2max di {vo2_input:.0f} ml/kg/min supporta questa soglia.")
+            
+            elif s_sport == SportType.RUNNING:
+                c_thr, c_max = st.columns(2)
+                thr_hr_input = c_thr.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
+                max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
+                st.caption("Questi dati sono usati per calcolare l'Intensity Factor (IF).")
+                
+            else: # TRIATHLON, SWIMMING, XC_SKIING (usano HR Max/Avg per proxy)
+                c_thr, c_max = st.columns(2)
+                max_hr_input = c_max.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
+                st.caption("Per sport multidisciplinari, l'IF si basa sulla Frequenza Cardiaca Massima.")
+        
+        # Salvataggio delle soglie nello stato di sessione per il Tab 3
+        st.session_state['ftp_watts_input'] = ftp_watts_input
+        st.session_state['thr_hr_input'] = thr_hr_input
+        st.session_state['max_hr_input'] = max_hr_input
+
+
+        # =========================================================================
         # SEZIONE 3: FATTORI AVANZATI DI CAPACITÀ
         # =========================================================================
         with st.expander("Fattori Avanzati di Capacità (Aumento potenziale Max)"):
@@ -703,9 +735,6 @@ with tab1:
                 s_menstrual = menstrual_map[st.selectbox("Fase Ciclo Mestruale", list(menstrual_map.keys()), index=0)]
         
         st.markdown("---")
-        
-        # Le variabili di Sesso, Concentrazione, Sport, Creatina, Ciclo Mestruale sono ora definite.
-        # Creiamo la struttura Subject PARZIALE per calcolare il Tank Max.
         
         # Variabili necessarie per il calcolo finale (inizializzate)
         combined_filling = 1.0 
@@ -762,7 +791,7 @@ with tab2:
     fatigue_map = {f.label: f for f in FatigueState}
     sleep_map = {s.label: s for s in SleepQuality}
 
-    # Variabili CHO Inizializzate per prevenire NameError
+    # Variabili CHO Inizializzate per prevenire NameError (assegnate alla media neutra)
     cho_g1 = weight * DietType.NORMAL.ref_value
     cho_g2 = weight * DietType.NORMAL.ref_value
     
@@ -799,23 +828,28 @@ with tab2:
                     s_diet = d
                     break
             
+            # Ora calcoliamo i CHO fittizi e li assegnamo a cho_g1/g2
             cho_g1 = weight * s_diet.ref_value
             cho_g2 = weight * s_diet.ref_value 
             
+            # I fattori di recupero sono gestiti più avanti (Punto 5)
             temp_fatigue = FatigueState.RESTED
             temp_sleep = SleepQuality.GOOD
             
+            # Calcoliamo il diet_factor in base ai CHO fittizi (per la visualizzazione)
             _, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_g1,
                 cho_day_minus_2_g=cho_g2,
-                s_fatigue=temp_fatigue, 
-                s_sleep=temp_sleep,     
-                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
+                s_fatigue=temp_fatigue, # Neutro
+                s_sleep=temp_sleep,     # Neutro
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
             )
             
             st.caption(f"Fattore di Riempimento base da Dieta: **{s_diet.factor:.2f}**")
-            
+            s_fatigue = FatigueState.RESTED 
+            s_sleep = SleepQuality.GOOD     
+        
         # --- METODO 2: INPUT DI CHO (g totali) ---
         else:
             st.markdown("#### Input Glicogeno Totale (g/die)")
@@ -833,6 +867,7 @@ with tab2:
                 help="Apporto totale di CHO del giorno precedente."
             )
             
+            # Assegna i valori reali agli output
             cho_g1 = cho_day_minus_1_g
             cho_g2 = cho_day_minus_2_g
 
@@ -849,10 +884,13 @@ with tab2:
                 weight_kg=weight,
                 cho_day_minus_1_g=cho_day_minus_1_g,
                 cho_day_minus_2_g=cho_day_minus_2_g,
-                s_fatigue=temp_fatigue, 
-                s_sleep=temp_sleep,     
-                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 
+                s_fatigue=temp_fatigue, # Neutro
+                s_sleep=temp_sleep,     # Neutro
+                steps_m1=0, min_act_m1=0, steps_m2=0, min_act_m2=0 # Neutro
             )
+            s_fatigue = FatigueState.RESTED 
+            s_sleep = SleepQuality.GOOD     
+            
             st.caption(f"Fattore di Riempimento Base (calcolato): **{diet_factor:.2f}** (Media pesata $\sim{avg_cho_gk:.1f} \text{{ g/kg/die}}$)")
 
         st.markdown("---")
@@ -886,6 +924,8 @@ with tab2:
 
         # --- RICONTROLLO FATTORE DI RIEMPIMENTO CON EVENTUALE ATTIVITÀ ---
         
+        # Calcolo finale del combined_filling, che ora include la deplezione oggettiva
+        # Visto che cho_g1/g2 sono definiti in entrambi i rami, possiamo chiamare la funzione qui:
         combined_filling, diet_factor, avg_cho_gk, _, _ = calculate_filling_factor_from_diet(
             weight_kg=weight,
             cho_day_minus_1_g=cho_g1,
@@ -921,8 +961,10 @@ with tab2:
         
         # --- RICALCOLO FINALE E CREAZIONE OGGETTO SUBJECT ---
         
+        # Recupera la struttura base creata nel Tab 1
         base_subject = st.session_state['base_subject_struct']
         
+        # Aggiorna solo i campi di stato dinamici
         subject = base_subject
         subject.liver_glycogen_g = liver_val
         subject.filling_factor = combined_filling
@@ -991,6 +1033,12 @@ with tab3:
         start_tank = tank_data['actual_available_g']
         subj = st.session_state.get('subject_struct', None)
         
+        # Recupero i dati di soglia dal Tab 1
+        ftp_watts = st.session_state.get('ftp_watts_input', 250)
+        thr_hr = st.session_state.get('thr_hr_input', 170)
+        max_hr = st.session_state.get('max_hr_input', 185)
+        
+        
         sport_mode = 'cycling'
         if subj.sport == SportType.RUNNING:
             sport_mode = 'running'
@@ -1008,9 +1056,9 @@ with tab3:
             st.subheader(f"Parametri Sforzo ({sport_mode.capitalize()})")
             
             if sport_mode == 'cycling':
-                ftp = st.number_input("Functional Threshold Power (FTP) [Watt]", 100, 600, 265, step=5) # DEFAULT: 265 W
+                # I DEFAULT ora vengono da Tab 1
                 avg_w = st.number_input("Potenza Media Prevista [Watt]", 50, 600, 200, step=5)
-                act_params['ftp_watts'] = ftp
+                act_params['ftp_watts'] = ftp_watts
                 act_params['avg_watts'] = avg_w
                 act_params['efficiency'] = st.slider("Efficienza Meccanica [%]", 16.0, 26.0, 22.0, 0.5)
                 duration = st.slider("Durata Attività (min)", 30, 420, 120, step=10)
@@ -1043,14 +1091,14 @@ with tab3:
                     st.info(f"Passo Richiesto: **{p_min}:{p_sec:02d} /km**")
 
                 act_params['speed_kmh'] = speed_kmh
-                c_hr1, c_hr2 = st.columns(2)
-                thr_hr = c_hr1.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, 1)
-                avg_hr = c_hr2.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
+                
+                # Le soglie vengono dal Tab 1
+                avg_hr = st.number_input("Frequenza Cardiaca Media", 80, 220, 150, 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['threshold_hr'] = thr_hr
                 
             else: 
-                max_hr = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 220, 185, 1)
+                # Le soglie vengono dal Tab 1
                 avg_hr = st.number_input("Frequenza Cardiaca Media Gara", 80, 220, 140, 1)
                 act_params['avg_hr'] = avg_hr
                 act_params['max_hr'] = max_hr
