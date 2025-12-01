@@ -15,7 +15,7 @@ st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("""
 Applicazione avanzata per la modellazione delle riserve di glicogeno. 
-Supporta **Atleti Ibridi** e profili metabolici personalizzati da test di laboratorio.
+Supporta **Atleti Ibridi**, profili metabolici personalizzati e **Simulazione Scenari**.
 """)
 
 if not utils.check_password():
@@ -104,17 +104,14 @@ with tab1:
             
         st.session_state.update({'ftp_watts_input': ftp_watts, 'thr_hr_input': thr_hr, 'max_hr_input': max_hr})
         
-        # --- NUOVA SEZIONE: PROFILO METABOLICO (SPOSTATA QUI) ---
+        # --- NUOVA SEZIONE: PROFILO METABOLICO ---
         st.markdown("---")
-        # --- SEZIONE PROFILO METABOLICO MULTIPOINT ---
-        st.markdown("---")
-        with st.expander("🧬 Profilo Metabolico Avanzato (Curva a 3 Punti)", expanded=False):
-            st.info("Inserisci i dati reali dal tuo test per 3 intensità chiave. Il simulatore interpolerà i consumi.")
-            active_lab = st.checkbox("Usa Curva Metabolica Reale", value=st.session_state.get('use_lab_data', False))
+        with st.expander("🧬 Profilo Metabolico (Test Laboratorio)", expanded=False):
+            st.info("Inserisci i dati dal test del gas (Metabolimetro) per personalizzare i consumi.")
+            active_lab = st.checkbox("Attiva Profilo Metabolico Personalizzato", value=st.session_state.get('use_lab_data', False))
             
             if active_lab:
-                # Recuperiamo i dati calcolati o usiamo default
-                # Punti suggeriti dall'analisi del file
+                st.caption("Range di consumo rilevati al Ritmo Gara previsto (es. zona FatMax o Tempo):")
                 
                 st.markdown("**1. Zona Z2 (Aerobica / FatMax)**")
                 c1, c2, c3 = st.columns(3)
@@ -134,7 +131,6 @@ with tab1:
                 z4_cho = c8.number_input("CHO (g/h)", 0, 600, 219, key='z4_cho')
                 z4_fat = c9.number_input("FAT (g/h)", 0, 200, 7, key='z4_fat')
                 
-                # Creazione Dizionario Curva
                 metabolic_curve = {
                     'z2': {'hr': z2_hr, 'cho': z2_cho, 'fat': z2_fat},
                     'z3': {'hr': z3_hr, 'cho': z3_cho, 'fat': z3_fat},
@@ -144,20 +140,18 @@ with tab1:
                 st.session_state['use_lab_data'] = True
                 st.session_state['metabolic_curve'] = metabolic_curve
                 
-                # Grafico anteprima curva
-                df_curve = pd.DataFrame([
-                    {'FC': z2_hr, 'Consumo': z2_cho, 'Tipo': 'CHO'},
-                    {'FC': z3_hr, 'Consumo': z3_cho, 'Tipo': 'CHO'},
-                    {'FC': z4_hr, 'Consumo': z4_cho, 'Tipo': 'CHO'},
-                    {'FC': z2_hr, 'Consumo': z2_fat, 'Tipo': 'FAT'},
-                    {'FC': z3_hr, 'Consumo': z3_fat, 'Tipo': 'FAT'},
-                    {'FC': z4_hr, 'Consumo': z4_fat, 'Tipo': 'FAT'}
+                # Preview Grafico Curva
+                curve_df = pd.DataFrame([
+                    {'Intensità': z2_hr, 'Consumo': z2_cho, 'Tipo': 'CHO'},
+                    {'Intensità': z3_hr, 'Consumo': z3_cho, 'Tipo': 'CHO'},
+                    {'Intensità': z4_hr, 'Consumo': z4_cho, 'Tipo': 'CHO'},
+                    {'Intensità': z2_hr, 'Consumo': z2_fat, 'Tipo': 'FAT'},
+                    {'Intensità': z3_hr, 'Consumo': z3_fat, 'Tipo': 'FAT'},
+                    {'Intensità': z4_hr, 'Consumo': z4_fat, 'Tipo': 'FAT'}
                 ])
-                c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
-                    x='FC', y='Consumo', color='Tipo'
-                ).properties(height=200, title="La tua Curva Metabolica")
+                c_chart = alt.Chart(curve_df).mark_line(point=True).encode(x='Intensità', y='Consumo', color='Tipo').properties(height=200)
                 st.altair_chart(c_chart, use_container_width=True)
-                
+
             else:
                 st.session_state['use_lab_data'] = False
                 st.session_state['metabolic_curve'] = None
@@ -217,7 +211,7 @@ with tab2:
     
     st.subheader("🗓️ Diario di Avvicinamento (Multidisciplinare)")
     
-    # --- NUOVO INPUT: STATO INIZIALE ---
+    # --- INPUT: STATO INIZIALE ---
     from data_models import GlycogenState
     st.markdown("#### Condizione di Partenza (-7 Giorni)")
     gly_states = list(GlycogenState)
@@ -335,11 +329,43 @@ with tab3:
     if 'tank_data' not in st.session_state:
         st.stop()
         
-    tank = st.session_state['tank_data']
+    tank_base = st.session_state['tank_data']
     subj = st.session_state['subject_struct']
-    start_total = tank['actual_available_g']
     
-    st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
+    # --- 🔴 NUOVA FUNZIONALITÀ: OVERRIDE/TEST MODE ---
+    st.markdown("### 🛠️ Modalità Test / Override")
+    enable_override = st.checkbox("Abilita Override Livello Iniziale (Bypassa Tab 2)", value=False)
+    
+    if enable_override:
+        # Calcoliamo il Max Teorico dal Tab 1
+        max_cap = tank_base['max_capacity_g']
+        st.warning(f"Modalità Test Attiva. Ignoro il calcolo del tapering. Max Capacità: {int(max_cap)}g")
+        
+        force_pct = st.slider("Forza Livello Riempimento Iniziale (%)", 0, 120, 100, 5)
+        
+        # Ricalcolo Tank Forzato
+        # Assumiamo che la % si applichi uniformemente a muscolo e fegato rispetto ai loro massimi teorici
+        max_muscle = max_cap - 100 # Approx (fegato standard ~100g)
+        max_liver = 100
+        
+        forced_muscle = max_muscle * (force_pct / 100.0)
+        forced_liver = max_liver * (force_pct / 100.0)
+        
+        # Creiamo un nuovo oggetto tank temporaneo per la simulazione
+        tank = tank_base.copy()
+        tank['muscle_glycogen_g'] = forced_muscle
+        tank['liver_glycogen_g'] = forced_liver
+        tank['actual_available_g'] = forced_muscle + forced_liver
+        tank['fill_pct'] = force_pct
+        
+        st.metric("Nuovo Start Glicogeno", f"{int(tank['actual_available_g'])} g")
+        
+    else:
+        # Uso i dati normali dal Tab 2
+        tank = tank_base
+        st.info(f"**Condizione di Partenza (da Tab 2):** {int(tank['actual_available_g'])}g di glicogeno disponibile.")
+    
+    # --- FINE OVERRIDE ---
     
     c_s1, c_s2, c_s3 = st.columns(3)
     
@@ -358,7 +384,6 @@ with tab3:
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
             
             if series:
-                # Conversione IF -> Valori Assoluti per la curva
                 if subj.sport == SportType.CYCLING:
                     intensity_series = [val * target_ftp for val in series]
                     st.success(f"File Bici: Convertito in Watt (Media ~{int(w_calc)} W)")
@@ -371,7 +396,7 @@ with tab3:
         # Input Manuale
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
-            params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} # Default eff, sovrascritto dopo
+            params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
             if intensity_series is None:
                 params['avg_hr'] = val 
         else:
@@ -384,7 +409,7 @@ with tab3:
         cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
         cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
-    # --- 3. MOTORE METABOLICO (TEORICO O REALE) ---
+    # --- 3. MOTORE METABOLICO ---
     with c_s3:
         st.markdown("### 3. Motore Metabolico")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
@@ -393,32 +418,23 @@ with tab3:
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
         
-        # SETUP MODELLO
         if use_lab_active and curve_data:
-            # --- CASO A: DATI LAB ---
-            st.success("✅ **Curva Reale Attiva**")
-            st.caption("Il consumo CHO/FAT sarà calcolato interpolando i dati del tuo test.")
-            
-            # Parametri fissi/nascosti quando si usa il Lab
-            crossover_val = 70 
+            st.success("✅ **Curva Metabolica Attiva**")
+            if intensity_series:
+                avg_int = sum(intensity_series)/len(intensity_series)
+                st.caption(f"Input Dinamico: {int(avg_int)} (Media)")
+            else:
+                st.caption(f"Input Costante: {val}")
             tau = 20
             risk_thresh = 30
-            
         else:
-            # --- CASO B: MODELLO TEORICO ---
             st.info("ℹ️ **Modello Teorico**")
             st.caption("Regola i parametri per stimare il profilo metabolico.")
             
-            # Slider Crossover Point (Determina la forma della curva RER)
-            crossover_val = st.slider(
-                "Crossover Point (% Soglia)", 
-                50, 90, 75, 
-                help="Intensità alla quale i CHO superano i Grassi. Un atleta 'Diesel' ha un valore più alto (es. 80%)."
-            )
+            crossover_val = st.slider("Crossover Point (% Soglia)", 50, 90, 75)
             
-            # Slider Efficienza (Solo Ciclismo)
             if subj.sport == SportType.CYCLING:
-                eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5, help="Conversione energia in watt.")
+                eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5)
                 params['efficiency'] = eff_mech
             
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
@@ -426,10 +442,10 @@ with tab3:
 
     # --- ESECUZIONE SIMULAZIONI ---
     
-    # 1. Scenario A: Strategia Integrata
+    # 1. Strategia Integrata
     df_sim, stats_sim = logic.simulate_metabolism(
         tank, duration, cho_h, cho_unit, 
-        crossover_val, # Passiamo il crossover scelto
+        crossover_val if not use_lab_active else 70, 
         tau, subj, params, 
         mix_type_input=mix_sel, 
         intensity_series=intensity_series,
@@ -438,10 +454,10 @@ with tab3:
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
-    # 2. Scenario B: Riferimento (Digiuno)
+    # 2. Riferimento (Digiuno)
     df_no, _ = logic.simulate_metabolism(
         tank, duration, 0, cho_unit, 
-        crossover_val, # Passiamo il crossover scelto
+        crossover_val if not use_lab_active else 70, 
         tau, subj, params, 
         mix_type_input=mix_sel, 
         intensity_series=intensity_series,
@@ -477,7 +493,6 @@ with tab3:
         if use_lab_active:
             st.metric("Fonte Dati", "Test Lab (Reale)")
         else:
-            # Mostra i parametri teorici usati
             st.metric("Modello Teorico", f"Crossover {crossover_val}%")
             
         st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
@@ -518,6 +533,3 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
-
-
-
