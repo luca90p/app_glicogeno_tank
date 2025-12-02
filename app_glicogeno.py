@@ -21,7 +21,30 @@ Supporta **Atleti Ibridi**, profili metabolici personalizzati e **Simulazione Sc
 if not utils.check_password():
     st.stop()
 
-# Inizializzazione Session State
+def create_risk_zone_chart(df_data, title, max_y):
+    zones_df = pd.DataFrame({
+        'Zone': ['Sicurezza', 'Attenzione', 'Critico'],
+        'Start': [max_y * 0.35, max_y * 0.15, 0],
+        'End':   [max_y * 1.10, max_y * 0.35, max_y * 0.15],
+        'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
+    })
+    
+    background = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
+        y=alt.Y('Start', title='Glicogeno Totale (g)', scale=alt.Scale(domain=[0, max_y])),
+        y2='End',
+        color=alt.Color('Color', scale=None, legend=None),
+        tooltip=['Zone']
+    )
+    
+    area = alt.Chart(df_data).mark_area(line=True, opacity=0.8).encode(
+        x=alt.X('Time (min)', title='Durata Esercizio (min)'),
+        y='Residuo Totale',
+        tooltip=['Time (min)', 'Residuo Totale', 'Scenario']
+    )
+    
+    return (background + area).properties(title=title, height=350)
+
+# Inizializzazione Session State per Dati Lab (se non esistono)
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
@@ -407,7 +430,6 @@ with tab3:
 
     # --- ESECUZIONE SIMULAZIONI ---
     
-    # 1. Strategia Integrata
     df_sim, stats_sim = logic.simulate_metabolism(
         tank, duration, cho_h, cho_unit, 
         crossover_val if not use_lab_active else 70, 
@@ -419,7 +441,6 @@ with tab3:
     df_sim['Scenario'] = 'Strategia Integrata'
     df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
     
-    # 2. Riferimento (Digiuno)
     df_no, _ = logic.simulate_metabolism(
         tank, duration, 0, cho_unit, 
         crossover_val if not use_lab_active else 70, 
@@ -431,38 +452,38 @@ with tab3:
     df_no['Scenario'] = 'Riferimento (Digiuno)'
     df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
-    # --- DASHBOARD RISULTATI ---
+    # --- METRICHE VISIBILI ---
     st.markdown("---")
+    st.subheader("Analisi Cinetica e Substrati")
+    
+    # RIGA 1: KPI Principali
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
+    c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
+    c3.metric("Ripartizione Substrati", f"{int(stats_sim['cho_pct'])}% CHO", f"{100-int(stats_sim['cho_pct'])}% FAT", delta_color="off")
+    c4.metric("Glicogeno Residuo", f"{int(stats_sim['final_glycogen'])} g", delta=f"{int(stats_sim['final_glycogen'] - start_total)} g")
+
+    # RIGA 2: Utilizzi
+    st.markdown("---")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Uso Glicogeno Muscolare", f"{int(stats_sim['total_muscle_used'])} g")
+    m2.metric("Uso Glicogeno Epatico", f"{int(stats_sim['total_liver_used'])} g")
+    m3.metric("Uso CHO Esogeno", f"{int(stats_sim['total_exo_used'])} g")
+
+    # --- DASHBOARD GRAFICI ---
+    st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
     
     # ROW 1: BILANCIO
-    r1_c1, r1_c2 = st.columns([2, 1])
-    with r1_c1:
-        st.markdown("#### Bilancio Energetico")
-        df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
-        order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
-        colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
-        
-        chart_stack = alt.Chart(df_melt).mark_area().encode(
-            x='Time (min)', y='g/h', 
-            color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
-            tooltip=['Time (min)', 'Fonte', 'g/h']
-        ).properties(height=350)
-        st.altair_chart(chart_stack, use_container_width=True)
-        
-    with r1_c2:
-        st.markdown("#### KPI")
-        fin_gly = stats_sim['final_glycogen']
-        delta = fin_gly - start_total
-        st.metric("Glicogeno Residuo", f"{int(fin_gly)} g", delta=f"{int(delta)} g")
-        
-        if use_lab_active:
-            st.metric("Fonte Dati", "Test Lab (Reale)")
-        else:
-            st.metric("Modello Teorico", f"Crossover {crossover_val}%")
-            
-        st.metric("Intensità (IF)", f"{stats_sim['intensity_factor']:.2f}")
-        st.metric("CHO Ossidati", f"{int(stats_sim['total_exo_used'] + stats_sim['total_muscle_used'] + stats_sim['total_liver_used'])} g")
-        st.metric("FAT Ossidati", f"{int(stats_sim['fat_total_g'])} g")
+    df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
+    order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
+    colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
+    
+    chart_stack = alt.Chart(df_melt).mark_area().encode(
+        x='Time (min)', y='g/h', 
+        color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
+        tooltip=['Time (min)', 'Fonte', 'g/h']
+    ).properties(height=350)
+    st.altair_chart(chart_stack, use_container_width=True)
 
     # ROW 2: Ossidazione Lipidica
     st.markdown("---")
@@ -479,19 +500,17 @@ with tab3:
     st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
     st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
     
-    # Preparazione Dati Stacked
     reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
-    reserve_colors = ['#E57373', '#B71C1C'] # Chiaro = Muscolo, Scuro = Fegato
+    reserve_colors = ['#E57373', '#B71C1C'] 
     
     df_reserve_sim = df_sim.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
     df_reserve_no = df_no.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
     
-    # Background Zone
     max_y = start_total * 1.05
     zones_df = pd.DataFrame({
         'Start': [max_y * 0.35, max_y * 0.15, 0],
         'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
-        'Color': ['#66BB6A', '#FFA726', '#EF5350'] # Verde, Giallo, Rosso
+        'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
     })
     
     def create_reserve_stacked_chart(df_data, title):
@@ -499,12 +518,11 @@ with tab3:
             y=alt.Y('Start', scale=alt.Scale(domain=[0, max_y]), axis=None),
             y2='End', color=alt.Color('Color', scale=None)
         )
-        
         area = alt.Chart(df_data).mark_area().encode(
             x='Time (min)', 
             y=alt.Y('Grammi', stack='zero', title='Residuo (g)'),
             color=alt.Color('Tipo', scale=alt.Scale(domain=reserve_fields, range=reserve_colors)),
-            order=alt.Order('Tipo', sort='ascending'), # Epatico sotto, Muscolare sopra
+            order=alt.Order('Tipo', sort='ascending'), 
             tooltip=['Time (min)', 'Tipo', 'Grammi']
         )
         return (bg + area).properties(title=title, height=300)
