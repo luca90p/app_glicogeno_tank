@@ -240,7 +240,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             cho_ratio = total_cho_demand / (total_cho_demand + lab_fat_rate) if (total_cho_demand + lab_fat_rate) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
         else:
-            standard_crossover = 70.0 
+            standard_crossover = 75.0 
             crossover_val = crossover_pct if crossover_pct else standard_crossover
             if_shift = (standard_crossover - crossover_val) / 100.0
             effective_if_for_rer = max(0.3, current_intensity_factor + if_shift)
@@ -342,4 +342,5 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         "cho_pct": cho_ratio * 100
     }
     return pd.DataFrame(results), stats
+
 
