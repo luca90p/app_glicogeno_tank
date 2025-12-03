@@ -23,6 +23,108 @@ def check_password():
     else:
         return True
 
+# --- PARSING FILE METABOLICO (TEST LAB) ---
+def parse_metabolic_report(uploaded_file):
+    """
+    Legge file CSV/Excel da metabolimetro e estrae la curva metabolica.
+    Cerca colonne chiave come 'CHO', 'FAT', 'Watt'/'WR', 'FC'/'HR'.
+    """
+    try:
+        # 1. Lettura File (Gestione header variabile)
+        if uploaded_file.name.endswith('.csv'):
+            # Tentativo di lettura intelligente per CSV
+            # Leggiamo le prime righe per trovare l'header
+            content = uploaded_file.getvalue().decode('utf-8', errors='replace')
+            lines = content.split('\n')
+            header_row = 0
+            
+            # Cerca la riga che contiene sia "CHO" che "FAT"
+            for i, line in enumerate(lines[:200]): 
+                if "CHO" in line and "FAT" in line:
+                    header_row = i
+                    break
+            
+            uploaded_file.seek(0)
+            
+            # Proviamo a leggere con diversi separatori/decimali
+            try:
+                # Tenta separatore automatico
+                df = pd.read_csv(uploaded_file, header=header_row, sep=None, engine='python', decimal=',')
+            except:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, header=header_row, sep=None, engine='python', decimal='.')
+        else:
+            # Excel
+            df = pd.read_excel(uploaded_file)
+            
+        # 2. Mappatura Colonne (Normalizzazione)
+        # Convertiamo tutto in maiuscolo per la ricerca
+        cols = df.columns.tolist()
+        col_map = {}
+        
+        # Funzione helper per cercare colonne
+        def find_col(keywords):
+            for c in cols:
+                c_str = str(c).upper()
+                for k in keywords:
+                    if k in c_str:
+                        return c
+            return None
+
+        # Cerca CHO (preferenza g/h, poi g/min, poi solo CHO)
+        cho_c = find_col(['CHO (G/H)', 'CHO G/H']) 
+        if not cho_c: cho_c = find_col(['CHO'])
+        if cho_c: col_map['CHO'] = cho_c
+        
+        # Cerca FAT
+        fat_c = find_col(['FAT (G/H)', 'FAT G/H'])
+        if not fat_c: fat_c = find_col(['FAT'])
+        if fat_c: col_map['FAT'] = fat_c
+        
+        # Cerca Intensità
+        # Priorità: Watt > Velocità > FC
+        watt_c = find_col(['WR', 'WATT', 'POWER'])
+        speed_c = find_col(['SPEED', 'VEL', 'KM/H', ' V ']) # ' V ' con spazi per evitare match parziali errati
+        fc_c = find_col(['FC', 'HR', 'HEART', 'BPM'])
+        
+        intensity_type = None
+        if watt_c:
+            col_map['Intensity'] = watt_c
+            intensity_type = 'watt'
+        elif speed_c:
+            col_map['Intensity'] = speed_c
+            intensity_type = 'speed'
+        elif fc_c:
+            col_map['Intensity'] = fc_c
+            intensity_type = 'hr'
+        else:
+            return None, None, "Colonna Intensità (Watt, Speed o FC) non trovata nel file."
+
+        if 'CHO' not in col_map or 'FAT' not in col_map:
+            return None, None, "Colonne CHO o FAT non trovate. Assicurati che il file contenga i dati di ossidazione."
+
+        # 3. Pulizia Dati
+        clean_df = df[list(col_map.values())].rename(columns={v: k for k, v in col_map.items()})
+        
+        # Conversione in numerico e drop errori
+        for c in clean_df.columns:
+            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
+        
+        clean_df.dropna(inplace=True)
+        # Rimuovi righe con intensità zero o negativa
+        clean_df = clean_df[clean_df['Intensity'] > 0].sort_values('Intensity')
+        
+        # 4. Verifica unità di misura
+        # Se i valori max di CHO sono < 10, probabilmente sono g/min -> convertire a g/h
+        if clean_df['CHO'].max() < 10: 
+            clean_df['CHO'] *= 60
+            clean_df['FAT'] *= 60
+            
+        return clean_df, intensity_type, None
+
+    except Exception as e:
+        return None, None, f"Errore durante la lettura del file: {str(e)}"
+
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     """Esegue il parsing di file XML formato ZWO (Zwift Workout)."""
     try:
@@ -103,3 +205,4 @@ def calculate_zones_running_hr(thr):
         {"Zona": "Z4 - Sub-Soglia", "Range %": "95 - 99% LTHR", "Valore": f"{int(thr*0.95)} - {int(thr*0.99)} bpm"},
         {"Zona": "Z5 - Soglia / VO2max", "Range %": "> 100% LTHR", "Valore": f"> {int(thr*1.00)} bpm"},
     ]
+
