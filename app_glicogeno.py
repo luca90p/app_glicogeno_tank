@@ -106,56 +106,71 @@ with tab1:
         
         # --- NUOVA SEZIONE: PROFILO METABOLICO ---
         st.markdown("---")
-        with st.expander("🧬 Profilo Metabolico (Test Laboratorio)", expanded=False):
-            st.info("Inserisci i dati dal test del gas (Metabolimetro) per personalizzare i consumi.")
-            active_lab = st.checkbox("Attiva Profilo Metabolico Personalizzato", value=st.session_state.get('use_lab_data', False))
+        st.subheader("🧬 Profilo Metabolico")
+        
+        # Scelta Modalità
+        metabolic_mode = st.radio("Fonte Dati Metabolici:", 
+                                  ["Modello Teorico (Stimato)", "Inserimento Manuale (3 Punti)", "Carica File Test (.csv/.xlsx)"],
+                                  index=0)
+        
+        metabolic_curve = None
+        
+        if metabolic_mode == "Modello Teorico (Stimato)":
+            st.caption("Verrà usato il modello matematico standard basato su RER e Intensità.")
+            st.session_state['use_lab_data'] = False
+            st.session_state['metabolic_curve'] = None
             
-            if active_lab:
-                st.caption("Range di consumo rilevati al Ritmo Gara previsto:")
-                
+        elif metabolic_mode == "Inserimento Manuale (3 Punti)":
+            st.info("Inserisci i dati reali per 3 zone chiave. Il software interpolerà i valori intermedi.")
+            with st.expander("Dati Curve (Z2, Z3, Z4)", expanded=True):
                 st.markdown("**1. Zona Z2 (Aerobica / FatMax)**")
                 c1, c2, c3 = st.columns(3)
-                z2_hr = c1.number_input("FC (bpm)", 100, 200, 138, key='z2_hr')
-                z2_cho = c2.number_input("CHO (g/h)", 0, 400, 75, key='z2_cho')
+                z2_hr = c1.number_input("FC (bpm)", 0, 220, 130, key='z2_hr')
+                z2_cho = c2.number_input("CHO (g/h)", 0, 500, 75, key='z2_cho')
                 z2_fat = c3.number_input("FAT (g/h)", 0, 200, 40, key='z2_fat')
                 
                 st.markdown("**2. Zona Z3 (Medio / Tempo)**")
                 c4, c5, c6 = st.columns(3)
-                z3_hr = c4.number_input("FC (bpm)", 100, 200, 158, key='z3_hr')
-                z3_cho = c5.number_input("CHO (g/h)", 0, 400, 139, key='z3_cho')
-                z3_fat = c6.number_input("FAT (g/h)", 0, 200, 29, key='z3_fat')
+                z3_hr = c4.number_input("FC (bpm)", 0, 220, 155, key='z3_hr')
+                z3_cho = c5.number_input("CHO (g/h)", 0, 500, 140, key='z3_cho')
+                z3_fat = c6.number_input("FAT (g/h)", 0, 200, 30, key='z3_fat')
                 
                 st.markdown("**3. Zona Z4 (Soglia / Vo2max)**")
                 c7, c8, c9 = st.columns(3)
-                z4_hr = c7.number_input("FC (bpm)", 100, 220, 172, key='z4_hr')
-                z4_cho = c8.number_input("CHO (g/h)", 0, 600, 219, key='z4_cho')
-                z4_fat = c9.number_input("FAT (g/h)", 0, 200, 7, key='z4_fat')
+                z4_hr = c7.number_input("FC (bpm)", 0, 220, 175, key='z4_hr')
+                z4_cho = c8.number_input("CHO (g/h)", 0, 600, 220, key='z4_cho')
+                z4_fat = c9.number_input("FAT (g/h)", 0, 200, 5, key='z4_fat')
                 
+                # Costruzione Dizionario Curva
                 metabolic_curve = {
                     'z2': {'hr': z2_hr, 'cho': z2_cho, 'fat': z2_fat},
                     'z3': {'hr': z3_hr, 'cho': z3_cho, 'fat': z3_fat},
                     'z4': {'hr': z4_hr, 'cho': z4_cho, 'fat': z4_fat}
                 }
-                
                 st.session_state['use_lab_data'] = True
                 st.session_state['metabolic_curve'] = metabolic_curve
-                
-                # Preview Curva
-                curve_df = pd.DataFrame([
-                    {'Intensità': z2_hr, 'Consumo': z2_cho, 'Tipo': 'CHO'},
-                    {'Intensità': z3_hr, 'Consumo': z3_cho, 'Tipo': 'CHO'},
-                    {'Intensità': z4_hr, 'Consumo': z4_cho, 'Tipo': 'CHO'},
-                    {'Intensità': z2_hr, 'Consumo': z2_fat, 'Tipo': 'FAT'},
-                    {'Intensità': z3_hr, 'Consumo': z3_fat, 'Tipo': 'FAT'},
-                    {'Intensità': z4_hr, 'Consumo': z4_fat, 'Tipo': 'FAT'}
-                ])
-                c_chart = alt.Chart(curve_df).mark_line(point=True).encode(x='Intensità', y='Consumo', color='Tipo').properties(height=200)
-                st.altair_chart(c_chart, use_container_width=True)
 
-            else:
-                st.session_state['use_lab_data'] = False
-                st.session_state['metabolic_curve'] = None
-
+        elif metabolic_mode == "Carica File Test (.csv/.xlsx)":
+            upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx'])
+            if upl_file:
+                df_curve, int_type, err = utils.parse_metabolic_report(upl_file)
+                if df_curve is not None:
+                    st.success(f"✅ Curva caricata con successo! ({len(df_curve)} punti). Intensità basata su: {int_type.upper()}")
+                    # Mostra anteprima grafico
+                    c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
+                        x=alt.X('Intensity', title='Intensità'), 
+                        y='CHO', 
+                        color=alt.value('blue'), 
+                        tooltip=['Intensity', 'CHO', 'FAT']
+                    ) + alt.Chart(df_curve).mark_line(point=True).encode(
+                        x='Intensity', y='FAT', color=alt.value('orange')
+                    )
+                    st.altair_chart(c_chart, use_container_width=True)
+                    
+                    st.session_state['use_lab_data'] = True
+                    st.session_state['metabolic_curve'] = df_curve # Salva intero DataFrame
+                else:
+                    st.error(f"Errore: {err}")
         # Setup soggetto base
         with st.expander("Opzioni Fisiologiche Aggiuntive"):
             use_creatine = st.checkbox("Usa Creatina")
@@ -590,3 +605,4 @@ with tab3:
         if schedule:
             st.table(pd.DataFrame(schedule))
             st.info(f"Portare **{len(schedule)}** unità.")
+
