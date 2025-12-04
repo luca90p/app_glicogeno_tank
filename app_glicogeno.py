@@ -406,9 +406,20 @@ with tab3:
     # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
-        cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
-        cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
         
+        # --- NUOVO INPUT: MODALITÀ ASSUNZIONE ---
+        intake_mode_sel = st.radio("Modalità Assunzione:", ["Discretizzata (Gel/Barrette)", "Continuativa (Liquid/Sorsi)"])
+        intake_mode_enum = IntakeMode.DISCRETE if intake_mode_sel.startswith("Discret") else IntakeMode.CONTINUOUS
+        
+        cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
+        
+        if intake_mode_enum == IntakeMode.DISCRETE:
+            cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
+        else:
+            # Per liquido, il 'cho_unit' è meno rilevante per il calcolo, ma serve per evitare divisioni per zero
+            cho_unit = 30 
+            st.caption("In modalità 'Continuativa', l'assunzione è spalmata uniformemente.")
+
     # --- 3. MOTORE METABOLICO ---
     with c_s3:
         st.markdown("### 3. Motore Metabolico")
@@ -417,7 +428,7 @@ with tab3:
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
         
-        if use_lab_active and curve_data is not None: # FIX PER IL VALUERROR
+        if use_lab_active and curve_data is not None:
             st.success("✅ **Curva Metabolica Attiva**")
             if intensity_series:
                 avg_int = sum(intensity_series)/len(intensity_series)
@@ -447,7 +458,8 @@ with tab3:
             tau, subj, params, 
             mix_type_input=mix_sel, 
             intensity_series=intensity_series,
-            metabolic_curve=curve_data if use_lab_active else None
+            metabolic_curve=curve_data if use_lab_active else None,
+            intake_mode=intake_mode_enum # NUOVO PARAMETRO
         )
         df_sim['Scenario'] = 'Strategia Integrata'
         df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -458,12 +470,13 @@ with tab3:
             tau, subj, params, 
             mix_type_input=mix_sel, 
             intensity_series=intensity_series,
-            metabolic_curve=curve_data if use_lab_active else None
+            metabolic_curve=curve_data if use_lab_active else None,
+            intake_mode=intake_mode_enum
         )
         df_no['Scenario'] = 'Riferimento (Digiuno)'
         df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
-        # --- DASHBOARD RISULTATI ---
+        # --- DASHBOARD ---
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
         
@@ -502,8 +515,8 @@ with tab3:
         st.altair_chart(chart_fat, use_container_width=True)
 
         st.markdown("---")
-        st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
-        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
+        st.markdown("#### Confronto Riserve Nette")
+        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato)")
         
         reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
         reserve_colors = ['#E57373', '#B71C1C'] 
@@ -536,7 +549,7 @@ with tab3:
         with c_strat:
             st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
         with c_digi:
-            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
+            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno"), use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Analisi Gut Load")
@@ -579,7 +592,8 @@ with tab3:
 
         st.markdown("---")
         st.markdown("### 📋 Cronotabella Operativa")
-        if cho_h > 0 and cho_unit > 0:
+        
+        if intake_mode_enum == IntakeMode.DISCRETE and cho_h > 0 and cho_unit > 0:
             units_per_hour = cho_h / cho_unit
             interval_rounded = int(60 / units_per_hour)
             schedule = []
@@ -592,6 +606,10 @@ with tab3:
             if schedule:
                 st.table(pd.DataFrame(schedule))
                 st.info(f"Portare **{len(schedule)}** unità.")
+        elif intake_mode_enum == IntakeMode.CONTINUOUS and cho_h > 0:
+            st.info(f"Bere continuativamente: **{cho_h} g/ora** di carboidrati.")
+            total_needs = (duration/60) * cho_h
+            st.write(f"**Totale Gara:** preparare borracce con **{int(total_needs)} g** totali.")
     
     else:
         # --- CALCOLO REVERSE STRATEGY ---
@@ -602,7 +620,7 @@ with tab3:
              with st.spinner("Simulazione scenari multipli in corso..."):
                  opt_intake = logic.calculate_minimum_strategy(
                      tank, duration, subj, params, 
-                     st.session_state.get('metabolic_curve'), mix_sel
+                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum
                  )
                  
              if opt_intake is not None:
@@ -611,11 +629,13 @@ with tab3:
                  
                  df_opt, _ = logic.simulate_metabolism(
                      tank, duration, opt_intake, 25, 70, 20, subj, params, 
-                     mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve')
+                     mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
+                     intake_mode=intake_mode_enum
                  )
                  st.area_chart(df_opt.set_index('Time (min)')[['Residuo Muscolare', 'Residuo Epatico']])
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
 
