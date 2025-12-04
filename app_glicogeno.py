@@ -406,6 +406,25 @@ with tab3:
         else:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
+         
+        # Variabile VI default
+        vi_input = 1.0
+        
+        if subj.sport == SportType.CYCLING:
+            val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
+            params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
+            if intensity_series is None: 
+                params['avg_hr'] = val
+                # --- NUOVO INPUT VI ---
+                st.caption("Per gare 'nervose' (Criterium/MTB/Vallonato), la NP è più alta della media.")
+                vi_input = st.slider("Indice Variabilità (VI = NP/Avg)", 1.00, 1.30, 1.00, 0.01, 
+                                     help="1.00=Crono Piatta, 1.05=Gran Fondo Regolare, 1.15+=Gara Nervosa/MTB")
+                if vi_input > 1.0:
+                    st.caption(f"Potenza Normalizzata Stimata: **{int(val * vi_input)} W**")
+            
+        else:
+            val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
+            params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}   
             
     # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
@@ -745,6 +764,7 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
 
 
