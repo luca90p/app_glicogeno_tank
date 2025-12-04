@@ -353,14 +353,17 @@ with tab3:
         max_cap = tank_base['max_capacity_g']
         st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
         force_pct = st.slider("Forza Livello Riempimento (%)", 0, 120, 100, 5)
+        
         forced_muscle = (max_cap - 100) * (force_pct / 100.0)
         forced_liver = 100 * (force_pct / 100.0)
+        
         tank = tank_base.copy()
         tank['muscle_glycogen_g'] = forced_muscle
         tank['liver_glycogen_g'] = forced_liver
         tank['actual_available_g'] = forced_muscle + forced_liver
         tank['fill_pct'] = force_pct
         start_total = tank['actual_available_g']
+        
         st.metric("Nuovo Start Glicogeno", f"{int(start_total)} g")
     else:
         tank = tank_base
@@ -381,6 +384,7 @@ with tab3:
         
         if uploaded_file:
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
+            
             if series:
                 if subj.sport == SportType.CYCLING:
                     intensity_series = [val * target_ftp for val in series]
@@ -388,6 +392,7 @@ with tab3:
                 else:
                     intensity_series = [val * target_thresh_hr for val in series]
                     st.success(f"File Corsa: Convertito in BPM (Media ~{int(hr_calc)} bpm)")
+                
                 duration = dur_calc
         
         if subj.sport == SportType.CYCLING:
@@ -398,13 +403,14 @@ with tab3:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
             
-    # --- 2. STRATEGIA NUTRIZIONALE ---
+    # --- 2. STRATEGIA NUTRIZIONALE (RIVOLUZIONATA) ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
+        
         intake_mode_sel = st.radio("Modalità Assunzione:", ["Discretizzata (Gel/Barrette)", "Continuativa (Liquid/Sorsi)"])
         intake_mode_enum = IntakeMode.DISCRETE if intake_mode_sel.startswith("Discret") else IntakeMode.CONTINUOUS
         
-        # Mix Carboidrati Spostato Qui
+        # Mix Carboidrati
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
         # Cutoff Assunzione
@@ -417,12 +423,33 @@ with tab3:
             c_u1, c_u2 = st.columns(2)
             cho_unit = c_u1.number_input("Grammi CHO per Unità", 10, 100, 25)
             intake_interval = c_u2.number_input("Intervallo Assunzione (min)", 10, 120, 40, step=5)
+            
+            # Calcolo Automatico Rateo (con considerazione Cutoff per precisione)
             if intake_interval > 0:
-                cho_h = (60 / intake_interval) * cho_unit
-                st.info(f"Rateo Equivalente: **{int(cho_h)} g/h**")
+                # Quanti intake ci stanno realmente nella finestra utile?
+                feeding_window = duration - intake_cutoff
+                
+                # Conta intake al minuto 0 + ogni intervallo
+                num_intakes = 0
+                for t in range(0, int(feeding_window) + 1):
+                    if t == 0 or (t > 0 and t % intake_interval == 0):
+                        num_intakes += 1
+                
+                total_grams_planned = num_intakes * cho_unit
+                
+                # Rateo orario effettivo
+                if duration > 0:
+                    cho_h = total_grams_planned / (duration / 60)
+                else:
+                    cho_h = 0
+                    
+                st.info(f"Rateo Effettivo Gara: **{int(cho_h)} g/h**")
+                st.caption(f"Totale Assunzioni: {num_intakes} ({total_grams_planned}g totali)")
+            
         else:
+            # Modalità Continuativa (Slider Classico)
             cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
-            cho_unit = 30 
+            cho_unit = 30 # Dummy per evitare div by zero
             st.caption("In modalità 'Continuativa', l'assunzione è spalmata uniformemente.")
 
     # --- 3. MOTORE METABOLICO ---
@@ -600,31 +627,33 @@ with tab3:
         st.markdown("### 📋 Cronotabella Operativa")
         
         if intake_mode_enum == IntakeMode.DISCRETE and cho_h > 0 and cho_unit > 0:
-            units_per_hour = cho_h / cho_unit
-            interval_rounded = int(60 / units_per_hour)
             schedule = []
-            current_time = interval_rounded
+            current_time = intake_interval # Primo gel
             total_ingested = 0
             
-            # Logica Cronotabella con Cutoff
-            while current_time <= (duration - intake_cutoff):
+            # Se il primo gel è a 0 min (start)
+            if intake_interval > 0:
+                # Assunzione Start
                 total_ingested += cho_unit
-                schedule.append({
-                    "Minuto": current_time,
-                    "Azione": f"Assumere 1 unità ({cho_unit}g CHO)",
-                    "Totale Ingerito": f"{total_ingested}g"
-                })
-                current_time += interval_rounded
+                schedule.append({"Minuto": 0, "Azione": f"Assumere 1 unità ({cho_unit}g CHO)", "Totale Ingerito": f"{total_ingested}g"})
+                
+                while current_time <= (duration - intake_cutoff):
+                    total_ingested += cho_unit
+                    schedule.append({
+                        "Minuto": current_time,
+                        "Azione": f"Assumere 1 unità ({cho_unit}g CHO)",
+                        "Totale Ingerito": f"{total_ingested}g"
+                    })
+                    current_time += intake_interval
             
             if schedule:
                 st.table(pd.DataFrame(schedule))
                 st.info(f"Portare **{len(schedule)}** unità.")
             else:
-                st.warning("Nessuna assunzione prevista (durata troppo breve o cutoff troppo ampio).")
+                st.warning("Nessuna assunzione prevista.")
 
         elif intake_mode_enum == IntakeMode.CONTINUOUS and cho_h > 0:
             st.info(f"Bere continuativamente: **{cho_h} g/ora** di carboidrati.")
-            # Cutoff per il calcolo totale
             effective_duration = max(0, duration - intake_cutoff)
             total_needs = (effective_duration/60) * cho_h
             st.write(f"**Totale Gara:** preparare borracce con **{int(total_needs)} g** totali.")
@@ -645,13 +674,15 @@ with tab3:
                  if opt_intake == 0:
                       st.success("### ✅ Strategia Consigliata: Nessuna integrazione necessaria (0 g/h)")
                  elif intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
+                     # Calcolo inverso dell'intervallo ideale per ottenere quel g/h
+                     # Se serve 45 g/h con gel da 25g -> 1.8 gel/h -> un gel ogni 33 min
                      units_per_hour = opt_intake / cho_unit
                      if units_per_hour > 0:
                          interval_min = int(60 / units_per_hour)
                          st.success(f"### ✅ Strategia: Assumere 1 unità ogni {interval_min} min")
-                         st.caption(f"(Equivalente a **{opt_intake} g/h**)")
+                         st.caption(f"(Equivalente a circa **{opt_intake} g/h**)")
                      else:
-                         st.warning("L'intake richiesto è troppo basso per la dimensione dell'unità scelta.")
+                         st.warning("Intake minimo troppo basso per questa unità.")
                  else:
                      st.success(f"### ✅ Strategia Consigliata: Bere {opt_intake} g/h")
 
@@ -666,6 +697,7 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
 
 
