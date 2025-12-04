@@ -21,15 +21,6 @@ Supporta **Atleti Ibridi**, profili metabolici personalizzati e **Simulazione Sc
 if not utils.check_password():
     st.stop()
 
-# Funzione Helper per Grafici Standardizzati
-def create_cutoff_line(cutoff_time):
-    return alt.Chart(pd.DataFrame({'x': [cutoff_time]})).mark_rule(
-        color='black', strokeDash=[5, 5], size=2
-    ).encode(
-        x='x',
-        tooltip=[alt.Tooltip('x', title='Stop Assunzione (min)')]
-    )
-
 def create_risk_zone_chart(df_data, title, max_y):
     zones_df = pd.DataFrame({
         'Zone': ['Sicurezza', 'Attenzione', 'Critico'],
@@ -53,7 +44,16 @@ def create_risk_zone_chart(df_data, title, max_y):
     
     return (background + area).properties(title=title, height=350)
 
-# Inizializzazione Session State per Dati Lab (se non esistono)
+# Funzione Helper per Grafici Standardizzati
+def create_cutoff_line(cutoff_time):
+    return alt.Chart(pd.DataFrame({'x': [cutoff_time]})).mark_rule(
+        color='black', strokeDash=[5, 5], size=2
+    ).encode(
+        x='x',
+        tooltip=[alt.Tooltip('x', title='Stop Assunzione (min)')]
+    )
+
+# Inizializzazione Session State
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
@@ -101,7 +101,6 @@ with tab1:
             vo2_derived = vo2_input
             
         
-
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Sport Target (Principale)", list(sport_map.keys()))]
         
@@ -115,72 +114,73 @@ with tab1:
         
         # --- NUOVA SEZIONE: PROFILO METABOLICO ---
         st.markdown("---")
-        st.subheader("🧬 Profilo Metabolico")
-        
-        # Scelta Modalità
-        metabolic_mode = st.radio("Fonte Dati Metabolici:", 
-                                  ["Modello Teorico (Stimato)", "Inserimento Manuale (3 Punti)", "Carica File Test (.csv/.xlsx)"],
-                                  index=0)
-        
-        metabolic_curve = None
-        
-        if metabolic_mode == "Modello Teorico (Stimato)":
-            st.caption("Verrà usato il modello matematico standard basato su RER e Intensità.")
-            st.session_state['use_lab_data'] = False
-            st.session_state['metabolic_curve'] = None
+        with st.expander("🧬 Profilo Metabolico (Test Laboratorio)", expanded=False):
+            st.info("Inserisci i dati dal test del gas (Metabolimetro) per personalizzare i consumi.")
+            active_lab = st.checkbox("Attiva Profilo Metabolico Personalizzato", value=st.session_state.get('use_lab_data', False))
             
-        elif metabolic_mode == "Inserimento Manuale (3 Punti)":
-            st.info("Inserisci i dati reali per 3 zone chiave. Il software interpolerà i valori intermedi.")
-            with st.expander("Dati Curve (Z2, Z3, Z4)", expanded=True):
-                st.markdown("**1. Zona Z2 (Aerobica / FatMax)**")
-                c1, c2, c3 = st.columns(3)
-                z2_hr = c1.number_input("FC (bpm)", 0, 220, 130, key='z2_hr')
-                z2_cho = c2.number_input("CHO (g/h)", 0, 500, 75, key='z2_cho')
-                z2_fat = c3.number_input("FAT (g/h)", 0, 200, 40, key='z2_fat')
+            if active_lab:
+                met_method = st.radio("Metodo Inserimento:", ["Carica File (Completo)", "Manuale (3 Punti)"], horizontal=True)
                 
-                st.markdown("**2. Zona Z3 (Medio / Tempo)**")
-                c4, c5, c6 = st.columns(3)
-                z3_hr = c4.number_input("FC (bpm)", 0, 220, 155, key='z3_hr')
-                z3_cho = c5.number_input("CHO (g/h)", 0, 500, 140, key='z3_cho')
-                z3_fat = c6.number_input("FAT (g/h)", 0, 200, 30, key='z3_fat')
-                
-                st.markdown("**3. Zona Z4 (Soglia / Vo2max)**")
-                c7, c8, c9 = st.columns(3)
-                z4_hr = c7.number_input("FC (bpm)", 0, 220, 175, key='z4_hr')
-                z4_cho = c8.number_input("CHO (g/h)", 0, 600, 220, key='z4_cho')
-                z4_fat = c9.number_input("FAT (g/h)", 0, 200, 5, key='z4_fat')
-                
-                # Costruzione Dizionario Curva
-                metabolic_curve = {
-                    'z2': {'hr': z2_hr, 'cho': z2_cho, 'fat': z2_fat},
-                    'z3': {'hr': z3_hr, 'cho': z3_cho, 'fat': z3_fat},
-                    'z4': {'hr': z4_hr, 'cho': z4_cho, 'fat': z4_fat}
-                }
-                st.session_state['use_lab_data'] = True
-                st.session_state['metabolic_curve'] = metabolic_curve
-
-        elif metabolic_mode == "Carica File Test (.csv/.xlsx)":
-            upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx'])
-            if upl_file:
-                df_curve, int_type, err = utils.parse_metabolic_report(upl_file)
-                if df_curve is not None:
-                    st.success(f"✅ Curva caricata con successo! ({len(df_curve)} punti). Intensità basata su: {int_type.upper()}")
-                    # Mostra anteprima grafico
-                    c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
-                        x=alt.X('Intensity', title='Intensità'), 
-                        y='CHO', 
-                        color=alt.value('blue'), 
-                        tooltip=['Intensity', 'CHO', 'FAT']
-                    ) + alt.Chart(df_curve).mark_line(point=True).encode(
-                        x='Intensity', y='FAT', color=alt.value('orange')
-                    )
-                    st.altair_chart(c_chart, use_container_width=True)
+                if met_method == "Inserimento Manuale (3 Punti)":
+                    st.caption("Inserisci i dati per tre zone di intensità (Z2, Z3, Z4).")
+                    st.markdown("**1. Zona Z2 (Aerobica / FatMax)**")
+                    c1, c2, c3 = st.columns(3)
+                    z2_hr = c1.number_input("FC (bpm)", 0, 220, 130, key='z2_hr')
+                    z2_cho = c2.number_input("CHO (g/h)", 0, 500, 75, key='z2_cho')
+                    z2_fat = c3.number_input("FAT (g/h)", 0, 200, 40, key='z2_fat')
                     
+                    st.markdown("**2. Zona Z3 (Medio / Tempo)**")
+                    c4, c5, c6 = st.columns(3)
+                    z3_hr = c4.number_input("FC (bpm)", 0, 220, 155, key='z3_hr')
+                    z3_cho = c5.number_input("CHO (g/h)", 0, 500, 140, key='z3_cho')
+                    z3_fat = c6.number_input("FAT (g/h)", 0, 200, 29, key='z3_fat')
+                    
+                    st.markdown("**3. Zona Z4 (Soglia / Vo2max)**")
+                    c7, c8, c9 = st.columns(3)
+                    z4_hr = c7.number_input("FC (bpm)", 0, 220, 175, key='z4_hr')
+                    z4_cho = c8.number_input("CHO (g/h)", 0, 600, 220, key='z4_cho')
+                    z4_fat = c9.number_input("FAT (g/h)", 0, 200, 5, key='z4_fat')
+                    
+                    metabolic_curve = {
+                        'z2': {'hr': z2_hr, 'cho': z2_cho, 'fat': z2_fat},
+                        'z3': {'hr': z3_hr, 'cho': z3_cho, 'fat': z3_fat},
+                        'z4': {'hr': z4_hr, 'cho': z4_cho, 'fat': z4_fat}
+                    }
                     st.session_state['use_lab_data'] = True
-                    st.session_state['metabolic_curve'] = df_curve # Salva intero DataFrame
-                else:
-                    st.error(f"Errore: {err}")
-        # Setup soggetto base
+                    st.session_state['metabolic_curve'] = metabolic_curve
+                    
+                    curve_df = pd.DataFrame([
+                        {'Intensità': z2_hr, 'Consumo': z2_cho, 'Tipo': 'CHO'},
+                        {'Intensità': z3_hr, 'Consumo': z3_cho, 'Tipo': 'CHO'},
+                        {'Intensità': z4_hr, 'Consumo': z4_cho, 'Tipo': 'CHO'},
+                        {'Intensità': z2_hr, 'Consumo': z2_fat, 'Tipo': 'FAT'},
+                        {'Intensità': z3_hr, 'Consumo': z3_fat, 'Tipo': 'FAT'},
+                        {'Intensità': z4_hr, 'Consumo': z4_fat, 'Tipo': 'FAT'}
+                    ])
+                    c_chart = alt.Chart(curve_df).mark_line(point=True).encode(x='Intensità', y='Consumo', color='Tipo').properties(height=200)
+                    st.altair_chart(c_chart, use_container_width=True)
+
+                elif met_method == "Carica File (Completo)":
+                    upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx', 'txt'])
+                    if upl_file:
+                        df_curve, int_type, err = utils.parse_metabolic_report(upl_file)
+                        if df_curve is not None:
+                            st.success(f"✅ Curva caricata con successo! ({len(df_curve)} punti). Intensità basata su: {int_type.upper()}")
+                            c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
+                                x=alt.X('Intensity', title='Intensità'), 
+                                y='CHO', color=alt.value('blue'), tooltip=['Intensity', 'CHO', 'FAT']
+                            ) + alt.Chart(df_curve).mark_line(point=True).encode(
+                                x='Intensity', y='FAT', color=alt.value('orange')
+                            )
+                            st.altair_chart(c_chart, use_container_width=True)
+                            st.session_state['use_lab_data'] = True
+                            st.session_state['metabolic_curve'] = df_curve
+                        else:
+                            st.error(f"Errore: {err}")
+            else:
+                st.session_state['use_lab_data'] = False
+                st.session_state['metabolic_curve'] = None
+
         with st.expander("Opzioni Fisiologiche Aggiuntive"):
             use_creatine = st.checkbox("Usa Creatina")
             s_menstrual = MenstrualPhase.NONE
@@ -203,16 +203,12 @@ with tab1:
     with col_res:
         st.subheader("Analisi Tank")
         max_cap = tank_data['max_capacity_g']
-        
         c1, c2, c3 = st.columns(3)
         c1.metric("Capacità Totale", f"{int(max_cap)} g")
         c2.metric("Energia", f"{int(max_cap*4.1)} kcal")
         c3.metric("Massa Attiva", f"{tank_data['active_muscle_kg']:.1f} kg")
-        
         st.progress(1.0)
-        
-        # Tabelle Zone
-        st.markdown("### Zone di Allenamento (Ibrido)")
+        st.markdown("### Zone di Allenamento")
         t_cyc, t_run = st.tabs(["Ciclismo (Power)", "Corsa (Heart Rate)"])
         with t_cyc:
             st.table(pd.DataFrame(utils.calculate_zones_cycling(ftp_watts)))
@@ -233,14 +229,12 @@ with tab2:
     
     st.subheader("🗓️ Diario di Avvicinamento (Multidisciplinare)")
     
-    # --- INPUT: STATO INIZIALE ---
     from data_models import GlycogenState
     st.markdown("#### Condizione di Partenza (-7 Giorni)")
     gly_states = list(GlycogenState)
     sel_state = st.selectbox("Livello di riempimento iniziale:", gly_states, format_func=lambda x: x.label, index=2)
     st.markdown("---")
     
-    # FIX SESSION STATE
     if "tapering_data" in st.session_state:
         if len(st.session_state["tapering_data"]) > 0:
             first_row = st.session_state["tapering_data"][0]
@@ -362,14 +356,17 @@ with tab3:
         max_cap = tank_base['max_capacity_g']
         st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
         force_pct = st.slider("Forza Livello Riempimento (%)", 0, 120, 100, 5)
+        
         forced_muscle = (max_cap - 100) * (force_pct / 100.0)
         forced_liver = 100 * (force_pct / 100.0)
+        
         tank = tank_base.copy()
         tank['muscle_glycogen_g'] = forced_muscle
         tank['liver_glycogen_g'] = forced_liver
         tank['actual_available_g'] = forced_muscle + forced_liver
         tank['fill_pct'] = force_pct
         start_total = tank['actual_available_g']
+        
         st.metric("Nuovo Start Glicogeno", f"{int(start_total)} g")
     else:
         tank = tank_base
@@ -399,10 +396,17 @@ with tab3:
                     st.success(f"File Corsa: Convertito in BPM (Media ~{int(hr_calc)} bpm)")
                 duration = dur_calc
         
+        # Variabile VI
+        vi_input = 1.0
+
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
             params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
-            if intensity_series is None: params['avg_hr'] = val 
+            if intensity_series is None: 
+                params['avg_hr'] = val
+                vi_input = st.slider("Indice Variabilità (VI = NP/Avg)", 1.00, 1.30, 1.00, 0.01, 
+                                     help="1.00=Crono Piatta, 1.05=Gran Fondo, 1.15+=Gara Nervosa/MTB")
+                if vi_input > 1.0: st.caption(f"Potenza Normalizzata Stimata: **{int(val * vi_input)} W**")
         else:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
@@ -424,22 +428,22 @@ with tab3:
             cho_unit = c_u1.number_input("Grammi CHO per Unità", 10, 100, 25)
             intake_interval = c_u2.number_input("Intervallo Assunzione (min)", 10, 120, 40, step=5)
             
-            # CALCOLO RATEO EFFETTIVO CON CUTOFF
+            # FIX CALCOLO: Usiamo l'intervallo PURO per passare il parametro alla simulazione
+            # (il motore deciderà poi se tagliare l'ultimo gel col cutoff)
             if intake_interval > 0:
+                cho_h = (60 / intake_interval) * cho_unit
+                
+                # Calcolo "Reale" solo per info visiva
                 feeding_window = duration - intake_cutoff
                 num_intakes = 0
                 for t in range(0, int(feeding_window) + 1):
-                    if t == 0 or (t > 0 and t % intake_interval == 0):
-                        num_intakes += 1
+                    if t == 0 or (t > 0 and t % intake_interval == 0): num_intakes += 1
                 
-                total_grams_planned = num_intakes * cho_unit
-                if duration > 0:
-                    cho_h = total_grams_planned / (duration / 60)
-                else:
-                    cho_h = 0
-                    
-                st.info(f"Rateo Effettivo Gara: **{int(cho_h)} g/h**")
-                st.caption(f"Pianificati: {num_intakes} assunzioni ({total_grams_planned}g totali) nella finestra 0-{int(feeding_window)} min.")
+                total_real = num_intakes * cho_unit
+                rate_real = total_real / (duration / 60) if duration > 0 else 0
+                
+                st.info(f"Rateo Effettivo (su {duration}min): **{int(rate_real)} g/h**")
+                st.caption(f"Pianificati: {num_intakes} unità ({total_real}g) fino al min {int(feeding_window)}.")
         else:
             cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
             cho_unit = 30 
@@ -457,7 +461,9 @@ with tab3:
                 avg_int = sum(intensity_series)/len(intensity_series)
                 st.caption(f"Input Dinamico: {int(avg_int)}")
             else:
-                st.caption(f"Input Costante: {val}")
+                # Mostra se stiamo usando VI
+                if vi_input > 1.0: st.caption(f"Input: {val} W (NP {int(val*vi_input)})")
+                else: st.caption(f"Input Costante: {val}")
             tau = 20
             risk_thresh = 30
         else:
@@ -478,6 +484,7 @@ with tab3:
     cutoff_line = create_cutoff_line(duration - intake_cutoff)
     
     if sim_mode == "Simulazione Manuale (Verifica Tattica)":
+        
         df_sim, stats_sim = logic.simulate_metabolism(
             tank, duration, cho_h, cho_unit, 
             crossover_val if not use_lab_active else 75, 
@@ -486,7 +493,8 @@ with tab3:
             intensity_series=intensity_series,
             metabolic_curve=curve_data if use_lab_active else None,
             intake_mode=intake_mode_enum,
-            intake_cutoff_min=intake_cutoff
+            intake_cutoff_min=intake_cutoff,
+            variability_index=vi_input 
         )
         df_sim['Scenario'] = 'Strategia Integrata'
         df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -498,13 +506,17 @@ with tab3:
             mix_type_input=mix_sel, 
             intensity_series=intensity_series,
             metabolic_curve=curve_data if use_lab_active else None,
-            intake_mode=intake_mode_enum
+            intake_mode=intake_mode_enum,
+            intake_cutoff_min=intake_cutoff,
+            variability_index=vi_input
         )
         df_no['Scenario'] = 'Riferimento (Digiuno)'
         df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
+        # --- DASHBOARD RISULTATI ---
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
+        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
         c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
@@ -541,6 +553,7 @@ with tab3:
 
         st.markdown("---")
         st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
+        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
         
         reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
         reserve_colors = ['#E57373', '#B71C1C'] 
@@ -573,7 +586,7 @@ with tab3:
         with c_strat:
             st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
         with c_digi:
-            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno"), use_container_width=True)
+            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Analisi Gut Load")
@@ -621,7 +634,7 @@ with tab3:
             schedule = []
             current_time = intake_interval
             total_ingested = 0
-            # Start gel
+            
             if intake_interval > 0:
                 total_ingested += cho_unit
                 schedule.append({"Minuto": 0, "Azione": f"Assumere 1 unità ({cho_unit}g CHO)", "Totale Ingerito": f"{total_ingested}g"})
@@ -656,7 +669,8 @@ with tab3:
              with st.spinner("Simulazione scenari multipli in corso..."):
                  opt_intake = logic.calculate_minimum_strategy(
                      tank, duration, subj, params, 
-                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum, intake_cutoff
+                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum, intake_cutoff,
+                     variability_index=vi_input 
                  )
                  
              if opt_intake is not None:
@@ -678,19 +692,19 @@ with tab3:
                  df_opt, stats_opt = logic.simulate_metabolism(
                      tank, duration, opt_intake, 25, 70, 20, subj, params, 
                      mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
-                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
+                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
+                     variability_index=vi_input
                  )
                  
-                 # --- VISUALIZZAZIONE RISULTATI CALCOLO MINIMO ---
+                 # DASHBOARD RISULTATI CALCOLO INVERSO (Identica a Manuale)
+                 st.markdown("---")
                  
-                 # 1. KPI
                  c1, c2, c3, c4 = st.columns(4)
                  c1.metric("IF", f"{stats_opt['intensity_factor']:.2f}")
                  c2.metric("RER", f"{stats_opt['avg_rer']:.2f}")
                  c3.metric("Substrati", f"{int(stats_opt['cho_pct'])}% CHO", f"{100-int(stats_opt['cho_pct'])}% FAT")
                  c4.metric("Residuo Finale", f"{int(stats_opt['final_glycogen'])} g")
                  
-                 # 2. Grafico Bilancio
                  st.markdown("#### Bilancio Energetico (Strategia Minima)")
                  df_melt_opt = df_opt.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
                  order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
@@ -703,7 +717,6 @@ with tab3:
                  ).properties(height=300)
                  st.altair_chart(chart_stack_opt + cutoff_line, use_container_width=True)
                  
-                 # 3. Grafico Ossidazione Grassi
                  st.markdown("#### Ossidazione Lipidica")
                  chart_fat_opt = alt.Chart(df_opt).mark_line(color='#FFC107', strokeWidth=3).encode(
                     x=alt.X('Time (min)'),
@@ -711,7 +724,6 @@ with tab3:
                  ).properties(height=200)
                  st.altair_chart(chart_fat_opt + cutoff_line, use_container_width=True)
                  
-                 # 4. Riserve
                  st.markdown("#### Riserve Residue")
                  reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
                  df_res_opt = df_opt.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
@@ -735,7 +747,6 @@ with tab3:
                  )
                  st.altair_chart((bg + area_opt + cutoff_line).properties(height=300), use_container_width=True)
                  
-                 # 5. Gut Load
                  st.markdown("#### Gut Load")
                  base_opt = alt.Chart(df_opt).encode(x='Time (min)')
                  area_gut_opt = base_opt.mark_area(color='#795548', opacity=0.6).encode(y='Gut Load')
@@ -745,9 +756,3 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
-
-
-
-
-
-
