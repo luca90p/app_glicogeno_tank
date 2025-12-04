@@ -624,7 +624,16 @@ with tab3:
                  )
                  
              if opt_intake is not None:
-                 st.success(f"### ✅ Strategia Consigliata: {opt_intake} g/h")
+                 if opt_intake == 0:
+                      st.success("### ✅ Strategia Consigliata: Nessuna integrazione necessaria (0 g/h)")
+                 elif intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
+                     units_per_hour = opt_intake / cho_unit
+                     interval_min = int(60 / units_per_hour)
+                     st.success(f"### ✅ Strategia: Assumere 1 unità ogni {interval_min} min")
+                     st.caption(f"(Equivalente a **{opt_intake} g/h**)")
+                 else:
+                     st.success(f"### ✅ Strategia Consigliata: Bere {opt_intake} g/h")
+
                  st.write(f"Con questo apporto, arriverai al traguardo con riserve minime di sicurezza.")
                  
                  df_opt, _ = logic.simulate_metabolism(
@@ -636,6 +645,7 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
 
 
