@@ -425,9 +425,10 @@ with tab3:
             st.success("✅ **Curva Metabolica Attiva**")
             if intensity_series:
                 avg_int = sum(intensity_series)/len(intensity_series)
-                st.caption(f"Input Dinamico: {int(avg_int)} (Media)")
+                st.caption(f"Input Dinamico (Media): {int(avg_int)}")
             else:
                 st.caption(f"Input Costante: {val}")
+            
             tau = 20
             risk_thresh = 30
         else:
@@ -443,166 +444,195 @@ with tab3:
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
-    # --- ESECUZIONE SIMULAZIONI ---
-    
-    df_sim, stats_sim = logic.simulate_metabolism(
-        tank, duration, cho_h, cho_unit, 
-        crossover_val if not use_lab_active else 70, 
-        tau, subj, params, 
-        mix_type_input=mix_sel, 
-        intensity_series=intensity_series,
-        metabolic_curve=curve_data if use_lab_active else None
-    )
-    df_sim['Scenario'] = 'Strategia Integrata'
-    df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
-    
-    df_no, _ = logic.simulate_metabolism(
-        tank, duration, 0, cho_unit, 
-        crossover_val if not use_lab_active else 70, 
-        tau, subj, params, 
-        mix_type_input=mix_sel, 
-        intensity_series=intensity_series,
-        metabolic_curve=curve_data if use_lab_active else None
-    )
-    df_no['Scenario'] = 'Riferimento (Digiuno)'
-    df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
-
-    # --- METRICHE VISIBILI ---
+    # --- SELEZIONE MODALITÀ SIMULAZIONE ---
     st.markdown("---")
-    st.subheader("Analisi Cinetica e Substrati")
+    sim_mode = st.radio("Modalità Simulazione:", ["Simulazione Manuale (Verifica Tattica)", "Calcolatore Strategia Minima (Reverse)"], horizontal=True)
     
-    # RIGA 1: KPI Principali
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
-    c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
-    c3.metric("Ripartizione Substrati", f"{int(stats_sim['cho_pct'])}% CHO", f"{100-int(stats_sim['cho_pct'])}% FAT", delta_color="off")
-    c4.metric("Glicogeno Residuo", f"{int(stats_sim['final_glycogen'])} g", delta=f"{int(stats_sim['final_glycogen'] - start_total)} g")
-
-    # RIGA 2: Utilizzi
-    st.markdown("---")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Uso Glicogeno Muscolare", f"{int(stats_sim['total_muscle_used'])} g")
-    m2.metric("Uso Glicogeno Epatico", f"{int(stats_sim['total_liver_used'])} g")
-    m3.metric("Uso CHO Esogeno", f"{int(stats_sim['total_exo_used'])} g")
-
-    # --- DASHBOARD GRAFICI ---
-    st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
-    
-    # ROW 1: BILANCIO
-    df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
-    order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
-    colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
-    
-    chart_stack = alt.Chart(df_melt).mark_area().encode(
-        x='Time (min)', y='g/h', 
-        color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
-        tooltip=['Time (min)', 'Fonte', 'g/h']
-    ).properties(height=350)
-    st.altair_chart(chart_stack, use_container_width=True)
-
-    # ROW 2: Ossidazione Lipidica
-    st.markdown("---")
-    st.markdown("#### Ossidazione Lipidica (Tasso Orario)")
-    chart_fat = alt.Chart(df_sim).mark_line(color='#FFC107', strokeWidth=3).encode(
-        x=alt.X('Time (min)'),
-        y=alt.Y('Ossidazione Lipidica (g)', title='Grassi (g/h)'),
-        tooltip=['Time (min)', 'Ossidazione Lipidica (g)']
-    ).properties(height=250)
-    st.altair_chart(chart_fat, use_container_width=True)
-
-    # ROW 3: Confronto Riserve (STACKED + ZONES)
-    st.markdown("---")
-    st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
-    st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
-    
-    reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
-    reserve_colors = ['#E57373', '#B71C1C'] 
-    
-    df_reserve_sim = df_sim.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
-    df_reserve_no = df_no.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
-    
-    max_y = start_total * 1.05
-    zones_df = pd.DataFrame({
-        'Start': [max_y * 0.35, max_y * 0.15, 0],
-        'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
-        'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
-    })
-    
-    def create_reserve_stacked_chart(df_data, title):
-        bg = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
-            y=alt.Y('Start', scale=alt.Scale(domain=[0, max_y]), axis=None),
-            y2='End', color=alt.Color('Color', scale=None)
+    if sim_mode == "Simulazione Manuale (Verifica Tattica)":
+        # --- ESECUZIONE SIMULAZIONI ---
+        
+        df_sim, stats_sim = logic.simulate_metabolism(
+            tank, duration, cho_h, cho_unit, 
+            crossover_val if not use_lab_active else 75, 
+            tau, subj, params, 
+            mix_type_input=mix_sel, 
+            intensity_series=intensity_series,
+            metabolic_curve=curve_data if use_lab_active else None
         )
-        area = alt.Chart(df_data).mark_area().encode(
-            x='Time (min)', 
-            y=alt.Y('Grammi', stack='zero', title='Residuo (g)'),
-            color=alt.Color('Tipo', scale=alt.Scale(domain=reserve_fields, range=reserve_colors)),
-            order=alt.Order('Tipo', sort='ascending'), 
-            tooltip=['Time (min)', 'Tipo', 'Grammi']
+        df_sim['Scenario'] = 'Strategia Integrata'
+        df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
+        
+        df_no, _ = logic.simulate_metabolism(
+            tank, duration, 0, cho_unit, 
+            crossover_val if not use_lab_active else 75, 
+            tau, subj, params, 
+            mix_type_input=mix_sel, 
+            intensity_series=intensity_series,
+            metabolic_curve=curve_data if use_lab_active else None
         )
-        return (bg + area).properties(title=title, height=300)
+        df_no['Scenario'] = 'Riferimento (Digiuno)'
+        df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
-    c_strat, c_digi = st.columns(2)
-    with c_strat:
-        st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
-    with c_digi:
-        st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
+        # --- DASHBOARD RISULTATI ---
+        st.markdown("---")
+        st.subheader("Analisi Cinetica e Substrati")
+        
+        # KPI
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
+        c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
+        c3.metric("Ripartizione Substrati", f"{int(stats_sim['cho_pct'])}% CHO", f"{100-int(stats_sim['cho_pct'])}% FAT", delta_color="off")
+        c4.metric("Glicogeno Residuo", f"{int(stats_sim['final_glycogen'])} g", delta=f"{int(stats_sim['final_glycogen'] - start_total)} g")
 
-    # ROW 4: Analisi Gut Load
-    st.markdown("---")
-    st.markdown("#### Analisi Gut Load")
-    base = alt.Chart(df_sim).encode(x='Time (min)')
-    area_gut = base.mark_area(color='#795548', opacity=0.6).encode(y=alt.Y('Gut Load', title='Accumulo (g)'), tooltip=['Gut Load'])
-    rule = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
-    chart_gi = alt.layer(area_gut, rule).properties(height=350)
-    st.altair_chart(chart_gi, use_container_width=True)
-    
-    # Analisi Criticità
-    st.markdown("---")
-    st.subheader("Analisi Criticità & Timing")
-    
-    liver_bonk = df_sim[df_sim['Residuo Epatico'] <= 0]
-    muscle_bonk = df_sim[df_sim['Residuo Muscolare'] <= 20]
-    
-    bonk_time = None
-    cause = None
-    
-    if not liver_bonk.empty:
-        bonk_time = liver_bonk['Time (min)'].iloc[0]
-        cause = "Esaurimento Epatico (Ipoglicemia)"
-    if not muscle_bonk.empty:
-        t_muscle = muscle_bonk['Time (min)'].iloc[0]
-        if bonk_time is None or t_muscle < bonk_time:
-            bonk_time = t_muscle
-            cause = "Esaurimento Muscolare (Gambe Vuote)"
-            
-    c_b1, c_b2 = st.columns([2, 1])
-    with c_b1:
-        if bonk_time:
-            st.error(f"⚠️ **CRITICITÀ RILEVATA AL MINUTO {bonk_time}**")
-            st.write(f"Causa Primaria: **{cause}**")
-        else:
-            st.success("✅ **STRATEGIA SOSTENIBILE**")
-    with c_b2:
-        if bonk_time:
-             st.metric("Tempo Limite", f"{bonk_time} min", delta="Bonk!", delta_color="inverse")
-        else:
-             st.metric("Buffer Energetico", "Sicuro")
+        st.markdown("---")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Uso Glicogeno Muscolare", f"{int(stats_sim['total_muscle_used'])} g")
+        m2.metric("Uso Glicogeno Epatico", f"{int(stats_sim['total_liver_used'])} g")
+        m3.metric("Uso CHO Esogeno", f"{int(stats_sim['total_exo_used'])} g")
 
-    # TABELLA
-    st.markdown("---")
-    st.markdown("### 📋 Cronotabella Operativa")
-    if cho_h > 0 and cho_unit > 0:
-        units_per_hour = cho_h / cho_unit
-        interval_rounded = int(60 / units_per_hour)
-        schedule = []
-        current_time = interval_rounded
-        total_ingested = 0
-        while current_time <= duration:
-            total_ingested += cho_unit
-            schedule.append({"Min": current_time, "Azione": f"1 unità ({cho_unit}g)", "Tot": total_ingested})
-            current_time += interval_rounded
-        if schedule:
-            st.table(pd.DataFrame(schedule))
-            st.info(f"Portare **{len(schedule)}** unità.")
+        st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
+        
+        df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
+        order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
+        colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
+        
+        chart_stack = alt.Chart(df_melt).mark_area().encode(
+            x='Time (min)', y='g/h', 
+            color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
+            tooltip=['Time (min)', 'Fonte', 'g/h']
+        ).properties(height=350)
+        st.altair_chart(chart_stack, use_container_width=True)
+
+        # ROW 2: Ossidazione Lipidica
+        st.markdown("---")
+        st.markdown("#### Ossidazione Lipidica (Tasso Orario)")
+        chart_fat = alt.Chart(df_sim).mark_line(color='#FFC107', strokeWidth=3).encode(
+            x=alt.X('Time (min)'),
+            y=alt.Y('Ossidazione Lipidica (g)', title='Grassi (g/h)'),
+            tooltip=['Time (min)', 'Ossidazione Lipidica (g)']
+        ).properties(height=250)
+        st.altair_chart(chart_fat, use_container_width=True)
+
+        # ROW 3: Confronto Riserve (STACKED + ZONES)
+        st.markdown("---")
+        st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
+        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
+        
+        reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
+        reserve_colors = ['#E57373', '#B71C1C'] 
+        
+        df_reserve_sim = df_sim.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
+        df_reserve_no = df_no.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
+        
+        max_y = start_total * 1.05
+        zones_df = pd.DataFrame({
+            'Start': [max_y * 0.35, max_y * 0.15, 0],
+            'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
+            'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
+        })
+        
+        def create_reserve_stacked_chart(df_data, title):
+            bg = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
+                y=alt.Y('Start', scale=alt.Scale(domain=[0, max_y]), axis=None),
+                y2='End', color=alt.Color('Color', scale=None)
+            )
+            area = alt.Chart(df_data).mark_area().encode(
+                x='Time (min)', 
+                y=alt.Y('Grammi', stack='zero', title='Residuo (g)'),
+                color=alt.Color('Tipo', scale=alt.Scale(domain=reserve_fields, range=reserve_colors)),
+                order=alt.Order('Tipo', sort='ascending'), 
+                tooltip=['Time (min)', 'Tipo', 'Grammi']
+            )
+            return (bg + area).properties(title=title, height=300)
+
+        c_strat, c_digi = st.columns(2)
+        with c_strat:
+            st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
+        with c_digi:
+            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
+
+        # ROW 4: Analisi Gut Load
+        st.markdown("---")
+        st.markdown("#### Analisi Gut Load")
+        base = alt.Chart(df_sim).encode(x='Time (min)')
+        area_gut = base.mark_area(color='#795548', opacity=0.6).encode(y=alt.Y('Gut Load', title='Accumulo (g)'), tooltip=['Gut Load'])
+        rule = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
+        chart_gi = alt.layer(area_gut, rule).properties(height=350)
+        st.altair_chart(chart_gi, use_container_width=True)
+        
+        # Analisi Criticità
+        st.markdown("---")
+        st.subheader("Analisi Criticità & Timing")
+        
+        liver_bonk = df_sim[df_sim['Residuo Epatico'] <= 0]
+        muscle_bonk = df_sim[df_sim['Residuo Muscolare'] <= 20]
+        
+        bonk_time = None
+        cause = None
+        
+        if not liver_bonk.empty:
+            bonk_time = liver_bonk['Time (min)'].iloc[0]
+            cause = "Esaurimento Epatico (Ipoglicemia)"
+        if not muscle_bonk.empty:
+            t_muscle = muscle_bonk['Time (min)'].iloc[0]
+            if bonk_time is None or t_muscle < bonk_time:
+                bonk_time = t_muscle
+                cause = "Esaurimento Muscolare (Gambe Vuote)"
+                
+        c_b1, c_b2 = st.columns([2, 1])
+        with c_b1:
+            if bonk_time:
+                st.error(f"⚠️ **CRITICITÀ RILEVATA AL MINUTO {bonk_time}**")
+                st.write(f"Causa Primaria: **{cause}**")
+            else:
+                st.success("✅ **STRATEGIA SOSTENIBILE**")
+        with c_b2:
+            if bonk_time:
+                 st.metric("Tempo Limite", f"{bonk_time} min", delta="Bonk!", delta_color="inverse")
+            else:
+                 st.metric("Buffer Energetico", "Sicuro")
+
+        # TABELLA
+        st.markdown("---")
+        st.markdown("### 📋 Cronotabella Operativa")
+        if cho_h > 0 and cho_unit > 0:
+            units_per_hour = cho_h / cho_unit
+            interval_rounded = int(60 / units_per_hour)
+            schedule = []
+            current_time = interval_rounded
+            total_ingested = 0
+            while current_time <= duration:
+                total_ingested += cho_unit
+                schedule.append({"Min": current_time, "Azione": f"1 unità ({cho_unit}g)", "Tot": total_ingested})
+                current_time += interval_rounded
+            if schedule:
+                st.table(pd.DataFrame(schedule))
+                st.info(f"Portare **{len(schedule)}** unità.")
+
+    else:
+        # --- CALCOLO REVERSE STRATEGY ---
+        st.subheader("🎯 Calcolatore Strategia Minima")
+        st.markdown("Il sistema calcolerà l'apporto di carboidrati minimo necessario per terminare la gara senza crisi.")
+        
+        if st.button("Calcola Fabbisogno Minimo"):
+             with st.spinner("Simulazione scenari multipli in corso..."):
+                 opt_intake = logic.calculate_minimum_strategy(
+                     tank, duration, subj, params, 
+                     st.session_state.get('metabolic_curve'), mix_sel
+                 )
+                 
+             if opt_intake is not None:
+                 st.success(f"### ✅ Strategia Consigliata: {opt_intake} g/h")
+                 st.write(f"Con questo apporto, arriverai al traguardo con riserve minime di sicurezza.")
+                 
+                 # Mostra grafico della soluzione ottimale
+                 df_opt, _ = logic.simulate_metabolism(
+                     tank, duration, opt_intake, 25, 70, 20, subj, params, 
+                     mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve')
+                 )
+                 st.area_chart(df_opt.set_index('Time (min)')[['Residuo Muscolare', 'Residuo Epatico']])
+             else:
+                 st.error("❌ Impossibile finire la gara!")
+                 st.write("Anche con 120 g/h (massimo assorbibile), le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
