@@ -379,7 +379,6 @@ with tab3:
         uploaded_file = st.file_uploader("Importa File (.zwo)", type=['zwo'])
         intensity_series = None
         
-        # Recupero soglie
         target_thresh_hr = st.session_state['thr_hr_input']
         target_ftp = st.session_state['ftp_watts_input']
         
@@ -396,12 +395,10 @@ with tab3:
                 
                 duration = dur_calc
         
-        # Input Manuale
         if subj.sport == SportType.CYCLING:
             val = st.number_input("Potenza Media Gara (Watt)", 100, 500, 200)
             params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
-            if intensity_series is None:
-                params['avg_hr'] = val 
+            if intensity_series is None: params['avg_hr'] = val 
         else:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
@@ -417,30 +414,25 @@ with tab3:
         st.markdown("### 3. Motore Metabolico")
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
-        # Recupero Curva
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
         
-        if use_lab_active and curve_data:
+        if use_lab_active and curve_data is not None: # FIX PER IL VALUERROR
             st.success("✅ **Curva Metabolica Attiva**")
             if intensity_series:
                 avg_int = sum(intensity_series)/len(intensity_series)
-                st.caption(f"Input Dinamico (Media): {int(avg_int)}")
+                st.caption(f"Input Dinamico: {int(avg_int)}")
             else:
                 st.caption(f"Input Costante: {val}")
-            
             tau = 20
             risk_thresh = 30
         else:
             st.info("ℹ️ **Modello Teorico**")
             st.caption("Regola i parametri per stimare il profilo metabolico.")
-            
             crossover_val = st.slider("Crossover Point (% Soglia)", 50, 90, 75)
-            
             if subj.sport == SportType.CYCLING:
                 eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5)
                 params['efficiency'] = eff_mech
-            
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
             risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
@@ -449,8 +441,6 @@ with tab3:
     sim_mode = st.radio("Modalità Simulazione:", ["Simulazione Manuale (Verifica Tattica)", "Calcolatore Strategia Minima (Reverse)"], horizontal=True)
     
     if sim_mode == "Simulazione Manuale (Verifica Tattica)":
-        # --- ESECUZIONE SIMULAZIONI ---
-        
         df_sim, stats_sim = logic.simulate_metabolism(
             tank, duration, cho_h, cho_unit, 
             crossover_val if not use_lab_active else 75, 
@@ -477,7 +467,6 @@ with tab3:
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
         
-        # KPI
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
         c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
@@ -503,7 +492,6 @@ with tab3:
         ).properties(height=350)
         st.altair_chart(chart_stack, use_container_width=True)
 
-        # ROW 2: Ossidazione Lipidica
         st.markdown("---")
         st.markdown("#### Ossidazione Lipidica (Tasso Orario)")
         chart_fat = alt.Chart(df_sim).mark_line(color='#FFC107', strokeWidth=3).encode(
@@ -513,7 +501,6 @@ with tab3:
         ).properties(height=250)
         st.altair_chart(chart_fat, use_container_width=True)
 
-        # ROW 3: Confronto Riserve (STACKED + ZONES)
         st.markdown("---")
         st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
         st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
@@ -551,7 +538,6 @@ with tab3:
         with c_digi:
             st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
 
-        # ROW 4: Analisi Gut Load
         st.markdown("---")
         st.markdown("#### Analisi Gut Load")
         base = alt.Chart(df_sim).encode(x='Time (min)')
@@ -560,7 +546,6 @@ with tab3:
         chart_gi = alt.layer(area_gut, rule).properties(height=350)
         st.altair_chart(chart_gi, use_container_width=True)
         
-        # Analisi Criticità
         st.markdown("---")
         st.subheader("Analisi Criticità & Timing")
         
@@ -592,7 +577,6 @@ with tab3:
             else:
                  st.metric("Buffer Energetico", "Sicuro")
 
-        # TABELLA
         st.markdown("---")
         st.markdown("### 📋 Cronotabella Operativa")
         if cho_h > 0 and cho_unit > 0:
@@ -608,7 +592,7 @@ with tab3:
             if schedule:
                 st.table(pd.DataFrame(schedule))
                 st.info(f"Portare **{len(schedule)}** unità.")
-
+    
     else:
         # --- CALCOLO REVERSE STRATEGY ---
         st.subheader("🎯 Calcolatore Strategia Minima")
@@ -625,7 +609,6 @@ with tab3:
                  st.success(f"### ✅ Strategia Consigliata: {opt_intake} g/h")
                  st.write(f"Con questo apporto, arriverai al traguardo con riserve minime di sicurezza.")
                  
-                 # Mostra grafico della soluzione ottimale
                  df_opt, _ = logic.simulate_metabolism(
                      tank, duration, opt_intake, 25, 70, 20, subj, params, 
                      mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve')
@@ -633,6 +616,6 @@ with tab3:
                  st.area_chart(df_opt.set_index('Time (min)')[['Residuo Muscolare', 'Residuo Epatico']])
              else:
                  st.error("❌ Impossibile finire la gara!")
-                 st.write("Anche con 120 g/h (massimo assorbibile), le riserve si esauriscono. Devi ridurre l'intensità.")
+                 st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
 
 
