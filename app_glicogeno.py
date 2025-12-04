@@ -345,7 +345,7 @@ with tab3:
     tank_base = st.session_state['tank_data']
     subj = st.session_state['subject_struct']
     
-    # --- 🔴 OVERRIDE MODE ---
+    # --- OVERRIDE MODE ---
     st.markdown("### 🛠️ Modalità Test / Override")
     enable_override = st.checkbox("Abilita Override Livello Iniziale (Bypassa Tab 2)", value=False)
     
@@ -353,17 +353,14 @@ with tab3:
         max_cap = tank_base['max_capacity_g']
         st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
         force_pct = st.slider("Forza Livello Riempimento (%)", 0, 120, 100, 5)
-        
         forced_muscle = (max_cap - 100) * (force_pct / 100.0)
         forced_liver = 100 * (force_pct / 100.0)
-        
         tank = tank_base.copy()
         tank['muscle_glycogen_g'] = forced_muscle
         tank['liver_glycogen_g'] = forced_liver
         tank['actual_available_g'] = forced_muscle + forced_liver
         tank['fill_pct'] = force_pct
         start_total = tank['actual_available_g']
-        
         st.metric("Nuovo Start Glicogeno", f"{int(start_total)} g")
     else:
         tank = tank_base
@@ -384,7 +381,6 @@ with tab3:
         
         if uploaded_file:
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
-            
             if series:
                 if subj.sport == SportType.CYCLING:
                     intensity_series = [val * target_ftp for val in series]
@@ -392,7 +388,6 @@ with tab3:
                 else:
                     intensity_series = [val * target_thresh_hr for val in series]
                     st.success(f"File Corsa: Convertito in BPM (Media ~{int(hr_calc)} bpm)")
-                
                 duration = dur_calc
         
         if subj.sport == SportType.CYCLING:
@@ -403,27 +398,38 @@ with tab3:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
             
-    # --- 2. STRATEGIA NUTRIZIONALE ---
+    # --- 2. STRATEGIA NUTRIZIONALE (RIVOLUZIONATA) ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
         
-        # --- NUOVO INPUT: MODALITÀ ASSUNZIONE ---
         intake_mode_sel = st.radio("Modalità Assunzione:", ["Discretizzata (Gel/Barrette)", "Continuativa (Liquid/Sorsi)"])
         intake_mode_enum = IntakeMode.DISCRETE if intake_mode_sel.startswith("Discret") else IntakeMode.CONTINUOUS
         
-        cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
+        # Mix Spostato qui
+        mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
+        
+        cho_h = 0
+        cho_unit = 0
         
         if intake_mode_enum == IntakeMode.DISCRETE:
-            cho_unit = st.number_input("Grammi CHO per Unità (Gel)", 10, 100, 25)
+            c_u1, c_u2 = st.columns(2)
+            cho_unit = c_u1.number_input("Grammi CHO per Unità", 10, 100, 25)
+            intake_interval = c_u2.number_input("Intervallo Assunzione (min)", 10, 120, 40, step=5)
+            
+            # Calcolo Automatico g/h
+            if intake_interval > 0:
+                cho_h = (60 / intake_interval) * cho_unit
+                st.info(f"Rateo Equivalente: **{int(cho_h)} g/h**")
+            
         else:
-            # Per liquido, il 'cho_unit' è meno rilevante per il calcolo, ma serve per evitare divisioni per zero
-            cho_unit = 30 
+            # Modalità Continuativa (Slider Classico)
+            cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
+            cho_unit = 30 # Dummy per evitare div by zero
             st.caption("In modalità 'Continuativa', l'assunzione è spalmata uniformemente.")
 
     # --- 3. MOTORE METABOLICO ---
     with c_s3:
         st.markdown("### 3. Motore Metabolico")
-        mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
         
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
@@ -452,6 +458,7 @@ with tab3:
     sim_mode = st.radio("Modalità Simulazione:", ["Simulazione Manuale (Verifica Tattica)", "Calcolatore Strategia Minima (Reverse)"], horizontal=True)
     
     if sim_mode == "Simulazione Manuale (Verifica Tattica)":
+        
         df_sim, stats_sim = logic.simulate_metabolism(
             tank, duration, cho_h, cho_unit, 
             crossover_val if not use_lab_active else 75, 
@@ -459,7 +466,7 @@ with tab3:
             mix_type_input=mix_sel, 
             intensity_series=intensity_series,
             metabolic_curve=curve_data if use_lab_active else None,
-            intake_mode=intake_mode_enum # NUOVO PARAMETRO
+            intake_mode=intake_mode_enum
         )
         df_sim['Scenario'] = 'Strategia Integrata'
         df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -476,7 +483,7 @@ with tab3:
         df_no['Scenario'] = 'Riferimento (Digiuno)'
         df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
-        # --- DASHBOARD ---
+        # --- DASHBOARD RISULTATI ---
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
         
@@ -515,8 +522,8 @@ with tab3:
         st.altair_chart(chart_fat, use_container_width=True)
 
         st.markdown("---")
-        st.markdown("#### Confronto Riserve Nette")
-        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato)")
+        st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
+        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
         
         reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
         reserve_colors = ['#E57373', '#B71C1C'] 
@@ -549,7 +556,7 @@ with tab3:
         with c_strat:
             st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
         with c_digi:
-            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno"), use_container_width=True)
+            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Analisi Gut Load")
@@ -592,7 +599,6 @@ with tab3:
 
         st.markdown("---")
         st.markdown("### 📋 Cronotabella Operativa")
-        
         if intake_mode_enum == IntakeMode.DISCRETE and cho_h > 0 and cho_unit > 0:
             units_per_hour = cho_h / cho_unit
             interval_rounded = int(60 / units_per_hour)
@@ -645,6 +651,7 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
 
 
