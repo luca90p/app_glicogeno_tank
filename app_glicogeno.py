@@ -8,7 +8,7 @@ import logic
 import utils
 from data_models import (
     Sex, TrainingStatus, SportType, DietType, FatigueState, 
-    SleepQuality, MenstrualPhase, ChoMixType, Subject
+    SleepQuality, MenstrualPhase, ChoMixType, Subject, IntakeMode
 )
 
 st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
@@ -636,6 +636,7 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
 
 
