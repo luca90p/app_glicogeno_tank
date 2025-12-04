@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
-from data_models import Subject, Sex, ChoMixType, FatigueState, GlycogenState
+from data_models import Subject, Sex, ChoMixType, FatigueState, GlycogenState, IntakeMode
 
 # --- 1. FUNZIONI DI SUPPORTO ---
 
@@ -160,7 +160,7 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
-                        intensity_series=None, metabolic_curve=None):
+                        intensity_series=None, metabolic_curve=None, intake_mode=IntakeMode.DISCRETE):
     
     results = []
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -234,10 +234,18 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
         
-        # Intake
+        # --- GESTIONE INTAKE (MODIFICATA PER DICOTOMIA) ---
         instantaneous_input_g_min = 0.0 
-        if not is_input_zero and intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
-            instantaneous_input_g_min = cho_per_unit_g 
+        
+        if not is_input_zero:
+            if intake_mode == IntakeMode.DISCRETE:
+                # Modalità GEL/SOLIDO: Arriva tutto in un colpo solo a intervalli regolari
+                if t > 0 and intake_interval_min > 0 and t % intake_interval_min == 0:
+                    instantaneous_input_g_min = cho_per_unit_g 
+            else:
+                # Modalità LIQUIDA/CONTINUA: Arriva goccia a goccia ogni minuto
+                # (Es. 60g/h diventano 1g al minuto costanti)
+                instantaneous_input_g_min = constant_carb_intake_g_h / 60.0 
         
         # --- FIX SENSIBILITÀ INTAKE ---
         # Il target verso cui tende l'ossidazione esogena è il MINIMO tra
@@ -395,22 +403,25 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
 
 # --- 4. CALCOLO STRATEGIA MINIMA ---
 
-def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type):
-    """
-    Trova l'intake minimo per finire la gara con riserve > 0.
-    """
+# Modifica la definizione per accettare intake_mode
+def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode):
+    
     optimal = None
+    # Step di 5g da 0 a 120
     for intake in range(0, 125, 5):
+        # Passa intake_mode alla simulazione
         df, stats = simulate_metabolism(
             tank, duration, intake, 25, 75, 20, subj, params, 
-            mix_type_input=mix_type, metabolic_curve=curve_data
+            mix_type_input=mix_type, metabolic_curve=curve_data, intake_mode=intake_mode
         )
         
         min_liver = df['Residuo Epatico'].min()
         min_muscle = df['Residuo Muscolare'].min()
         
+        # Criterio successo
         if min_liver > 5 and min_muscle > 20:
             optimal = intake
             break
             
     return optimal
+
