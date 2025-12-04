@@ -131,6 +131,33 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     final_tank['fill_pct'] = (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
     return pd.DataFrame(trajectory), final_tank
 
+def calculate_minimum_strategy(subject_data, duration_min, subject_obj, activity_params, curve_data, mix_type):
+    """
+    Esegue simulazioni iterative per trovare l'intake minimo che evita il Bonk.
+    """
+    # 1. Cerca intake tra 0 e 120 g/h
+    low = 0
+    high = 150
+    optimal = None
+    
+    # Risoluzione 5g
+    for intake in range(0, 151, 10):
+        df, stats = simulate_metabolism(
+            subject_data, duration_min, intake, 25, 75, 20, subject_obj, activity_params, 
+            mix_type_input=mix_type, metabolic_curve=curve_data
+        )
+        
+        # Verifica condizione Bonk
+        min_liver = df['Residuo Epatico'].min()
+        min_muscle = df['Residuo Muscolare'].min()
+        
+        # Criterio successo: Fegato > 5g E Muscolo > 20g
+        if min_liver > 5 and min_muscle > 20:
+            optimal = intake
+            break
+            
+    return optimal
+
 # --- MOTORE DI SIMULAZIONE GARA (LOGICA COGGAN ORIGINALE) ---
 
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
@@ -144,12 +171,12 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     current_liver_glycogen = subject_data['liver_glycogen_g']
     
     mode = activity_params.get('mode', 'cycling')
-    gross_efficiency = activity_params.get('efficiency', 22.0)
+    gross_efficiency = activity_params.get('efficiency', 21.0)
     
-    avg_watts = activity_params.get('avg_watts', 200)
+    avg_watts = activity_params.get('avg_watts', 180)
     ftp_watts = activity_params.get('ftp_watts', 250) 
     avg_hr = activity_params.get('avg_hr', 150)
-    threshold_hr = activity_params.get('threshold_hr', 170)
+    threshold_hr = activity_params.get('threshold_hr', 165)
     
     threshold_ref = ftp_watts if mode == 'cycling' else threshold_hr
     base_val = avg_watts if mode == 'cycling' else avg_hr
@@ -240,7 +267,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             cho_ratio = total_cho_demand / (total_cho_demand + lab_fat_rate) if (total_cho_demand + lab_fat_rate) > 0 else 0
             rer = 0.7 + (0.3 * cho_ratio) 
         else:
-            standard_crossover = 75.0 
+            standard_crossover = 70.0 
             crossover_val = crossover_pct if crossover_pct else standard_crossover
             if_shift = (standard_crossover - crossover_val) / 100.0
             effective_if_for_rer = max(0.3, current_intensity_factor + if_shift)
@@ -342,5 +369,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         "cho_pct": cho_ratio * 100
     }
     return pd.DataFrame(results), stats
+
 
 
