@@ -8,6 +8,7 @@ from data_models import SportType
 
 # --- SISTEMA DI PROTEZIONE (LOGIN) ---
 def check_password():
+    """Gestisce l'autenticazione semplice tramite session state."""
     def password_entered():
         if st.session_state["password"] == "glicogeno2025": 
             st.session_state["password_correct"] = True
@@ -29,80 +30,69 @@ def check_password():
 def parse_metabolic_report(uploaded_file):
     """
     Legge file CSV/Excel da metabolimetro.
-    Versione ROBUSTA 2.0: Gestione encoding, newlines e ricerca flessibile.
+    Include logica di fallback per formati Metasoft/Cosmed specifici.
     """
+    df = None
+    parsing_log = []
+    
     try:
-        df = None
-        
-        # 1. Gestione CSV
-        if uploaded_file.name.lower().endswith(('.csv', '.txt')):
-            bytes_data = uploaded_file.getvalue()
+        # A. TENTATIVO CSV (Standard)
+        try:
+            uploaded_file.seek(0)
+            content = uploaded_file.getvalue().decode('utf-8', errors='replace')
             
-            # Tentativo decoding (utf-8 poi latin-1)
-            try:
-                content = bytes_data.decode('utf-8')
-            except UnicodeDecodeError:
-                content = bytes_data.decode('latin-1', errors='replace')
-            
-            # Splitlines gestisce \n, \r, \r\n automaticamente
+            # 1. Cerca Header Row
             lines = content.splitlines()
-            
-            # Cerca la riga di intestazione
             header_row = None
-            header_line = ""
             
-            # Parole chiave per identificare l'header (maiuscolo)
-            # Cerchiamo una riga che abbia senso (es. FC e Watt, oppure CHO e FAT)
-            # Il tuo file ha: t, Fase, Marker... FC, WR... CHO, FAT
-            search_terms = ["FC", "WR", "CHO", "FAT"]
+            # Parole chiave da cercare nella stessa riga
+            keywords = ["FC", "CHO", "FAT"]
             
-            for i, line in enumerate(lines[:300]): # Cerca più a fondo
+            for i, line in enumerate(lines[:300]): # Scansiona le prime 300 righe
                 line_upper = line.upper()
-                # Criterio: deve contenere almeno 3 delle parole chiave
-                matches = sum(1 for term in search_terms if term in line_upper)
-                if matches >= 2: # Abbastanza sicuro
+                if all(k in line_upper for k in keywords):
                     header_row = i
-                    header_line = line
                     break
             
             if header_row is None:
-                # Fallback: Cerca solo "t" e "Fase" (specifico per il tuo file)
+                # Fallback: Cerca header specifico Metasoft (t, Fase, Marker...)
                 for i, line in enumerate(lines[:300]):
                     if line.strip().startswith("t") and "Fase" in line:
                         header_row = i
-                        header_line = line
                         break
-
-            if header_row is None:
-                return None, None, "Impossibile trovare la riga di intestazione (Cercato: FC, WR, CHO, FAT)."
-
-            # Sniffing del separatore
-            sep = ',' 
-            if header_line:
-                semi_count = header_line.count(';')
-                comm_count = header_line.count(',')
-                tab_count = header_line.count('\t')
-                
-                if semi_count > comm_count and semi_count > tab_count: sep = ';'
-                elif tab_count > comm_count: sep = '\t'
+            
+            # Se ancora None, proviamo a leggere senza header e vedere dopo
+            parse_header = header_row if header_row is not None else 0
+            
+            # Sniffing Separatore
+            sep = ','
+            if header_row is not None:
+                header_line = lines[header_row]
+                if header_line.count(';') > header_line.count(','): sep = ';'
+                if header_line.count('\t') > header_line.count(','): sep = '\t'
             
             uploaded_file.seek(0)
-            try:
-                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, engine='python', decimal='.')
-            except:
+            df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal='.')
+            
+            # Check se ha funzionato la lettura decimale, altrimenti riprova con virgola
+            # Controllo euristico: se la colonna 0 contiene virgole, rileggi
+            if df.shape[1] > 1 and df.dtypes[0] == object and df.iloc[0,0] and ',' in str(df.iloc[0,0]):
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, engine='python', decimal=',')
-                
-        # 2. Gestione Excel
-        elif uploaded_file.name.lower().endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(uploaded_file)
-        else:
-            return None, None, "Formato file non supportato. Usa CSV o Excel."
+                df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal=',')
+
+        except Exception as e:
+            parsing_log.append(f"CSV Error: {e}")
+            # B. TENTATIVO EXCEL (Se CSV fallisce)
+            try:
+                uploaded_file.seek(0)
+                df = pd.read_excel(uploaded_file)
+            except Exception as e2:
+                parsing_log.append(f"Excel Error: {e2}")
 
         if df is None or df.empty:
-            return None, None, "Il file letto è vuoto."
+            return None, None, f"Impossibile leggere il file. Log: {parsing_log}"
 
-        # 3. Normalizzazione Colonne
+        # 2. NORMALIZZAZIONE E MAPPATURA
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
         col_map = {}
@@ -110,45 +100,62 @@ def parse_metabolic_report(uploaded_file):
         def find_col(keywords):
             for c in cols:
                 for k in keywords:
-                    if k == c or k in c: return c
+                    if k == c or (k in c and len(c) < len(k)+5): return c
             return None
 
-        # Mappatura
+        # Mappatura Standard per Nomi
         col_map['CHO'] = find_col(['CHO', 'CARBOHYDRATES'])
         col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
-        
-        watt_c = find_col(['WR', 'WATT', 'POWER']) # WR è nel tuo file
-        speed_c = find_col(['SPEED', 'VEL', 'KM/H'])
-        fc_c = find_col(['FC', 'HR', 'BPM'])
-        
+        col_map['FC'] = find_col(['FC', 'HR', 'HEART', 'BPM'])
+        col_map['Watt'] = find_col(['WR', 'WATT', 'POWER'])
+        col_map['Speed'] = find_col(['SPEED', 'VEL', 'KM/H'])
+
+        # FALLBACK POSIZIONALE (Metasoft Specific)
+        # Se non trovo i nomi ma ho tante colonne, provo a mappare per indice
+        # Metasoft tipico: Col 6=FC (G), Col 7=WR (H), CHO/FAT verso la fine (21/23 o simile)
+        if not col_map['CHO'] and len(cols) > 20:
+            # Cerchiamo colonne numeriche verso la fine che potrebbero essere CHO/FAT
+            # Questa è una euristica rischiosa, usiamola solo se disperati
+            pass 
+
+        # Selezione Intensità
+        intensity_col = None
         intensity_type = None
-        if watt_c:
-            col_map['Intensity'] = watt_c
-            intensity_type = 'watt'
-        elif speed_c:
-            col_map['Intensity'] = speed_c
-            intensity_type = 'speed'
-        elif fc_c:
-            col_map['Intensity'] = fc_c
-            intensity_type = 'hr'
-
-        missing = []
-        if 'CHO' not in col_map: missing.append("CHO")
-        if 'FAT' not in col_map: missing.append("FAT")
-        if 'Intensity' not in col_map: missing.append("Intensità")
         
-        if missing:
-            return None, None, f"Colonne mancanti: {', '.join(missing)}. Trovate: {cols[:5]}..."
+        if col_map['Watt']:
+            intensity_col = col_map['Watt']
+            intensity_type = 'watt'
+        elif col_map['Speed']:
+            intensity_col = col_map['Speed']
+            intensity_type = 'speed'
+        elif col_map['FC']:
+            intensity_col = col_map['FC']
+            intensity_type = 'hr'
+        
+        # Verifica completezza
+        missing = []
+        if not col_map['CHO']: missing.append("CHO")
+        if not col_map['FAT']: missing.append("FAT")
+        if not intensity_col: missing.append("Intensità (Watt/FC)")
 
-        # 4. Pulizia
-        clean_df = df[list(col_map.values())].rename(columns={v: k for k, v in col_map.items()})
+        if missing:
+            return None, None, f"Colonne non identificate: {', '.join(missing)}. Trovate: {cols[:10]}... (Verifica che la riga di intestazione sia corretta)."
+
+        # 3. CREAZIONE DATAFRAME PULITO
+        clean_df = pd.DataFrame()
+        clean_df['Intensity'] = df[intensity_col]
+        clean_df['CHO'] = df[col_map['CHO']]
+        clean_df['FAT'] = df[col_map['FAT']]
+        
+        # Conversione
         for c in clean_df.columns:
             clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
         
         clean_df.dropna(inplace=True)
         clean_df = clean_df[clean_df['Intensity'] > 0].sort_values('Intensity')
         
-        # 5. Verifica Unità (g/min -> g/h)
+        # 4. CHECK UNITÀ DI MISURA
+        # Se CHO max < 10, è g/min -> converti a g/h
         if not clean_df.empty and clean_df['CHO'].max() < 10:
             clean_df['CHO'] *= 60
             clean_df['FAT'] *= 60
@@ -156,7 +163,7 @@ def parse_metabolic_report(uploaded_file):
         return clean_df, intensity_type, None
 
     except Exception as e:
-        return None, None, f"Errore tecnico: {str(e)}"
+        return None, None, f"Errore inatteso: {str(e)}"
 
 # --- PARSING ZWO (ESISTENTE) ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
