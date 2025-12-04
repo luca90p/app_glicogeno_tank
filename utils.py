@@ -30,132 +30,161 @@ def check_password():
 def parse_metabolic_report(uploaded_file):
     """
     Legge file CSV/Excel da metabolimetro.
-    Include logica di fallback per formati Metasoft/Cosmed specifici.
+    Include logica di fallback POSIZIONALE per file Metasoft.
     """
     df = None
     parsing_log = []
     
     try:
-        # A. TENTATIVO CSV (Standard)
-        try:
-            uploaded_file.seek(0)
-            content = uploaded_file.getvalue().decode('utf-8', errors='replace')
-            
-            # 1. Cerca Header Row
+        # A. LETTURA RAW DEL CONTENUTO
+        # Leggiamo tutto come testo per analizzare la struttura
+        uploaded_file.seek(0)
+        if uploaded_file.name.lower().endswith(('.csv', '.txt')):
+            content = uploaded_file.getvalue().decode('latin-1', errors='replace') # Latin-1 è più sicuro per file legacy
             lines = content.splitlines()
-            header_row = None
-            
-            # Parole chiave da cercare nella stessa riga
-            keywords = ["FC", "CHO", "FAT"]
-            
-            for i, line in enumerate(lines[:300]): # Scansiona le prime 300 righe
-                line_upper = line.upper()
-                if all(k in line_upper for k in keywords):
+        else:
+            # Excel non supportato in questa modalità raw text, ma pandas lo gestisce
+            pass
+
+        # B. TENTATIVO 1: RILEVAMENTO HEADER INTELLIGENTE
+        # Cerchiamo la riga che contiene le label
+        header_row = None
+        sep = ','
+        
+        if uploaded_file.name.lower().endswith(('.csv', '.txt')):
+            for i, line in enumerate(lines[:200]):
+                if "CHO" in line.upper() and "FAT" in line.upper():
                     header_row = i
+                    if line.count(';') > line.count(','): sep = ';'
+                    elif line.count('\t') > line.count(','): sep = '\t'
                     break
             
-            if header_row is None:
-                # Fallback: Cerca header specifico Metasoft (t, Fase, Marker...)
-                for i, line in enumerate(lines[:300]):
-                    if line.strip().startswith("t") and "Fase" in line:
-                        header_row = i
-                        break
-            
-            # Se ancora None, proviamo a leggere senza header e vedere dopo
-            parse_header = header_row if header_row is not None else 0
-            
-            # Sniffing Separatore
-            sep = ','
             if header_row is not None:
-                header_line = lines[header_row]
-                if header_line.count(';') > header_line.count(','): sep = ';'
-                if header_line.count('\t') > header_line.count(','): sep = '\t'
-            
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal='.')
-            
-            # Check se ha funzionato la lettura decimale, altrimenti riprova con virgola
-            # Controllo euristico: se la colonna 0 contiene virgole, rileggi
-            if df.shape[1] > 1 and df.dtypes[0] == object and df.iloc[0,0] and ',' in str(df.iloc[0,0]):
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal=',')
+                try:
+                    df = pd.read_csv(uploaded_file, header=header_row, sep=sep, engine='python', decimal=',')
+                    # Se fallisce la conversione numerica, riprova con punto
+                    if df.shape[1] > 1:
+                         # Test rapido su una colonna dati
+                         try: pd.to_numeric(df.iloc[0, 6])
+                         except: 
+                             uploaded_file.seek(0)
+                             df = pd.read_csv(uploaded_file, header=header_row, sep=sep, engine='python', decimal='.')
+                except:
+                    pass
 
-        except Exception as e:
-            parsing_log.append(f"CSV Error: {e}")
-            # B. TENTATIVO EXCEL (Se CSV fallisce)
-            try:
-                uploaded_file.seek(0)
-                df = pd.read_excel(uploaded_file)
-            except Exception as e2:
-                parsing_log.append(f"Excel Error: {e2}")
+        # C. TENTATIVO 2 (FALLBACK): MAPPATURA POSIZIONALE FISSA (A, G, V, X)
+        # Se il df è vuoto o mancano colonne chiave, usiamo la mappa forzata che hai fornito
+        # A (0) = Tempo, G (6) = FC, H (7) = Watt/WR (spesso accanto a FC), V (21) = CHO, X (23) = FAT
+        
+        forced_map_used = False
+        
+        if df is None or 'CHO' not in [str(c).upper() for c in df.columns]:
+            parsing_log.append("Header automatico fallito. Tento mappatura posizionale (A, G, V, X).")
+            
+            if uploaded_file.name.lower().endswith(('.csv', '.txt')):
+                # Cerchiamo l'inizio dei dati. Di solito dopo la riga delle unità.
+                # Se header era 116 (trovato dal tool), dati iniziano a 118 (Excel 119).
+                data_start_row = 0
+                for i, line in enumerate(lines[:200]):
+                    # Cerchiamo una riga che inizia con un timestamp o numero
+                    parts = line.split(sep)
+                    if len(parts) > 20 and parts[0].strip() and parts[6].strip().replace(',','').replace('.','').isdigit():
+                        data_start_row = i
+                        break
+                
+                if data_start_row > 0:
+                    uploaded_file.seek(0)
+                    # Leggiamo senza header, saltando le righe iniziali
+                    df = pd.read_csv(uploaded_file, header=None, skiprows=data_start_row, sep=sep, engine='python', decimal=',')
+                    forced_map_used = True
+            
+            elif uploaded_file.name.lower().endswith('.xlsx'):
+                 df = pd.read_excel(uploaded_file, header=None)
+                 # Trova inizio dati excel (es. riga 119)
+                 # Semplifichiamo: cerchiamo la prima riga con numeri validi in col G (6) e V (21)
+                 start_idx = 0
+                 for i in range(min(200, len(df))):
+                     val_g = str(df.iloc[i, 6])
+                     if val_g.replace('.','').isdigit() and float(val_g) > 40: # FC > 40
+                         start_idx = i
+                         break
+                 df = df.iloc[start_idx:].reset_index(drop=True)
+                 forced_map_used = True
 
         if df is None or df.empty:
-            return None, None, f"Impossibile leggere il file. Log: {parsing_log}"
+            return None, None, "Impossibile leggere il file. Verifica il formato."
 
-        # 2. NORMALIZZAZIONE E MAPPATURA
-        df.columns = [str(c).strip().upper() for c in df.columns]
-        cols = df.columns.tolist()
-        col_map = {}
-        
-        def find_col(keywords):
-            for c in cols:
-                for k in keywords:
-                    if k == c or (k in c and len(c) < len(k)+5): return c
-            return None
-
-        # Mappatura Standard per Nomi
-        col_map['CHO'] = find_col(['CHO', 'CARBOHYDRATES'])
-        col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
-        col_map['FC'] = find_col(['FC', 'HR', 'HEART', 'BPM'])
-        col_map['Watt'] = find_col(['WR', 'WATT', 'POWER'])
-        col_map['Speed'] = find_col(['SPEED', 'VEL', 'KM/H'])
-
-        # FALLBACK POSIZIONALE (Metasoft Specific)
-        # Se non trovo i nomi ma ho tante colonne, provo a mappare per indice
-        # Metasoft tipico: Col 6=FC (G), Col 7=WR (H), CHO/FAT verso la fine (21/23 o simile)
-        if not col_map['CHO'] and len(cols) > 20:
-            # Cerchiamo colonne numeriche verso la fine che potrebbero essere CHO/FAT
-            # Questa è una euristica rischiosa, usiamola solo se disperati
-            pass 
-
-        # Selezione Intensità
-        intensity_col = None
-        intensity_type = None
-        
-        if col_map['Watt']:
-            intensity_col = col_map['Watt']
-            intensity_type = 'watt'
-        elif col_map['Speed']:
-            intensity_col = col_map['Speed']
-            intensity_type = 'speed'
-        elif col_map['FC']:
-            intensity_col = col_map['FC']
-            intensity_type = 'hr'
-        
-        # Verifica completezza
-        missing = []
-        if not col_map['CHO']: missing.append("CHO")
-        if not col_map['FAT']: missing.append("FAT")
-        if not intensity_col: missing.append("Intensità (Watt/FC)")
-
-        if missing:
-            return None, None, f"Colonne non identificate: {', '.join(missing)}. Trovate: {cols[:10]}... (Verifica che la riga di intestazione sia corretta)."
-
-        # 3. CREAZIONE DATAFRAME PULITO
+        # 3. ESTRAZIONE COLONNE (Dinamica o Posizionale)
         clean_df = pd.DataFrame()
-        clean_df['Intensity'] = df[intensity_col]
-        clean_df['CHO'] = df[col_map['CHO']]
-        clean_df['FAT'] = df[col_map['FAT']]
         
-        # Conversione
-        for c in clean_df.columns:
-            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
-        
+        if forced_map_used:
+            # Mappatura fissa basata sulla tua richiesta
+            # A=0, G=6 (FC), H=7 (WR/Watt - probabile), V=21 (CHO), X=23 (FAT)
+            try:
+                # Verifica che il df abbia abbastanza colonne
+                if df.shape[1] < 24:
+                    return None, None, f"Il file ha solo {df.shape[1]} colonne, ne servono almeno 24 (fino alla colonna X)."
+                
+                clean_df['FC'] = pd.to_numeric(df.iloc[:, 6], errors='coerce') # Col G
+                clean_df['CHO'] = pd.to_numeric(df.iloc[:, 21], errors='coerce') # Col V
+                clean_df['FAT'] = pd.to_numeric(df.iloc[:, 23], errors='coerce') # Col X
+                
+                # Per l'intensità usiamo WR (Col H - indice 7) se esiste, altrimenti FC
+                clean_df['Watt'] = pd.to_numeric(df.iloc[:, 7], errors='coerce') # Col H
+                
+                if clean_df['Watt'].sum() > 0:
+                    clean_df['Intensity'] = clean_df['Watt']
+                    intensity_type = 'watt'
+                else:
+                    clean_df['Intensity'] = clean_df['FC']
+                    intensity_type = 'hr'
+                    
+            except Exception as e:
+                return None, None, f"Errore mappatura posizionale: {e}"
+
+        else:
+            # Mappatura per Nomi (Standard)
+            df.columns = [str(c).strip().upper() for c in df.columns]
+            cols = df.columns.tolist()
+            col_map = {}
+            
+            def find_col(keywords):
+                for c in cols:
+                    for k in keywords:
+                        if k == c or (k in c and len(c) < len(k)+5): return c
+                return None
+
+            col_map['CHO'] = find_col(['CHO', 'CARBOHYDRATES'])
+            col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
+            
+            # Intensità
+            watt_c = find_col(['WR', 'WATT', 'POWER'])
+            speed_c = find_col(['SPEED', 'VEL', 'KM/H'])
+            fc_c = find_col(['FC', 'HR', 'BPM'])
+            
+            intensity_type = None
+            intensity_col = None
+            
+            if watt_c: 
+                intensity_col = watt_c; intensity_type = 'watt'
+            elif speed_c: 
+                intensity_col = speed_c; intensity_type = 'speed'
+            elif fc_c: 
+                intensity_col = fc_c; intensity_type = 'hr'
+            
+            if not (col_map['CHO'] and col_map['FAT'] and intensity_col):
+                return None, None, f"Colonne non trovate per nome. Trovate: {cols[:5]}..."
+
+            clean_df['Intensity'] = pd.to_numeric(df[intensity_col], errors='coerce')
+            clean_df['CHO'] = pd.to_numeric(df[col_map['CHO']], errors='coerce')
+            clean_df['FAT'] = pd.to_numeric(df[col_map['FAT']], errors='coerce')
+
+        # 4. PULIZIA FINALE
         clean_df.dropna(inplace=True)
         clean_df = clean_df[clean_df['Intensity'] > 0].sort_values('Intensity')
         
-        # 4. CHECK UNITÀ DI MISURA
-        # Se CHO max < 10, è g/min -> converti a g/h
+        # Verifica unità (g/min -> g/h)
         if not clean_df.empty and clean_df['CHO'].max() < 10:
             clean_df['CHO'] *= 60
             clean_df['FAT'] *= 60
@@ -163,7 +192,7 @@ def parse_metabolic_report(uploaded_file):
         return clean_df, intensity_type, None
 
     except Exception as e:
-        return None, None, f"Errore inatteso: {str(e)}"
+        return None, None, f"Errore critico parsing: {str(e)}"
 
 # --- PARSING ZWO (ESISTENTE) ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
@@ -202,3 +231,4 @@ def calculate_zones_cycling(ftp):
 
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
