@@ -2,8 +2,11 @@ import streamlit as st
 import xml.etree.ElementTree as ET
 import math
 import pandas as pd
+import numpy as np
 from data_models import SportType
+import io
 
+# --- SISTEMA DI PROTEZIONE (LOGIN) ---
 def check_password():
     """Gestisce l'autenticazione semplice tramite session state."""
     def password_entered():
@@ -26,66 +29,74 @@ def check_password():
 # --- PARSING FILE METABOLICO (TEST LAB) ---
 def parse_metabolic_report(uploaded_file):
     """
-    Legge file CSV/Excel da metabolimetro e estrae la curva metabolica.
-    Cerca colonne chiave come 'CHO', 'FAT', 'Watt'/'WR', 'FC'/'HR'.
+    Legge file CSV/Excel da metabolimetro.
+    Versione ROBUSTA: Sniffa il separatore, trova l'header e pulisce i nomi delle colonne.
     """
     try:
-        # 1. Lettura File (Gestione header variabile)
-        if uploaded_file.name.endswith('.csv'):
-            # Tentativo di lettura intelligente per CSV
-            # Leggiamo le prime righe per trovare l'header
+        df = None
+        
+        # 1. Gestione CSV con Header Variabile
+        if uploaded_file.name.lower().endswith(('.csv', '.txt')):
             content = uploaded_file.getvalue().decode('utf-8', errors='replace')
             lines = content.split('\n')
-            header_row = 0
             
-            # Cerca la riga che contiene sia "CHO" che "FAT"
+            # Cerca la riga di intestazione (quella che contiene "CHO" e "FAT")
+            header_row = 0
+            header_line = ""
             for i, line in enumerate(lines[:200]): 
-                if "CHO" in line and "FAT" in line:
+                if "CHO" in line.upper() and "FAT" in line.upper():
                     header_row = i
+                    header_line = line
                     break
             
-            uploaded_file.seek(0)
+            # Sniffing del separatore dalla riga di header trovata
+            sep = ',' # Default
+            if header_line:
+                if ';' in header_line and header_line.count(';') > header_line.count(','):
+                    sep = ';'
+                elif '\t' in header_line:
+                    sep = '\t'
             
-            # Proviamo a leggere con diversi separatori/decimali
+            uploaded_file.seek(0)
             try:
-                # Tenta separatore automatico
-                df = pd.read_csv(uploaded_file, header=header_row, sep=None, engine='python', decimal=',')
+                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, engine='python', decimal='.')
             except:
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, header=header_row, sep=None, engine='python', decimal='.')
-        else:
-            # Excel
+                # Fallback: prova decimale con virgola
+                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, engine='python', decimal=',')
+                
+        # 2. Gestione Excel
+        elif uploaded_file.name.lower().endswith(('.xls', '.xlsx')):
             df = pd.read_excel(uploaded_file)
-            
-        # 2. Mappatura Colonne (Normalizzazione)
-        # Convertiamo tutto in maiuscolo per la ricerca
+        else:
+            return None, None, "Formato file non supportato. Usa CSV o Excel."
+
+        if df is None or df.empty:
+            return None, None, "Il file sembra vuoto o non leggibile."
+
+        # 3. Normalizzazione Colonne
+        # Rimuove spazi e converte in maiuscolo per la ricerca
+        df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
         col_map = {}
         
-        # Funzione helper per cercare colonne
+        # Funzione helper di ricerca
         def find_col(keywords):
             for c in cols:
-                c_str = str(c).upper()
                 for k in keywords:
-                    if k in c_str:
+                    # Match esatto o "parola contenuta"
+                    if k == c or (k in c and len(c) < len(k)+5): # Evita match spuri su stringhe lunghe
                         return c
             return None
 
-        # Cerca CHO (preferenza g/h, poi g/min, poi solo CHO)
-        cho_c = find_col(['CHO (G/H)', 'CHO G/H']) 
-        if not cho_c: cho_c = find_col(['CHO'])
-        if cho_c: col_map['CHO'] = cho_c
+        # Mappatura
+        col_map['CHO'] = find_col(['CHO', 'CHO (G/H)', 'CARBOHYDRATES'])
+        col_map['FAT'] = find_col(['FAT', 'FAT (G/H)', 'LIPIDS'])
         
-        # Cerca FAT
-        fat_c = find_col(['FAT (G/H)', 'FAT G/H'])
-        if not fat_c: fat_c = find_col(['FAT'])
-        if fat_c: col_map['FAT'] = fat_c
-        
-        # Cerca Intensità
-        # Priorità: Watt > Velocità > FC
-        watt_c = find_col(['WR', 'WATT', 'POWER'])
-        speed_c = find_col(['SPEED', 'VEL', 'KM/H', ' V ']) # ' V ' con spazi per evitare match parziali errati
-        fc_c = find_col(['FC', 'HR', 'HEART', 'BPM'])
+        # Intensità (Priorità: Watt -> Speed -> FC)
+        watt_c = find_col(['WR', 'WATT', 'WATTS', 'POWER', 'POW'])
+        speed_c = find_col(['SPEED', 'VEL', 'KM/H', 'V'])
+        fc_c = find_col(['FC', 'HR', 'HEART RATE', 'BPM'])
         
         intensity_type = None
         if watt_c:
@@ -97,34 +108,39 @@ def parse_metabolic_report(uploaded_file):
         elif fc_c:
             col_map['Intensity'] = fc_c
             intensity_type = 'hr'
-        else:
-            return None, None, "Colonna Intensità (Watt, Speed o FC) non trovata nel file."
 
-        if 'CHO' not in col_map or 'FAT' not in col_map:
-            return None, None, "Colonne CHO o FAT non trovate. Assicurati che il file contenga i dati di ossidazione."
+        # Verifica Errori Mappatura
+        missing = []
+        if 'CHO' not in col_map or not col_map['CHO']: missing.append("CHO")
+        if 'FAT' not in col_map or not col_map['FAT']: missing.append("FAT")
+        if 'Intensity' not in col_map: missing.append("Intensità (Watt/FC/Vel)")
+        
+        if missing:
+            found_cols_str = ", ".join(cols[:10]) + "..."
+            return None, None, f"Colonne mancanti: {', '.join(missing)}. Colonne trovate nel file: [{found_cols_str}]"
 
-        # 3. Pulizia Dati
+        # 4. Creazione DataFrame Pulito
         clean_df = df[list(col_map.values())].rename(columns={v: k for k, v in col_map.items()})
         
-        # Conversione in numerico e drop errori
+        # Conversione numerica forzata
         for c in clean_df.columns:
             clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
         
         clean_df.dropna(inplace=True)
-        # Rimuovi righe con intensità zero o negativa
         clean_df = clean_df[clean_df['Intensity'] > 0].sort_values('Intensity')
         
-        # 4. Verifica unità di misura
-        # Se i valori max di CHO sono < 10, probabilmente sono g/min -> convertire a g/h
-        if clean_df['CHO'].max() < 10: 
+        # 5. Verifica Unità di Misura (g/min -> g/h)
+        # Se il consumo max di CHO è < 10, probabilmente sono g/min -> convertire a g/h
+        if not clean_df.empty and clean_df['CHO'].max() < 10:
             clean_df['CHO'] *= 60
             clean_df['FAT'] *= 60
             
         return clean_df, intensity_type, None
 
     except Exception as e:
-        return None, None, f"Errore durante la lettura del file: {str(e)}"
+        return None, None, f"Errore tecnico lettura file: {str(e)}"
 
+# --- LOGICA DI PARSING ZWO ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     """Esegue il parsing di file XML formato ZWO (Zwift Workout)."""
     try:
@@ -187,6 +203,7 @@ def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     
     return [], 0, 0, 0
 
+# --- FUNZIONI ZONE ---
 def calculate_zones_cycling(ftp):
     return [
         {"Zona": "Z1 - Recupero Attivo", "Range %": "< 55%", "Valore": f"< {int(ftp*0.55)} W"},
@@ -205,4 +222,3 @@ def calculate_zones_running_hr(thr):
         {"Zona": "Z4 - Sub-Soglia", "Range %": "95 - 99% LTHR", "Valore": f"{int(thr*0.95)} - {int(thr*0.99)} bpm"},
         {"Zona": "Z5 - Soglia / VO2max", "Range %": "> 100% LTHR", "Valore": f"> {int(thr*1.00)} bpm"},
     ]
-
