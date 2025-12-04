@@ -236,38 +236,43 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
         
-        # --- GESTIONE INTAKE ESOGENO (FIX SENSIBILITÀ) ---
-        instantaneous_input_g_min = 0.0 
-        if not is_input_zero and intake_interval_min <= duration_min and t > 0 and t % intake_interval_min == 0:
-            instantaneous_input_g_min = cho_per_unit_g 
+        # --- FIX SENSIBILITÀ INTAKE ---
+        # Il target verso cui tende l'ossidazione esogena è il MINIMO tra
+        # 1. Il tasso fisiologico massimo (es. 90g/h)
+        # 2. Il tasso di ingestione medio dell'utente (es. 5g/h)
+        # Questo impedisce al sistema di bruciare 1.5g/min se l'utente ne ha messo solo briciole.
         
-        # FIX: Il target non è solo il Max Fisiologico, ma il MINIMO tra (Input Reale e Max Fisiologico).
-        # Questo rende il modello sensibile se metti 5g/h vs 90g/h.
-        user_intake_g_min = constant_carb_intake_g_h / 60.0
-        effective_target = min(user_intake_g_min, max_exo_rate_g_min) * oxidation_efficiency_input
+        user_intake_rate = constant_carb_intake_g_h / 60.0 
+        physiological_limit = max_exo_rate_g_min
         
-        # Se l'utente non mangia, il target è zero.
-        if is_input_zero: effective_target = 0.0
+        # Se l'utente non mangia nulla, il target è 0. 
+        # Se mangia poco, il target è poco. Se mangia troppo, il target è il limite fisiologico.
+        if is_input_zero:
+            effective_target = 0.0
+        else:
+            effective_target = min(user_intake_rate, physiological_limit) * oxidation_efficiency_input
         
         if t > 0:
-            # Cinetica: tende verso il target effettivo (limitato dall'input)
-            current_exo_oxidation_g_min += alpha * (effective_target - current_exo_oxidation_g_min)
+            if is_input_zero:
+                current_exo_oxidation_g_min *= (1 - alpha) 
+            else:
+                # Tende verso il target effettivo (che ora rispetta l'input utente)
+                current_exo_oxidation_g_min += alpha * (effective_target - current_exo_oxidation_g_min)
             
-            # Controllo Fisico: Non puoi ossidare ciò che non è nello stomaco
-            # Prima aggiungiamo l'input allo stomaco
+            current_exo_oxidation_g_min = max(0.0, current_exo_oxidation_g_min)
+            
+            # Controllo Fisico: Non puoi ossidare più di quello che hai nello stomaco
             gut_accumulation_total += (instantaneous_input_g_min * oxidation_efficiency_input)
             
-            # Poi limitiamo l'ossidazione reale a ciò che è disponibile
-            current_exo_oxidation_g_min = min(current_exo_oxidation_g_min, gut_accumulation_total)
+            # Clamp reale: se lo stomaco è vuoto, l'ossidazione crolla
+            real_oxidation = min(current_exo_oxidation_g_min, gut_accumulation_total)
+            current_exo_oxidation_g_min = real_oxidation
             
-            # Rimuoviamo ciò che è stato ossidato
-            gut_accumulation_total -= current_exo_oxidation_g_min
+            gut_accumulation_total -= real_oxidation
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
             
             total_intake_cumulative += instantaneous_input_g_min 
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
-        else:
-            current_exo_oxidation_g_min = 0.0
         
         # --- CONSUMO (TEORICO vs LAB) ---
         if is_lab_data:
@@ -410,3 +415,4 @@ def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_typ
             break
             
     return optimal
+
