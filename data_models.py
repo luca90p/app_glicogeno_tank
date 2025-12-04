@@ -74,6 +74,11 @@ class ChoMixType(Enum):
         self.max_rate_gh = max_rate_gh 
         self.label = label
 
+# --- NUOVO ENUM PER MODALITÀ ASSUNZIONE ---
+class IntakeMode(Enum):
+    DISCRETE = "Discretizzata (Gel / Barrette / Solidi)"
+    CONTINUOUS = "Continuativa (Bevanda Isotonica / Sorsi frequenti)"
+
 # --- NUOVA ENUM PER LIVELLO INIZIALE ---
 class GlycogenState(Enum):
     EMPTY = (0.25, "Esausto (Post-Gara/Lungo)")
@@ -112,3 +117,4 @@ class Subject:
         if self.glycogen_conc_g_kg >= 22.0:
             base += 0.03
         return base
+
