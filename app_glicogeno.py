@@ -398,15 +398,17 @@ with tab3:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
             
-    # --- 2. STRATEGIA NUTRIZIONALE (RIVOLUZIONATA) ---
+    # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
-        
         intake_mode_sel = st.radio("Modalità Assunzione:", ["Discretizzata (Gel/Barrette)", "Continuativa (Liquid/Sorsi)"])
         intake_mode_enum = IntakeMode.DISCRETE if intake_mode_sel.startswith("Discret") else IntakeMode.CONTINUOUS
         
-        # Mix Spostato qui
+        # Mix Carboidrati Spostato Qui
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
+        
+        # Cutoff Assunzione
+        intake_cutoff = st.slider("Stop Assunzione prima del termine (min)", 0, 60, 20, help="Evita di assumere integratori inutili troppo vicini al traguardo.")
         
         cho_h = 0
         cho_unit = 0
@@ -415,16 +417,12 @@ with tab3:
             c_u1, c_u2 = st.columns(2)
             cho_unit = c_u1.number_input("Grammi CHO per Unità", 10, 100, 25)
             intake_interval = c_u2.number_input("Intervallo Assunzione (min)", 10, 120, 40, step=5)
-            
-            # Calcolo Automatico g/h
             if intake_interval > 0:
                 cho_h = (60 / intake_interval) * cho_unit
                 st.info(f"Rateo Equivalente: **{int(cho_h)} g/h**")
-            
         else:
-            # Modalità Continuativa (Slider Classico)
             cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
-            cho_unit = 30 # Dummy per evitare div by zero
+            cho_unit = 30 
             st.caption("In modalità 'Continuativa', l'assunzione è spalmata uniformemente.")
 
     # --- 3. MOTORE METABOLICO ---
@@ -466,7 +464,8 @@ with tab3:
             mix_type_input=mix_sel, 
             intensity_series=intensity_series,
             metabolic_curve=curve_data if use_lab_active else None,
-            intake_mode=intake_mode_enum
+            intake_mode=intake_mode_enum,
+            intake_cutoff_min=intake_cutoff
         )
         df_sim['Scenario'] = 'Strategia Integrata'
         df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -599,22 +598,35 @@ with tab3:
 
         st.markdown("---")
         st.markdown("### 📋 Cronotabella Operativa")
+        
         if intake_mode_enum == IntakeMode.DISCRETE and cho_h > 0 and cho_unit > 0:
             units_per_hour = cho_h / cho_unit
             interval_rounded = int(60 / units_per_hour)
             schedule = []
             current_time = interval_rounded
             total_ingested = 0
-            while current_time <= duration:
+            
+            # Logica Cronotabella con Cutoff
+            while current_time <= (duration - intake_cutoff):
                 total_ingested += cho_unit
-                schedule.append({"Min": current_time, "Azione": f"1 unità ({cho_unit}g)", "Tot": total_ingested})
+                schedule.append({
+                    "Minuto": current_time,
+                    "Azione": f"Assumere 1 unità ({cho_unit}g CHO)",
+                    "Totale Ingerito": f"{total_ingested}g"
+                })
                 current_time += interval_rounded
+            
             if schedule:
                 st.table(pd.DataFrame(schedule))
                 st.info(f"Portare **{len(schedule)}** unità.")
+            else:
+                st.warning("Nessuna assunzione prevista (durata troppo breve o cutoff troppo ampio).")
+
         elif intake_mode_enum == IntakeMode.CONTINUOUS and cho_h > 0:
             st.info(f"Bere continuativamente: **{cho_h} g/ora** di carboidrati.")
-            total_needs = (duration/60) * cho_h
+            # Cutoff per il calcolo totale
+            effective_duration = max(0, duration - intake_cutoff)
+            total_needs = (effective_duration/60) * cho_h
             st.write(f"**Totale Gara:** preparare borracce con **{int(total_needs)} g** totali.")
     
     else:
@@ -626,7 +638,7 @@ with tab3:
              with st.spinner("Simulazione scenari multipli in corso..."):
                  opt_intake = logic.calculate_minimum_strategy(
                      tank, duration, subj, params, 
-                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum
+                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum, intake_cutoff
                  )
                  
              if opt_intake is not None:
@@ -634,9 +646,12 @@ with tab3:
                       st.success("### ✅ Strategia Consigliata: Nessuna integrazione necessaria (0 g/h)")
                  elif intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
                      units_per_hour = opt_intake / cho_unit
-                     interval_min = int(60 / units_per_hour)
-                     st.success(f"### ✅ Strategia: Assumere 1 unità ogni {interval_min} min")
-                     st.caption(f"(Equivalente a **{opt_intake} g/h**)")
+                     if units_per_hour > 0:
+                         interval_min = int(60 / units_per_hour)
+                         st.success(f"### ✅ Strategia: Assumere 1 unità ogni {interval_min} min")
+                         st.caption(f"(Equivalente a **{opt_intake} g/h**)")
+                     else:
+                         st.warning("L'intake richiesto è troppo basso per la dimensione dell'unità scelta.")
                  else:
                      st.success(f"### ✅ Strategia Consigliata: Bere {opt_intake} g/h")
 
@@ -645,7 +660,7 @@ with tab3:
                  df_opt, _ = logic.simulate_metabolism(
                      tank, duration, opt_intake, 25, 70, 20, subj, params, 
                      mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
-                     intake_mode=intake_mode_enum
+                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
                  )
                  st.area_chart(df_opt.set_index('Time (min)')[['Residuo Muscolare', 'Residuo Epatico']])
              else:
