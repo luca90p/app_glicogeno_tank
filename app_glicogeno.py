@@ -21,6 +21,15 @@ Supporta **Atleti Ibridi**, profili metabolici personalizzati e **Simulazione Sc
 if not utils.check_password():
     st.stop()
 
+# Funzione Helper per Grafici Standardizzati
+def create_cutoff_line(cutoff_time):
+    return alt.Chart(pd.DataFrame({'x': [cutoff_time]})).mark_rule(
+        color='black', strokeDash=[5, 5], size=2
+    ).encode(
+        x='x',
+        tooltip=[alt.Tooltip('x', title='Stop Assunzione (min)')]
+    )
+
 def create_risk_zone_chart(df_data, title, max_y):
     zones_df = pd.DataFrame({
         'Zone': ['Sicurezza', 'Attenzione', 'Critico'],
@@ -353,17 +362,14 @@ with tab3:
         max_cap = tank_base['max_capacity_g']
         st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
         force_pct = st.slider("Forza Livello Riempimento (%)", 0, 120, 100, 5)
-        
         forced_muscle = (max_cap - 100) * (force_pct / 100.0)
         forced_liver = 100 * (force_pct / 100.0)
-        
         tank = tank_base.copy()
         tank['muscle_glycogen_g'] = forced_muscle
         tank['liver_glycogen_g'] = forced_liver
         tank['actual_available_g'] = forced_muscle + forced_liver
         tank['fill_pct'] = force_pct
         start_total = tank['actual_available_g']
-        
         st.metric("Nuovo Start Glicogeno", f"{int(start_total)} g")
     else:
         tank = tank_base
@@ -384,7 +390,6 @@ with tab3:
         
         if uploaded_file:
             series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
-            
             if series:
                 if subj.sport == SportType.CYCLING:
                     intensity_series = [val * target_ftp for val in series]
@@ -392,7 +397,6 @@ with tab3:
                 else:
                     intensity_series = [val * target_thresh_hr for val in series]
                     st.success(f"File Corsa: Convertito in BPM (Media ~{int(hr_calc)} bpm)")
-                
                 duration = dur_calc
         
         if subj.sport == SportType.CYCLING:
@@ -403,18 +407,14 @@ with tab3:
             val = st.number_input("FC Media Gara (BPM)", 100, 220, 150)
             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
             
-    # --- 2. STRATEGIA NUTRIZIONALE (RIVOLUZIONATA) ---
+    # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
         st.markdown("### 2. Strategia Nutrizionale")
-        
         intake_mode_sel = st.radio("Modalità Assunzione:", ["Discretizzata (Gel/Barrette)", "Continuativa (Liquid/Sorsi)"])
         intake_mode_enum = IntakeMode.DISCRETE if intake_mode_sel.startswith("Discret") else IntakeMode.CONTINUOUS
         
-        # Mix Carboidrati
         mix_sel = st.selectbox("Mix Carboidrati", list(ChoMixType), format_func=lambda x: x.label)
-        
-        # Cutoff Assunzione
-        intake_cutoff = st.slider("Stop Assunzione prima del termine (min)", 0, 60, 20, help="Evita di assumere integratori inutili troppo vicini al traguardo.")
+        intake_cutoff = st.slider("Stop Assunzione prima del termine (min)", 0, 60, 20, help="Evita assunzioni inutili nel finale.")
         
         cho_h = 0
         cho_unit = 0
@@ -424,38 +424,30 @@ with tab3:
             cho_unit = c_u1.number_input("Grammi CHO per Unità", 10, 100, 25)
             intake_interval = c_u2.number_input("Intervallo Assunzione (min)", 10, 120, 40, step=5)
             
-            # Calcolo Automatico Rateo (con considerazione Cutoff per precisione)
+            # CALCOLO RATEO EFFETTIVO CON CUTOFF
             if intake_interval > 0:
-                # Quanti intake ci stanno realmente nella finestra utile?
                 feeding_window = duration - intake_cutoff
-                
-                # Conta intake al minuto 0 + ogni intervallo
                 num_intakes = 0
                 for t in range(0, int(feeding_window) + 1):
                     if t == 0 or (t > 0 and t % intake_interval == 0):
                         num_intakes += 1
                 
                 total_grams_planned = num_intakes * cho_unit
-                
-                # Rateo orario effettivo
                 if duration > 0:
                     cho_h = total_grams_planned / (duration / 60)
                 else:
                     cho_h = 0
                     
                 st.info(f"Rateo Effettivo Gara: **{int(cho_h)} g/h**")
-                st.caption(f"Totale Assunzioni: {num_intakes} ({total_grams_planned}g totali)")
-            
+                st.caption(f"Pianificati: {num_intakes} assunzioni ({total_grams_planned}g totali) nella finestra 0-{int(feeding_window)} min.")
         else:
-            # Modalità Continuativa (Slider Classico)
             cho_h = st.slider("Target Intake (g/h)", 0, 120, 60, step=5)
-            cho_unit = 30 # Dummy per evitare div by zero
-            st.caption("In modalità 'Continuativa', l'assunzione è spalmata uniformemente.")
+            cho_unit = 30 
+            st.caption("Assunzione continua.")
 
     # --- 3. MOTORE METABOLICO ---
     with c_s3:
         st.markdown("### 3. Motore Metabolico")
-        
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
         
@@ -482,8 +474,10 @@ with tab3:
     st.markdown("---")
     sim_mode = st.radio("Modalità Simulazione:", ["Simulazione Manuale (Verifica Tattica)", "Calcolatore Strategia Minima (Reverse)"], horizontal=True)
     
+    # Oggetto cutoff line per tutti i grafici
+    cutoff_line = create_cutoff_line(duration - intake_cutoff)
+    
     if sim_mode == "Simulazione Manuale (Verifica Tattica)":
-        
         df_sim, stats_sim = logic.simulate_metabolism(
             tank, duration, cho_h, cho_unit, 
             crossover_val if not use_lab_active else 75, 
@@ -509,10 +503,8 @@ with tab3:
         df_no['Scenario'] = 'Riferimento (Digiuno)'
         df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
 
-        # --- DASHBOARD RISULTATI ---
         st.markdown("---")
         st.subheader("Analisi Cinetica e Substrati")
-        
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
         c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
@@ -536,7 +528,7 @@ with tab3:
             color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
             tooltip=['Time (min)', 'Fonte', 'g/h']
         ).properties(height=350)
-        st.altair_chart(chart_stack, use_container_width=True)
+        st.altair_chart(chart_stack + cutoff_line, use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Ossidazione Lipidica (Tasso Orario)")
@@ -545,11 +537,10 @@ with tab3:
             y=alt.Y('Ossidazione Lipidica (g)', title='Grassi (g/h)'),
             tooltip=['Time (min)', 'Ossidazione Lipidica (g)']
         ).properties(height=250)
-        st.altair_chart(chart_fat, use_container_width=True)
+        st.altair_chart(chart_fat + cutoff_line, use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Confronto Riserve Nette (Svuotamento Serbatoio)")
-        st.caption("Confronto: Deplezione Glicogeno Totale (Muscolo + Fegato) con Zone di Rischio")
         
         reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
         reserve_colors = ['#E57373', '#B71C1C'] 
@@ -576,20 +567,20 @@ with tab3:
                 order=alt.Order('Tipo', sort='ascending'), 
                 tooltip=['Time (min)', 'Tipo', 'Grammi']
             )
-            return (bg + area).properties(title=title, height=300)
+            return (bg + area + cutoff_line).properties(title=title, height=300)
 
         c_strat, c_digi = st.columns(2)
         with c_strat:
             st.altair_chart(create_reserve_stacked_chart(df_reserve_sim, "Con Integrazione"), use_container_width=True)
         with c_digi:
-            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno (No Integrazione)"), use_container_width=True)
+            st.altair_chart(create_reserve_stacked_chart(df_reserve_no, "Digiuno"), use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Analisi Gut Load")
         base = alt.Chart(df_sim).encode(x='Time (min)')
         area_gut = base.mark_area(color='#795548', opacity=0.6).encode(y=alt.Y('Gut Load', title='Accumulo (g)'), tooltip=['Gut Load'])
         rule = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
-        chart_gi = alt.layer(area_gut, rule).properties(height=350)
+        chart_gi = alt.layer(area_gut, rule, cutoff_line).properties(height=350)
         st.altair_chart(chart_gi, use_container_width=True)
         
         st.markdown("---")
@@ -628,12 +619,10 @@ with tab3:
         
         if intake_mode_enum == IntakeMode.DISCRETE and cho_h > 0 and cho_unit > 0:
             schedule = []
-            current_time = intake_interval # Primo gel
+            current_time = intake_interval
             total_ingested = 0
-            
-            # Se il primo gel è a 0 min (start)
+            # Start gel
             if intake_interval > 0:
-                # Assunzione Start
                 total_ingested += cho_unit
                 schedule.append({"Minuto": 0, "Azione": f"Assumere 1 unità ({cho_unit}g CHO)", "Totale Ingerito": f"{total_ingested}g"})
                 
@@ -674,8 +663,6 @@ with tab3:
                  if opt_intake == 0:
                       st.success("### ✅ Strategia Consigliata: Nessuna integrazione necessaria (0 g/h)")
                  elif intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
-                     # Calcolo inverso dell'intervallo ideale per ottenere quel g/h
-                     # Se serve 45 g/h con gel da 25g -> 1.8 gel/h -> un gel ogni 33 min
                      units_per_hour = opt_intake / cho_unit
                      if units_per_hour > 0:
                          interval_min = int(60 / units_per_hour)
@@ -688,12 +675,73 @@ with tab3:
 
                  st.write(f"Con questo apporto, arriverai al traguardo con riserve minime di sicurezza.")
                  
-                 df_opt, _ = logic.simulate_metabolism(
+                 df_opt, stats_opt = logic.simulate_metabolism(
                      tank, duration, opt_intake, 25, 70, 20, subj, params, 
                      mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
                  )
-                 st.area_chart(df_opt.set_index('Time (min)')[['Residuo Muscolare', 'Residuo Epatico']])
+                 
+                 # --- VISUALIZZAZIONE RISULTATI CALCOLO MINIMO ---
+                 
+                 # 1. KPI
+                 c1, c2, c3, c4 = st.columns(4)
+                 c1.metric("IF", f"{stats_opt['intensity_factor']:.2f}")
+                 c2.metric("RER", f"{stats_opt['avg_rer']:.2f}")
+                 c3.metric("Substrati", f"{int(stats_opt['cho_pct'])}% CHO", f"{100-int(stats_opt['cho_pct'])}% FAT")
+                 c4.metric("Residuo Finale", f"{int(stats_opt['final_glycogen'])} g")
+                 
+                 # 2. Grafico Bilancio
+                 st.markdown("#### Bilancio Energetico (Strategia Minima)")
+                 df_melt_opt = df_opt.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
+                 order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
+                 colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
+                 
+                 chart_stack_opt = alt.Chart(df_melt_opt).mark_area().encode(
+                    x='Time (min)', y='g/h', 
+                    color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
+                    tooltip=['Time (min)', 'Fonte', 'g/h']
+                 ).properties(height=300)
+                 st.altair_chart(chart_stack_opt + cutoff_line, use_container_width=True)
+                 
+                 # 3. Grafico Ossidazione Grassi
+                 st.markdown("#### Ossidazione Lipidica")
+                 chart_fat_opt = alt.Chart(df_opt).mark_line(color='#FFC107', strokeWidth=3).encode(
+                    x=alt.X('Time (min)'),
+                    y=alt.Y('Ossidazione Lipidica (g)', title='Grassi (g/h)'),
+                 ).properties(height=200)
+                 st.altair_chart(chart_fat_opt + cutoff_line, use_container_width=True)
+                 
+                 # 4. Riserve
+                 st.markdown("#### Riserve Residue")
+                 reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
+                 df_res_opt = df_opt.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
+                 
+                 max_y = start_total * 1.05
+                 zones_df = pd.DataFrame({
+                    'Start': [max_y * 0.35, max_y * 0.15, 0],
+                    'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
+                    'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
+                 })
+                 
+                 bg = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
+                    y=alt.Y('Start', scale=alt.Scale(domain=[0, max_y]), axis=None),
+                    y2='End', color=alt.Color('Color', scale=None)
+                 )
+                 area_opt = alt.Chart(df_res_opt).mark_area().encode(
+                    x='Time (min)', 
+                    y=alt.Y('Grammi', stack='zero'),
+                    color=alt.Color('Tipo', scale=alt.Scale(domain=reserve_fields, range=['#E57373', '#B71C1C'])),
+                    order=alt.Order('Tipo', sort='ascending')
+                 )
+                 st.altair_chart((bg + area_opt + cutoff_line).properties(height=300), use_container_width=True)
+                 
+                 # 5. Gut Load
+                 st.markdown("#### Gut Load")
+                 base_opt = alt.Chart(df_opt).encode(x='Time (min)')
+                 area_gut_opt = base_opt.mark_area(color='#795548', opacity=0.6).encode(y='Gut Load')
+                 rule_opt = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
+                 st.altair_chart((area_gut_opt + rule_opt + cutoff_line).properties(height=250), use_container_width=True)
+
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
