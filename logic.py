@@ -155,12 +155,13 @@ def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState
     final_tank['fill_pct'] = (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
     return pd.DataFrame(trajectory), final_tank
 
-# --- 3. MOTORE SIMULAZIONE (FIX SENSITIVITY) ---
+# --- 3. MOTORE SIMULAZIONE (CON CUTOFF) ---
 
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
-                        intensity_series=None, metabolic_curve=None, intake_mode=IntakeMode.DISCRETE):
+                        intensity_series=None, metabolic_curve=None, 
+                        intake_mode=IntakeMode.DISCRETE, intake_cutoff_min=0): # NUOVO PARAMETRO
     
     results = []
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -214,13 +215,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         # Intensità
         current_intensity_factor = intensity_factor_reference
         current_val = base_val
-
         if intensity_series is not None and t < len(intensity_series):
             current_val = intensity_series[t]
             current_intensity_factor = current_val / threshold_ref if threshold_ref > 0 else 0.8
         
         current_kcal_demand = 0.0
-        
         if mode == 'cycling':
             instant_power = current_val
             current_eff = gross_efficiency
@@ -234,58 +233,44 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             demand_scaling = current_intensity_factor / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
         
-        # --- GESTIONE INTAKE (MODIFICATA PER DICOTOMIA) ---
+        # --- GESTIONE INTAKE CON CUTOFF ---
         instantaneous_input_g_min = 0.0 
         
-        if not is_input_zero:
+        # Se siamo nella finestra di Stop (es. ultimi 20 min), niente cibo.
+        in_feeding_window = t <= (duration_min - intake_cutoff_min)
+        
+        if not is_input_zero and in_feeding_window:
             if intake_mode == IntakeMode.DISCRETE:
-                # Modalità GEL/SOLIDO: Arriva tutto in un colpo solo a intervalli regolari
-                if t > 0 and intake_interval_min > 0 and t % intake_interval_min == 0:
+                if t == 0 or (t > 0 and intake_interval_min > 0 and t % intake_interval_min == 0):
                     instantaneous_input_g_min = cho_per_unit_g 
             else:
-                # Modalità LIQUIDA/CONTINUA: Arriva goccia a goccia ogni minuto
-                # (Es. 60g/h diventano 1g al minuto costanti)
-                instantaneous_input_g_min = constant_carb_intake_g_h / 60.0 
+                instantaneous_input_g_min = constant_carb_intake_g_h / 60.0
         
-        # --- FIX SENSIBILITÀ INTAKE ---
-        # Il target verso cui tende l'ossidazione esogena è il MINIMO tra
-        # 1. Il tasso fisiologico massimo (es. 90g/h)
-        # 2. Il tasso di ingestione medio dell'utente (es. 5g/h)
-        # Questo impedisce al sistema di bruciare 1.5g/min se l'utente ne ha messo solo briciole.
+        target_exo_oxidation_limit_g_min = max_exo_rate_g_min * oxidation_efficiency_input
         
+        # Logica Target Sensibile
         user_intake_rate = constant_carb_intake_g_h / 60.0 
-        physiological_limit = max_exo_rate_g_min
-        
-        # Se l'utente non mangia nulla, il target è 0. 
-        # Se mangia poco, il target è poco. Se mangia troppo, il target è il limite fisiologico.
-        if is_input_zero:
-            effective_target = 0.0
-        else:
-            effective_target = min(user_intake_rate, physiological_limit) * oxidation_efficiency_input
-        
+        effective_target = min(user_intake_rate, max_exo_rate_g_min) * oxidation_efficiency_input
+        if is_input_zero: effective_target = 0.0
+
         if t > 0:
             if is_input_zero:
                 current_exo_oxidation_g_min *= (1 - alpha) 
             else:
-                # Tende verso il target effettivo (che ora rispetta l'input utente)
                 current_exo_oxidation_g_min += alpha * (effective_target - current_exo_oxidation_g_min)
             
             current_exo_oxidation_g_min = max(0.0, current_exo_oxidation_g_min)
             
-            # Controllo Fisico: Non puoi ossidare più di quello che hai nello stomaco
             gut_accumulation_total += (instantaneous_input_g_min * oxidation_efficiency_input)
-            
-            # Clamp reale: se lo stomaco è vuoto, l'ossidazione crolla
             real_oxidation = min(current_exo_oxidation_g_min, gut_accumulation_total)
             current_exo_oxidation_g_min = real_oxidation
-            
             gut_accumulation_total -= real_oxidation
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
             
             total_intake_cumulative += instantaneous_input_g_min 
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
-        # --- CONSUMO (LAB o TEORICO) ---
+        # --- CONSUMO ---
         if is_lab_data:
             cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve)
             if t > 60:
@@ -294,9 +279,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 fat_rate_gh *= (1.0 - ((t - 60) * 0.0003))
             total_cho_demand = cho_rate_gh / 60.0
             g_fat = fat_rate_gh / 60.0
-            # Dummy vars
             kcal_cho_demand = total_cho_demand * 4.1
-            cho_ratio = 1.0
+            cho_ratio = 1.0 
             rer = 0.85 
         else:
             standard_crossover = 75.0 
@@ -321,26 +305,21 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         
         total_cho_g_min = total_cho_demand
         
-        # --- RIPARTIZIONE (COGGAN) ---
+        # --- RIPARTIZIONE ---
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
-        
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
         if current_muscle_glycogen <= 0: muscle_usage_g_min = 0
-        
         blood_glucose_demand_g_min = total_cho_g_min - muscle_usage_g_min
         
-        # Priorità 1: Esogeno (Limitato ora dal target sensibile!)
         from_exogenous = min(blood_glucose_demand_g_min, current_exo_oxidation_g_min)
         
-        # Priorità 2: Fegato
         remaining_blood_demand = blood_glucose_demand_g_min - from_exogenous
-        max_liver_output = 2.5 # Sbloccato per evitare gradino
+        max_liver_output = 1.2 
         from_liver = min(remaining_blood_demand, max_liver_output)
         
         if current_liver_glycogen <= 0: from_liver = 0
         
-        # Update
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
@@ -349,9 +328,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             if current_liver_glycogen < 0: current_liver_glycogen = 0
             
             if not is_lab_data:
-                total_fat_burned_g += g_fat
+                fat_ratio_used = 1.0 - cho_ratio
+                total_fat_burned_g += (current_kcal_demand * fat_ratio_used) / 9.0
             else:
-                total_fat_burned_g += (g_fat) # Già calcolato sopra
+                total_fat_burned_g += g_fat
             
             total_muscle_used += muscle_usage_g_min
             total_liver_used += from_liver
@@ -401,6 +381,29 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     }
     return pd.DataFrame(results), stats
 
+# --- 4. CALCOLO REVERSE STRATEGY ---
+
+def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0):
+    """
+    Trova l'intake minimo per finire la gara con riserve > 0.
+    """
+    optimal = None
+    for intake in range(0, 125, 5):
+        df, stats = simulate_metabolism(
+            tank, duration, intake, 25, 75, 20, subj, params, 
+            mix_type_input=mix_type, metabolic_curve=curve_data,
+            intake_mode=intake_mode, intake_cutoff_min=intake_cutoff_min # Passa il cutoff
+        )
+        
+        min_liver = df['Residuo Epatico'].min()
+        min_muscle = df['Residuo Muscolare'].min()
+        
+        if min_liver > 5 and min_muscle > 20:
+            optimal = intake
+            break
+            
+    return optimal
+
 # --- 4. CALCOLO STRATEGIA MINIMA ---
 
 # Modifica la definizione per accettare intake_mode
@@ -424,4 +427,5 @@ def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_typ
             break
             
     return optimal
+
 
