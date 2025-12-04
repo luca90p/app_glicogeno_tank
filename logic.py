@@ -407,25 +407,26 @@ def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_typ
 # --- 4. CALCOLO STRATEGIA MINIMA ---
 
 # Modifica la definizione per accettare intake_mode
-def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode):
-    
+def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0):
+    """
+    Trova l'intake minimo per finire la gara con riserve > 0.
+    """
     optimal = None
-    # Step di 5g da 0 a 120
     for intake in range(0, 125, 5):
-        # Passa intake_mode alla simulazione
         df, stats = simulate_metabolism(
             tank, duration, intake, 25, 75, 20, subj, params, 
-            mix_type_input=mix_type, metabolic_curve=curve_data, intake_mode=intake_mode
+            mix_type_input=mix_type, metabolic_curve=curve_data,
+            intake_mode=intake_mode, intake_cutoff_min=intake_cutoff_min # Passa il cutoff
         )
         
         min_liver = df['Residuo Epatico'].min()
         min_muscle = df['Residuo Muscolare'].min()
         
-        # Criterio successo
         if min_liver > 5 and min_muscle > 20:
             optimal = intake
             break
             
     return optimal
+
 
 
