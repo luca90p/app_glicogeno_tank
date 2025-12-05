@@ -385,16 +385,77 @@ with tab3:
         target_thresh_hr = st.session_state['thr_hr_input']
         target_ftp = st.session_state['ftp_watts_input']
         
+        # --- UPLOAD MULTI-FORMATO (ZWO, FIT, GPX, CSV) ---
+        uploaded_file = st.file_uploader("Carica File Attività", type=['zwo', 'fit', 'gpx', 'csv'])
+        intensity_series = None
+        fit_df = None # DataFrame per il grafico dettagliato (solo FIT)
+        
+        target_thresh_hr = st.session_state['thr_hr_input']
+        target_ftp = st.session_state['ftp_watts_input']
+        
         if uploaded_file:
-            series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
-            if series:
-                if subj.sport == SportType.CYCLING:
-                    intensity_series = [val * target_ftp for val in series]
-                    st.success(f"File Bici: Convertito in Watt (Media ~{int(w_calc)} W)")
-                else:
-                    intensity_series = [val * target_thresh_hr for val in series]
-                    st.success(f"File Corsa: Convertito in BPM (Media ~{int(hr_calc)} bpm)")
-                duration = dur_calc
+            fname = uploaded_file.name.lower()
+            
+            # 1. GESTIONE ZWO (Allenamento Strutturato)
+            if fname.endswith('.zwo'):
+                st.info("File ZWO rilevato (Allenamento Strutturato)")
+                series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
+                if series:
+                    # Convertiamo l'IF del ZWO in valore assoluto per il motore
+                    if subj.sport == SportType.CYCLING:
+                        intensity_series = [val * target_ftp for val in series]
+                        st.success(f"ZWO Caricato: {dur_calc} min. Avg Power: {int(w_calc)} W")
+                    else:
+                        intensity_series = [val * target_thresh_hr for val in series]
+                        st.success(f"ZWO Caricato: {dur_calc} min. Avg HR: {int(hr_calc)} bpm")
+                    duration = dur_calc
+
+            # 2. GESTIONE FIT (Attività Reale - Parsing Avanzato)
+            elif fname.endswith('.fit'):
+                st.info("File FIT rilevato (Attività Reale)")
+                with st.spinner("Analisi file FIT in corso..."):
+                    # Chiama il wrapper in utils (che usa fitparse)
+                    fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_clean_df = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
+                    
+                    if fit_clean_df is not None:
+                        intensity_series = fit_series
+                        duration = fit_dur
+                        fit_df = fit_clean_df # Salviamo per il grafico di dettaglio
+                        
+                        msg = f"FIT Caricato: {fit_dur} min."
+                        if subj.sport == SportType.CYCLING: msg += f" Avg Power: {int(fit_avg_w)} W"
+                        else: msg += f" Avg HR: {int(fit_avg_hr)} bpm"
+                        st.success(msg)
+                        
+                        # Sovrascriviamo i valori manuali per coerenza visiva
+                        if subj.sport == SportType.CYCLING: val = int(fit_avg_w)
+                        else: val = int(fit_avg_hr)
+                    else:
+                        st.error("Errore nella lettura del file FIT.")
+
+            # 3. GESTIONE GENERICA (CSV/GPX - Logica Semplificata)
+            else:
+                # (Qui potresti aggiungere logica per GPX se serve, per ora gestiamo come CSV base)
+                try:
+                    df_activity = pd.read_csv(uploaded_file)
+                    # Stima durata (assumendo 1 record = 1 secondo o 5 secondi, da adattare)
+                    # Qui assumiamo un formato standard semplice
+                    if 'power' in df_activity.columns and subj.sport == SportType.CYCLING:
+                        intensity_series = df_activity['power'].fillna(0).tolist()
+                        duration = math.ceil(len(intensity_series) / 60) # Assumendo 1s rec
+                        st.success(f"CSV Caricato: {duration} min")
+                    elif 'heart_rate' in df_activity.columns:
+                        intensity_series = df_activity['heart_rate'].fillna(0).tolist()
+                        duration = math.ceil(len(intensity_series) / 60)
+                        st.success(f"CSV Caricato: {duration} min")
+                except Exception as e:
+                    st.warning(f"Formato file non riconosciuto o errore lettura: {e}")
+
+        # VISUALIZZAZIONE GRAFICO DETTAGLIATO (SOLO FIT)
+        if fit_df is not None:
+            with st.expander("📈 Analisi Dettagliata File FIT", expanded=True):
+                # Usa la funzione di plotting che abbiamo messo in utils
+                st.pyplot(utils.create_fit_plot(fit_df))
         
         # Variabile VI
         vi_input = 1.0
@@ -756,3 +817,4 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
