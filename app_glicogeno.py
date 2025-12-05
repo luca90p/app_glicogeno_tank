@@ -699,7 +699,7 @@ with tab3:
             st.write(f"**Totale Gara:** preparare borracce con **{int(total_needs)} g** totali.")
     
     else:
-        else:
+        
         # --- CALCOLO REVERSE STRATEGY ---
         st.subheader("🎯 Calcolatore Strategia Minima")
         st.markdown("Il sistema calcolerà l'apporto di carboidrati minimo necessario per terminare la gara senza crisi.")
@@ -816,4 +816,5 @@ with tab3:
                  1. **Riduci l'intensità**: Abbassa i Watt/FC medi o il target FTP.
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
+
 
