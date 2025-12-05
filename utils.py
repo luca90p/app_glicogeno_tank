@@ -27,19 +27,18 @@ def check_password():
         return False
     else:
         return True
+
 # ==============================================================================
 # MODULO CALCOLO POTENZA NORMALIZZATA (NP)
 # ==============================================================================
 def calculate_normalized_power(df):
     """
     Calcola la Normalized Power (NP) secondo l'algoritmo di Coggan.
-    Richiede un DataFrame con colonna 'power' e indice temporale (o frequenza 1s).
     """
     if 'power' not in df.columns:
         return 0
     
     # 1. Media Mobile 30s
-    # Usiamo min_periods=1 per non perdere i primi 30s
     rolling_pwr = df['power'].rolling(window=30, min_periods=1).mean()
     
     # 2. Elevamento alla quarta potenza
@@ -53,7 +52,6 @@ def calculate_normalized_power(df):
     
     return np_val
 
-
 # ==============================================================================
 # MODULO FIT PARSER & PLOTTING
 # ==============================================================================
@@ -61,7 +59,7 @@ def calculate_normalized_power(df):
 def process_fit_data(fit_file_object):
     """
     Legge un oggetto file .FIT, normalizza i tempi e restituisce un DataFrame pulito.
-    Versione Anti-Duplicati: Crea un nuovo DF solo con le colonne migliori.
+    Versione Anti-Duplicati e Anti-Ambiguity.
     """
     try:
         fit_file_object.seek(0)
@@ -83,12 +81,12 @@ def process_fit_data(fit_file_object):
     df_raw = pd.DataFrame(data_list)
     df_raw = df_raw.set_index('timestamp').sort_index()
     
-    # Normalizzazione Temporale (Smart Recording fix)
+    # Normalizzazione Temporale
     if not df_raw.empty:
         full_time_index = pd.date_range(start=df_raw.index.min(), end=df_raw.index.max(), freq='1s')
         df_raw = df_raw.reindex(full_time_index).ffill().fillna(0)
 
-    # Mappa delle priorità: Nome Standard -> [Alternative in ordine di preferenza]
+    # Selezione Colonne (Evita duplicati 'speed' vs 'enhanced_speed')
     column_map = {
         'power': ['power', 'accumulated_power'],
         'speed': ['enhanced_speed', 'speed'],
@@ -97,13 +95,12 @@ def process_fit_data(fit_file_object):
         'cadence': ['cadence']
     }
 
-    # Creiamo un NUOVO DataFrame pulito per evitare duplicati
+    # Creiamo un NUOVO DataFrame pulito
     df_clean = pd.DataFrame(index=df_raw.index)
 
     for std_name, alternatives in column_map.items():
         for alt in alternatives:
             if alt in df_raw.columns:
-                # Trovata la colonna migliore, la copiamo e ci fermiamo
                 df_clean[std_name] = df_raw[alt]
                 break 
     
@@ -130,9 +127,7 @@ def process_fit_data(fit_file_object):
 def create_fit_plot(df):
     """Genera grafico ALTAIR interattivo per il file FIT."""
     plot_df = df.reset_index()
-    # Resampling per performance grafica se il file è enorme (>5000 punti)
-    if len(plot_df) > 5000: 
-        plot_df = plot_df.iloc[::5, :]
+    if len(plot_df) > 5000: plot_df = plot_df.iloc[::5, :]
     
     base = alt.Chart(plot_df).encode(x=alt.X('moving_time_min', title='Tempo (min)'))
     charts = []
@@ -161,17 +156,25 @@ def create_fit_plot(df):
     if charts:
         return alt.vconcat(*charts).resolve_scale(x='shared')
     else:
-        return alt.Chart(pd.DataFrame({'Text': ['Nessun dato visualizzabile']})).mark_text().encode(text='Text')
+        return alt.Chart(pd.DataFrame({'Text': ['Nessun dato']})).mark_text().encode(text='Text')
 
 def parse_fit_file_wrapper(uploaded_file, sport_type):
+    """
+    Wrapper per processare FIT e restituire 6 valori.
+    """
     df, error = process_fit_data(uploaded_file)
-    if error or df is None or df.empty: return [], 0, 0, 0, None
+    
+    # FIX: Ritorna 6 valori anche in caso di errore
+    if error or df is None or df.empty: return [], 0, 0, 0, 0, None
 
     avg_power = df['power'].mean() if 'power' in df.columns else 0
     avg_hr = df['heart_rate'].mean() if 'heart_rate' in df.columns else 0
+    
+    # CALCOLO NP
+    norm_power = calculate_normalized_power(df) if 'power' in df.columns else 0
+    
     total_duration_min = math.ceil(len(df) / 60)
     
-    # Downsampling a 1 minuto per il simulatore
     df_resampled = df.resample('1T').mean()
     intensity_series = []
     
@@ -181,7 +184,8 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
         series_data = df_resampled[target_col].fillna(0).tolist()
         intensity_series = [float(x) for x in series_data]
     
-    return intensity_series, total_duration_min, avg_power, avg_hr, df
+    # FIX: Ritorna 6 valori (Serie, Durata, AvgW, AvgHR, NP, DataFrame)
+    return intensity_series, total_duration_min, avg_power, avg_hr, norm_power, df
 
 # ==============================================================================
 # PARSING FILE METABOLICO (TEST LAB)
@@ -190,9 +194,8 @@ def parse_metabolic_report(uploaded_file):
     """Legge file CSV/Excel da metabolimetro (Versione Robusta)."""
     try:
         df = None
-        # 1. Gestione CSV
         if uploaded_file.name.lower().endswith(('.csv', '.txt')):
-            content = uploaded_file.getvalue().decode('utf-8', errors='replace')
+            content = uploaded_file.getvalue().decode('latin-1', errors='replace')
             lines = content.splitlines()
             header_row = None
             
@@ -228,6 +231,7 @@ def parse_metabolic_report(uploaded_file):
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
         col_map = {}
+        
         def find_col(keywords):
             for c in cols:
                 for k in keywords:
@@ -262,7 +266,7 @@ def parse_metabolic_report(uploaded_file):
         return clean_df, intensity_type, None
     except Exception as e: return None, None, str(e)
 
-# --- PARSING ZWO (ESISTENTE) ---
+# --- PARSING ZWO ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     try:
         xml_content = uploaded_file.getvalue().decode('utf-8')
@@ -294,4 +298,3 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
-
