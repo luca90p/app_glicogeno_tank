@@ -780,10 +780,7 @@ with tab3:
                      
                      layers = [bg, area, cutoff_line]
                      
-                     # 3. Annotazioni Speciali (BONK vs SAFE) 
-
-[Image of annotated area chart]
-
+                     # 3. Annotazioni Speciali (BONK vs SAFE)
                      if is_bad_scenario:
                          # Trova il momento del Bonk Epatico (<=0)
                          bonk_row = df[df['Residuo Epatico'] <= 0]
@@ -842,6 +839,7 @@ with tab3:
                  1. **Riduci l'intensità**: Abbassa i Watt/FC medi o il target FTP.
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
+
 
 
 
