@@ -33,7 +33,10 @@ def check_password():
 # ==============================================================================
 
 def process_fit_data(fit_file_object):
-    """Legge un oggetto file .FIT, normalizza i tempi e restituisce un DataFrame pulito."""
+    """
+    Legge un oggetto file .FIT, normalizza i tempi e restituisce un DataFrame pulito.
+    Versione Anti-Duplicati: Crea un nuovo DF solo con le colonne migliori.
+    """
     try:
         fit_file_object.seek(0)
         fitfile = fitparse.FitFile(fit_file_object)
@@ -51,13 +54,15 @@ def process_fit_data(fit_file_object):
     if not data_list:
         return None, "Nessun dato di registrazione trovato nel file."
 
-    df = pd.DataFrame(data_list)
-    df = df.set_index('timestamp').sort_index()
+    df_raw = pd.DataFrame(data_list)
+    df_raw = df_raw.set_index('timestamp').sort_index()
     
-    if not df.empty:
-        full_time_index = pd.date_range(start=df.index.min(), end=df.index.max(), freq='1s')
-        df = df.reindex(full_time_index).ffill().fillna(0)
+    # Normalizzazione Temporale (Smart Recording fix)
+    if not df_raw.empty:
+        full_time_index = pd.date_range(start=df_raw.index.min(), end=df_raw.index.max(), freq='1s')
+        df_raw = df_raw.reindex(full_time_index).ffill().fillna(0)
 
+    # Mappa delle priorità: Nome Standard -> [Alternative in ordine di preferenza]
     column_map = {
         'power': ['power', 'accumulated_power'],
         'speed': ['enhanced_speed', 'speed'],
@@ -66,46 +71,71 @@ def process_fit_data(fit_file_object):
         'cadence': ['cadence']
     }
 
-    final_cols = {}
+    # Creiamo un NUOVO DataFrame pulito per evitare duplicati
+    df_clean = pd.DataFrame(index=df_raw.index)
+
     for std_name, alternatives in column_map.items():
-        for alt_col in alternatives:
-            if alt_col in df.columns:
-                final_cols[alt_col] = std_name
+        for alt in alternatives:
+            if alt in df_raw.columns:
+                # Trovata la colonna migliore, la copiamo e ci fermiamo
+                df_clean[std_name] = df_raw[alt]
                 break 
     
-    df = df.rename(columns=final_cols)
-    
-    if 'speed' in df.columns:
-        if df['speed'].max() < 80: df['speed_kmh'] = df['speed'] * 3.6
-        else: df['speed_kmh'] = df['speed']
+    # Calcoli aggiuntivi su colonne pulite
+    if 'speed' in df_clean.columns:
+        if df_clean['speed'].max() < 80: 
+            df_clean['speed_kmh'] = df_clean['speed'] * 3.6
+        else:
+            df_clean['speed_kmh'] = df_clean['speed']
     else:
-        df['speed_kmh'] = 0
+        df_clean['speed_kmh'] = 0
 
-    df['block_id'] = df['speed_kmh'].ne(df['speed_kmh'].shift()).cumsum()
-    df['block_len'] = df.groupby('block_id')['speed_kmh'].transform('count')
-    is_pause = (df['speed_kmh'] < 1.5) | ((df['block_len'] > 30) & (df['speed_kmh'] == 0))
+    # Pulizia Pause
+    df_clean['block_id'] = df_clean['speed_kmh'].ne(df_clean['speed_kmh'].shift()).cumsum()
+    df_clean['block_len'] = df_clean.groupby('block_id')['speed_kmh'].transform('count')
     
-    df_clean = df[~is_pause].copy()
-    df_clean['moving_time_min'] = np.arange(len(df_clean)) / 60.0
+    is_pause = (df_clean['speed_kmh'] < 1.5) | ((df_clean['block_len'] > 30) & (df_clean['speed_kmh'] == 0))
     
-    return df_clean, None
+    df_final = df_clean[~is_pause].copy()
+    df_final['moving_time_min'] = np.arange(len(df_final)) / 60.0
+    
+    return df_final, None
 
 def create_fit_plot(df):
     """Genera grafico ALTAIR interattivo per il file FIT."""
     plot_df = df.reset_index()
-    if len(plot_df) > 5000: plot_df = plot_df.iloc[::5, :]
+    # Resampling per performance grafica se il file è enorme (>5000 punti)
+    if len(plot_df) > 5000: 
+        plot_df = plot_df.iloc[::5, :]
     
     base = alt.Chart(plot_df).encode(x=alt.X('moving_time_min', title='Tempo (min)'))
     charts = []
     
     if 'power' in df.columns:
-        charts.append(base.mark_area(color='#FF4B4B', opacity=0.5, line=True).encode(y=alt.Y('power', title='Watt')).properties(height=150, title="Potenza"))
+        c_pwr = base.mark_area(color='#FF4B4B', opacity=0.5, line=True).encode(
+            y=alt.Y('power', title='Watt'),
+            tooltip=['moving_time_min', 'power']
+        ).properties(height=150, title="Potenza")
+        charts.append(c_pwr)
+    
     if 'heart_rate' in df.columns:
-        charts.append(base.mark_line(color='#A020F0').encode(y=alt.Y('heart_rate', title='BPM', scale=alt.Scale(zero=False))).properties(height=150, title="Frequenza Cardiaca"))
+        c_hr = base.mark_line(color='#A020F0').encode(
+            y=alt.Y('heart_rate', title='BPM', scale=alt.Scale(zero=False)),
+            tooltip=['moving_time_min', 'heart_rate']
+        ).properties(height=150, title="Frequenza Cardiaca")
+        charts.append(c_hr)
+    
     if 'cadence' in df.columns:
-        charts.append(base.transform_filter(alt.datum.cadence > 0).mark_circle(color='#00FF00', size=10, opacity=0.3).encode(y=alt.Y('cadence', title='RPM')).properties(height=100, title="Cadenza"))
+        c_cad = base.transform_filter(alt.datum.cadence > 0).mark_circle(color='#00FF00', size=10, opacity=0.3).encode(
+            y=alt.Y('cadence', title='RPM'),
+            tooltip=['moving_time_min', 'cadence']
+        ).properties(height=100, title="Cadenza")
+        charts.append(c_cad)
 
-    return alt.vconcat(*charts).resolve_scale(x='shared') if charts else alt.Chart(pd.DataFrame({'Text': ['Nessun dato']})).mark_text().encode(text='Text')
+    if charts:
+        return alt.vconcat(*charts).resolve_scale(x='shared')
+    else:
+        return alt.Chart(pd.DataFrame({'Text': ['Nessun dato visualizzabile']})).mark_text().encode(text='Text')
 
 def parse_fit_file_wrapper(uploaded_file, sport_type):
     df, error = process_fit_data(uploaded_file)
@@ -115,8 +145,10 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
     avg_hr = df['heart_rate'].mean() if 'heart_rate' in df.columns else 0
     total_duration_min = math.ceil(len(df) / 60)
     
+    # Downsampling a 1 minuto per il simulatore
     df_resampled = df.resample('1T').mean()
     intensity_series = []
+    
     target_col = 'power' if sport_type == SportType.CYCLING and 'power' in df.columns else 'heart_rate'
     
     if target_col in df_resampled.columns:
@@ -126,31 +158,29 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
     return intensity_series, total_duration_min, avg_power, avg_hr, df
 
 # ==============================================================================
-
-# --- PARSING FILE METABOLICO (TEST LAB) ---
+# PARSING FILE METABOLICO (TEST LAB)
+# ==============================================================================
 def parse_metabolic_report(uploaded_file):
     """Legge file CSV/Excel da metabolimetro (Versione Robusta)."""
     try:
         df = None
+        # 1. Gestione CSV
         if uploaded_file.name.lower().endswith(('.csv', '.txt')):
-            content = uploaded_file.getvalue().decode('latin-1', errors='replace')
+            content = uploaded_file.getvalue().decode('utf-8', errors='replace')
             lines = content.splitlines()
             header_row = None
             
-            # Cerca la riga di intestazione
+            search_terms = ["FC", "WR", "CHO", "FAT"]
             for i, line in enumerate(lines[:300]):
-                if "CHO" in line.upper() and "FAT" in line.upper():
-                    header_row = i
-                    break
+                if sum(1 for term in search_terms if term in line.upper()) >= 2:
+                    header_row = i; break
             
-            if header_row is None: # Fallback
+            if header_row is None:
                 for i, line in enumerate(lines[:300]):
                     if line.strip().startswith("t") and "Fase" in line:
                         header_row = i; break
             
             parse_header = header_row if header_row is not None else 0
-            
-            # Sniffing Separatore
             sep = ','
             if header_row is not None:
                 h_line = lines[header_row]
@@ -169,11 +199,9 @@ def parse_metabolic_report(uploaded_file):
 
         if df is None or df.empty: return None, None, "File vuoto."
 
-        # Normalizzazione
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
         col_map = {}
-        
         def find_col(keywords):
             for c in cols:
                 for k in keywords:
@@ -182,9 +210,9 @@ def parse_metabolic_report(uploaded_file):
 
         col_map['CHO'] = find_col(['CHO', 'CARBOHYDRATES'])
         col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
-        watt_c = find_col(['WR', 'WATT', 'POWER'])
-        speed_c = find_col(['SPEED', 'VEL', 'KM/H'])
-        fc_c = find_col(['FC', 'HR', 'BPM'])
+        watt_c = find_col(['WR', 'WATT', 'POWER', 'POW'])
+        speed_c = find_col(['SPEED', 'VEL', 'KM/H', 'V'])
+        fc_c = find_col(['FC', 'HR', 'HEART', 'BPM'])
         
         intensity_type = None
         if watt_c: col_map['Intensity'] = watt_c; intensity_type = 'watt'
@@ -192,7 +220,7 @@ def parse_metabolic_report(uploaded_file):
         elif fc_c: col_map['Intensity'] = fc_c; intensity_type = 'hr'
 
         if not (col_map.get('CHO') and col_map.get('FAT') and intensity_type):
-             return None, None, "Colonne chiave mancanti (CHO/FAT/Intensity)."
+             return None, None, "Colonne chiave mancanti."
 
         clean_df = pd.DataFrame()
         clean_df['Intensity'] = df[col_map['Intensity']]
@@ -208,7 +236,7 @@ def parse_metabolic_report(uploaded_file):
         return clean_df, intensity_type, None
     except Exception as e: return None, None, str(e)
 
-# --- PARSING ZWO ---
+# --- PARSING ZWO (ESISTENTE) ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
     try:
         xml_content = uploaded_file.getvalue().decode('utf-8')
