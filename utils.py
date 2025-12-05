@@ -27,6 +27,32 @@ def check_password():
         return False
     else:
         return True
+# ==============================================================================
+# MODULO CALCOLO POTENZA NORMALIZZATA (NP)
+# ==============================================================================
+def calculate_normalized_power(df):
+    """
+    Calcola la Normalized Power (NP) secondo l'algoritmo di Coggan.
+    Richiede un DataFrame con colonna 'power' e indice temporale (o frequenza 1s).
+    """
+    if 'power' not in df.columns:
+        return 0
+    
+    # 1. Media Mobile 30s
+    # Usiamo min_periods=1 per non perdere i primi 30s
+    rolling_pwr = df['power'].rolling(window=30, min_periods=1).mean()
+    
+    # 2. Elevamento alla quarta potenza
+    pwr_4 = rolling_pwr ** 4
+    
+    # 3. Media dei valori
+    avg_pwr_4 = pwr_4.mean()
+    
+    # 4. Radice quarta
+    np_val = avg_pwr_4 ** 0.25
+    
+    return np_val
+
 
 # ==============================================================================
 # MODULO FIT PARSER & PLOTTING
@@ -268,3 +294,4 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
