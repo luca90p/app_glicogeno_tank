@@ -840,6 +840,81 @@ with tab3:
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
 
+# --- SEZIONE DEBUG / DOWNLOAD LOG ---
+    st.markdown("---")
+    st.subheader("🔧 Strumenti di Verifica")
+    
+    # Raccogliamo i dati per il log solo se le variabili esistono
+    debug_data = {
+        "TIMESTAMP": str(pd.Timestamp.now()),
+        "1_ATLETA": {
+            "Sport": subj.sport.name,
+            "Peso": subj.weight_kg,
+            "VO2max_Stimato": subj.vo2max_absolute_l_min / subj.weight_kg * 1000,
+            "FTP_Watts": params.get('ftp_watts'),
+            "Soglia_HR": params.get('threshold_hr')
+        },
+        "2_TANK_INIZIALE": {
+            "Capacità_Max": int(tank['max_capacity_g']),
+            "Start_Totale": int(tank['actual_available_g']),
+            "Start_Muscolare": int(tank['muscle_glycogen_g']),
+            "Start_Epatico": int(tank['liver_glycogen_g']),
+            "Filling_PCT": tank['fill_pct']
+        },
+        "3_SFORZO": {
+            "Durata_min": duration,
+            "Mode": params.get('mode'),
+            "Avg_Watts": params.get('avg_watts'),
+            "NP_Watts (Input Logic)": params.get('np_watts', 'Non calcolato'),
+            "Avg_HR": params.get('avg_hr'),
+            "Variability_Index_Input": vi_input if 'vi_input' in locals() else 1.0,
+            "Efficiency": params.get('efficiency')
+        },
+        "4_STRATEGIA_NUTRIZIONALE": {
+            "Mode": intake_mode_enum.name,
+            "Mix": mix_sel.label,
+            "Target_gh": cho_h,
+            "Unit_g": cho_unit,
+            "Cutoff_min": intake_cutoff
+        }
+    }
+
+    # Aggiungiamo risultati se disponibili
+    if 'stats_sim' in locals():
+        debug_data["5_RISULTATI_SIMULAZIONE_MANUALE"] = {
+            "IF_Calcolato": stats_sim['intensity_factor'],
+            "RER_Medio": stats_sim['avg_rer'],
+            "CHO_PCT_Medio": stats_sim['cho_pct'],
+            "Residuo_Finale": int(stats_sim['final_glycogen']),
+            "Consumo_Muscolare": int(stats_sim['total_muscle_used']),
+            "Consumo_Epatico": int(stats_sim['total_liver_used']),
+            "Consumo_Grassi": int(stats_sim['fat_total_g'])
+        }
+        
+    if 'opt_intake' in locals() and opt_intake is not None:
+        debug_data["6_CALCOLO_MINIMO"] = {
+            "Intake_Ottimale_Trovato": opt_intake,
+            "Note": "Se presente, questo è il valore minimo per sopravvivere."
+        }
+        if 'stats_opt' in locals():
+             debug_data["6_CALCOLO_MINIMO"]["Stats_Scenario_Ottimale"] = {
+                "Residuo_Finale": int(stats_opt['final_glycogen']),
+                "IF": stats_opt['intensity_factor']
+             }
+
+    # Conversione in stringa JSON leggibile
+    import json
+    log_text = json.dumps(debug_data, indent=4, default=str)
+    
+    st.download_button(
+        label="📥 Scarica File di Log (.txt)",
+        data=log_text,
+        file_name="glicogeno_debug_log.txt",
+        mime="text/plain",
+        help="Scarica questo file e invialo per l'assistenza."
+    )
+
+
 
 
 
