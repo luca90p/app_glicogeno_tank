@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import io
 import fitparse
-import altair as alt # USIAMO ALTAIR AL POSTO DI MATPLOTLIB
+import altair as alt
 from data_models import SportType
 
 # --- SISTEMA DI PROTEZIONE (LOGIN) ---
@@ -29,7 +29,7 @@ def check_password():
         return True
 
 # ==============================================================================
-# MODULO FIT PARSER & PLOTTING (ALTAIR VERSION)
+# MODULO FIT PARSER & PLOTTING
 # ==============================================================================
 
 def process_fit_data(fit_file_object):
@@ -91,47 +91,21 @@ def process_fit_data(fit_file_object):
     return df_clean, None
 
 def create_fit_plot(df):
-    """Genera grafico ALTAIR interattivo per il file FIT (Sostituisce Matplotlib)."""
-    
-    # Resampling leggero per performance (ogni 5s) se il file è enorme
+    """Genera grafico ALTAIR interattivo per il file FIT."""
     plot_df = df.reset_index()
-    if len(plot_df) > 5000:
-        plot_df = plot_df.iloc[::5, :]
+    if len(plot_df) > 5000: plot_df = plot_df.iloc[::5, :]
     
-    base = alt.Chart(plot_df).encode(
-        x=alt.X('moving_time_min', title='Tempo (min)')
-    )
-
-    # 1. Potenza
+    base = alt.Chart(plot_df).encode(x=alt.X('moving_time_min', title='Tempo (min)'))
     charts = []
+    
     if 'power' in df.columns:
-        c_pwr = base.mark_area(color='#FF4B4B', opacity=0.5, line=True).encode(
-            y=alt.Y('power', title='Watt'),
-            tooltip=['moving_time_min', 'power']
-        ).properties(height=150, title="Potenza")
-        charts.append(c_pwr)
-    
-    # 2. Cuore
+        charts.append(base.mark_area(color='#FF4B4B', opacity=0.5, line=True).encode(y=alt.Y('power', title='Watt')).properties(height=150, title="Potenza"))
     if 'heart_rate' in df.columns:
-        c_hr = base.mark_line(color='#A020F0').encode(
-            y=alt.Y('heart_rate', title='BPM', scale=alt.Scale(zero=False)),
-            tooltip=['moving_time_min', 'heart_rate']
-        ).properties(height=150, title="Frequenza Cardiaca")
-        charts.append(c_hr)
-    
-    # 3. Cadenza (filtrata > 0)
+        charts.append(base.mark_line(color='#A020F0').encode(y=alt.Y('heart_rate', title='BPM', scale=alt.Scale(zero=False))).properties(height=150, title="Frequenza Cardiaca"))
     if 'cadence' in df.columns:
-        c_cad = base.transform_filter(alt.datum.cadence > 0).mark_circle(color='#00FF00', size=10, opacity=0.3).encode(
-            y=alt.Y('cadence', title='RPM'),
-            tooltip=['moving_time_min', 'cadence']
-        ).properties(height=100, title="Cadenza")
-        charts.append(c_cad)
+        charts.append(base.transform_filter(alt.datum.cadence > 0).mark_circle(color='#00FF00', size=10, opacity=0.3).encode(y=alt.Y('cadence', title='RPM')).properties(height=100, title="Cadenza"))
 
-    # Concatenazione verticale
-    if charts:
-        return alt.vconcat(*charts).resolve_scale(x='shared')
-    else:
-        return alt.Chart(pd.DataFrame({'Text': ['Nessun dato grafico']})).mark_text().encode(text='Text')
+    return alt.vconcat(*charts).resolve_scale(x='shared') if charts else alt.Chart(pd.DataFrame({'Text': ['Nessun dato']})).mark_text().encode(text='Text')
 
 def parse_fit_file_wrapper(uploaded_file, sport_type):
     df, error = process_fit_data(uploaded_file)
@@ -151,33 +125,37 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
     
     return intensity_series, total_duration_min, avg_power, avg_hr, df
 
+# ==============================================================================
+
 # --- PARSING FILE METABOLICO (TEST LAB) ---
 def parse_metabolic_report(uploaded_file):
     """Legge file CSV/Excel da metabolimetro (Versione Robusta)."""
     try:
         df = None
-        # 1. Gestione CSV
         if uploaded_file.name.lower().endswith(('.csv', '.txt')):
-            content = uploaded_file.getvalue().decode('utf-8', errors='replace')
+            content = uploaded_file.getvalue().decode('latin-1', errors='replace')
             lines = content.splitlines()
             header_row = None
-            header_line = ""
             
-            search_terms = ["FC", "WR", "CHO", "FAT"]
+            # Cerca la riga di intestazione
             for i, line in enumerate(lines[:300]):
-                if sum(1 for term in search_terms if term in line.upper()) >= 2:
-                    header_row = i; header_line = line; break
+                if "CHO" in line.upper() and "FAT" in line.upper():
+                    header_row = i
+                    break
             
-            if header_row is None:
+            if header_row is None: # Fallback
                 for i, line in enumerate(lines[:300]):
                     if line.strip().startswith("t") and "Fase" in line:
-                        header_row = i; header_line = line; break
+                        header_row = i; break
             
             parse_header = header_row if header_row is not None else 0
+            
+            # Sniffing Separatore
             sep = ','
             if header_row is not None:
-                if header_line.count(';') > header_line.count(','): sep = ';'
-                elif header_line.count('\t') > header_line.count(','): sep = '\t'
+                h_line = lines[header_row]
+                if h_line.count(';') > h_line.count(','): sep = ';'
+                elif h_line.count('\t') > h_line.count(','): sep = '\t'
             
             uploaded_file.seek(0)
             try: df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal='.')
@@ -191,9 +169,11 @@ def parse_metabolic_report(uploaded_file):
 
         if df is None or df.empty: return None, None, "File vuoto."
 
+        # Normalizzazione
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
         col_map = {}
+        
         def find_col(keywords):
             for c in cols:
                 for k in keywords:
@@ -204,7 +184,7 @@ def parse_metabolic_report(uploaded_file):
         col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
         watt_c = find_col(['WR', 'WATT', 'POWER'])
         speed_c = find_col(['SPEED', 'VEL', 'KM/H'])
-        fc_c = find_col(['FC', 'HR', 'HEART', 'BPM'])
+        fc_c = find_col(['FC', 'HR', 'BPM'])
         
         intensity_type = None
         if watt_c: col_map['Intensity'] = watt_c; intensity_type = 'watt'
@@ -212,7 +192,7 @@ def parse_metabolic_report(uploaded_file):
         elif fc_c: col_map['Intensity'] = fc_c; intensity_type = 'hr'
 
         if not (col_map.get('CHO') and col_map.get('FAT') and intensity_type):
-             return None, None, "Colonne chiave mancanti."
+             return None, None, "Colonne chiave mancanti (CHO/FAT/Intensity)."
 
         clean_df = pd.DataFrame()
         clean_df['Intensity'] = df[col_map['Intensity']]
