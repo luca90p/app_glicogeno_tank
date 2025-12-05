@@ -392,7 +392,7 @@ with tab3:
             if fname.endswith('.zwo'):
                 series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
                 if series:
-                    if subj.sport == SportType.CYCLING: intensity_series = [val * target_ftp for val in series]
+                    if subj.sport.name == 'CYCLING': intensity_series = [val * target_ftp for val in series]
                     else: intensity_series = [val * target_thresh_hr for val in series]
                     duration = dur_calc
                     st.success(f"ZWO: {dur_calc} min")
@@ -416,7 +416,7 @@ with tab3:
                     
                     st.markdown("---")
                     k3, k4 = st.columns(2)
-                    if subj.sport == SportType.CYCLING: 
+                    if subj.sport.name == 'CYCLING': 
                          k3.metric("Avg Power", f"{int(fit_avg_w)} W")
                          k4.metric("Norm. Power (NP)", f"{int(fit_np)} W", help="Potenza Normalizzata (stress fisiologico reale)")
                          val = int(fit_avg_w) 
@@ -443,7 +443,7 @@ with tab3:
             duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
             vi_input = 1.0
             
-            if subj.sport == SportType.CYCLING:
+            if subj.sport.name == 'CYCLING':
                 val = st.number_input("Potenza Media (Watt)", 50, 600, 200, step=5)
                 # Se non c'è file, NP = Avg * VI (se non specificato diversamente)
                 params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
@@ -839,6 +839,7 @@ with tab3:
                  1. **Riduci l'intensità**: Abbassa i Watt/FC medi o il target FTP.
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
+
 
 
 
