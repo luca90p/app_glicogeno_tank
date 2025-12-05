@@ -699,94 +699,121 @@ with tab3:
             st.write(f"**Totale Gara:** preparare borracce con **{int(total_needs)} g** totali.")
     
     else:
+        else:
         # --- CALCOLO REVERSE STRATEGY ---
         st.subheader("🎯 Calcolatore Strategia Minima")
         st.markdown("Il sistema calcolerà l'apporto di carboidrati minimo necessario per terminare la gara senza crisi.")
         
         if st.button("Calcola Fabbisogno Minimo"):
              with st.spinner("Simulazione scenari multipli in corso..."):
+                 # 1. Trova il numero magico (es. 40 g/h)
                  opt_intake = logic.calculate_minimum_strategy(
                      tank, duration, subj, params, 
-                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum, intake_cutoff,
-                     variability_index=vi_input 
+                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum, intake_cutoff
                  )
                  
              if opt_intake is not None:
                  if opt_intake == 0:
-                      st.success("### ✅ Strategia Consigliata: Nessuna integrazione necessaria (0 g/h)")
-                 elif intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
-                     units_per_hour = opt_intake / cho_unit
-                     if units_per_hour > 0:
-                         interval_min = int(60 / units_per_hour)
-                         st.success(f"### ✅ Strategia: Assumere 1 unità ogni {interval_min} min")
-                         st.caption(f"(Equivalente a circa **{opt_intake} g/h**)")
-                     else:
-                         st.warning("Intake minimo troppo basso per questa unità.")
+                      st.success("### ✅ Nessuna integrazione necessaria (0 g/h)")
+                      st.caption("Le tue riserve sono sufficienti per coprire la durata a questa intensità.")
+                 
                  else:
-                     st.success(f"### ✅ Strategia Consigliata: Bere {opt_intake} g/h")
+                     # Messaggio Principale
+                     st.success(f"### ✅ Strategia Minima: {opt_intake} g/h")
+                     if intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
+                         interval_min = int(60 / (opt_intake / cho_unit))
+                         st.info(f"👉 Assumere **1 unità da {cho_unit}g** ogni **{interval_min} minuti**")
+                     else:
+                         st.info(f"👉 Bere **{opt_intake}g** di carboidrati per ogni ora.")
 
-                 st.write(f"Con questo apporto, arriverai al traguardo con riserve minime di sicurezza.")
+                 # --- 2. ESEGUIAMO LE DUE SIMULAZIONI PER IL CONFRONTO ---
                  
-                 df_opt, stats_opt = logic.simulate_metabolism(
-                     tank, duration, opt_intake, 25, 70, 20, subj, params, 
+                 # Scenario A: Il Crollo (0 g/h)
+                 df_zero, stats_zero = logic.simulate_metabolism(
+                     tank, duration, 0, 0, 70, 20, subj, params, 
                      mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
-                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
-                     variability_index=vi_input
+                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
                  )
                  
+                 # Scenario B: Il Salvataggio (opt_intake g/h)
+                 df_opt, stats_opt = logic.simulate_metabolism(
+                     tank, duration, opt_intake, cho_unit if cho_unit > 0 else 25, 70, 20, subj, params, 
+                     mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
+                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
+                 )
+
                  st.markdown("---")
-                 c1, c2, c3, c4 = st.columns(4)
-                 c1.metric("IF", f"{stats_opt['intensity_factor']:.2f}")
-                 c2.metric("RER", f"{stats_opt['avg_rer']:.2f}")
-                 c3.metric("Substrati", f"{int(stats_opt['cho_pct'])}% CHO", f"{100-int(stats_opt['cho_pct'])}% FAT")
-                 c4.metric("Residuo Finale", f"{int(stats_opt['final_glycogen'])} g")
+                 st.subheader("⚔️ Confronto Impatto: Senza vs. Con Integrazione")
+
+                 # Layout a due colonne
+                 col_bad, col_good = st.columns(2)
                  
-                 st.markdown("#### Bilancio Energetico (Strategia Minima)")
-                 df_melt_opt = df_opt.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
-                 order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
-                 colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
-                 
-                 chart_stack_opt = alt.Chart(df_melt_opt).mark_area().encode(
-                    x='Time (min)', y='g/h', 
-                    color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
-                    tooltip=['Time (min)', 'Fonte', 'g/h']
-                 ).properties(height=300)
-                 st.altair_chart(chart_stack_opt + cutoff_line, use_container_width=True)
-                 
-                 st.markdown("#### Ossidazione Lipidica")
-                 chart_fat_opt = alt.Chart(df_opt).mark_line(color='#FFC107', strokeWidth=3).encode(
-                    x=alt.X('Time (min)'),
-                    y=alt.Y('Ossidazione Lipidica (g)', title='Grassi (g/h)'),
-                 ).properties(height=200)
-                 st.altair_chart(chart_fat_opt + cutoff_line, use_container_width=True)
-                 
-                 st.markdown("#### Riserve Residue")
-                 reserve_fields = ['Residuo Muscolare', 'Residuo Epatico']
-                 df_res_opt = df_opt.melt('Time (min)', value_vars=reserve_fields, var_name='Tipo', value_name='Grammi')
-                 max_y = start_total * 1.05
-                 zones_df = pd.DataFrame({
-                    'Start': [max_y * 0.35, max_y * 0.15, 0],
-                    'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
-                    'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
-                 })
-                 bg = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
-                    y=alt.Y('Start', scale=alt.Scale(domain=[0, max_y]), axis=None),
-                    y2='End', color=alt.Color('Color', scale=None)
-                 )
-                 area_opt = alt.Chart(df_res_opt).mark_area().encode(
-                    x='Time (min)', 
-                    y=alt.Y('Grammi', stack='zero'),
-                    color=alt.Color('Tipo', scale=alt.Scale(domain=reserve_fields, range=['#E57373', '#B71C1C'])),
-                    order=alt.Order('Tipo', sort='ascending')
-                 )
-                 st.altair_chart((bg + area_opt + cutoff_line).properties(height=300), use_container_width=True)
-                 
-                 st.markdown("#### Gut Load")
-                 base_opt = alt.Chart(df_opt).encode(x='Time (min)')
-                 area_gut_opt = base_opt.mark_area(color='#795548', opacity=0.6).encode(y='Gut Load')
-                 rule_opt = alt.Chart(pd.DataFrame({'y': [risk_thresh]})).mark_rule(color='red', strokeDash=[5,5]).encode(y='y')
-                 st.altair_chart((area_gut_opt + rule_opt + cutoff_line).properties(height=250), use_container_width=True)
+                 # Grafico Comune Helper
+                 def plot_reserves(df, title, color_scheme='red'):
+                     df_melt = df.melt('Time (min)', value_vars=['Residuo Muscolare', 'Residuo Epatico'], var_name='Riserva', value_name='Grammi')
+                     
+                     # Zone sfondo
+                     max_y = start_total * 1.1
+                     zones = pd.DataFrame([
+                         {'y': 0, 'y2': 20, 'c': '#FFCDD2'}, # Zona Bonk
+                         {'y': 20, 'y2': max_y, 'c': '#F1F8E9' if color_scheme=='green' else '#FFEBEE'}
+                     ])
+                     
+                     bg = alt.Chart(zones).mark_rect(opacity=0.3).encode(
+                        y=alt.Y('y', scale=alt.Scale(domain=[0, max_y]), title='Glicogeno (g)'),
+                        y2='y2',
+                        color=alt.Color('c', scale=None)
+                     )
+                     
+                     area = alt.Chart(df_melt).mark_area(opacity=0.7).encode(
+                         x='Time (min)',
+                         y=alt.Y('Grammi', stack=True),
+                         color=alt.Color('Riserva', scale=alt.Scale(range=['#E57373', '#D32F2F'] if color_scheme=='red' else ['#81C784', '#388E3C'])),
+                         tooltip=['Time (min)', 'Riserva', 'Grammi']
+                     )
+                     
+                     return (bg + area + cutoff_line).properties(title=title, height=300)
+
+                 with col_bad:
+                     st.markdown("#### 🔴 Scenario: Digiuno (0 g/h)")
+                     st.altair_chart(plot_reserves(df_zero, "Esaurimento Riserve", 'red'), use_container_width=True)
+                     
+                     # KPI Crollo
+                     final_liv_zero = stats_zero['final_glycogen'] - df_zero['Residuo Muscolare'].iloc[-1]
+                     st.metric("Residuo Epatico Finale", f"{int(final_liv_zero)} g", delta="-CRITICO" if final_liv_zero < 5 else "Basso")
+                     if df_zero['Residuo Epatico'].min() <= 0:
+                         bonk_time = df_zero[df_zero['Residuo Epatico'] <= 0]['Time (min)'].iloc[0]
+                         st.error(f"⚠️ **BONK (Ipoglicemia)** previsto al minuto **{bonk_time}**!")
+                     else:
+                         st.warning("Rischio elevato di esaurimento.")
+
+                 with col_good:
+                     st.markdown(f"#### 🟢 Scenario: Strategia ({opt_intake} g/h)")
+                     st.altair_chart(plot_reserves(df_opt, "Mantenimento Riserve", 'green'), use_container_width=True)
+                     
+                     # KPI Salvezza
+                     final_liv_opt = stats_opt['final_glycogen'] - df_opt['Residuo Muscolare'].iloc[-1]
+                     # Calcolo delta rispetto allo scenario 0
+                     saved_grams = int(stats_opt['final_glycogen'] - stats_zero['final_glycogen'])
+                     
+                     st.metric("Residuo Epatico Finale", f"{int(final_liv_opt)} g", delta=f"+{saved_grams} g salvati")
+                     st.success("✅ **Gara completata in sicurezza**")
+                     st.caption(f"Hai evitato il crollo mantenendo le scorte sopra la soglia critica.")
+
+                 # --- Dettagli Tecnici ---
+                 with st.expander("🔎 Dettagli Tecnici Avanzati"):
+                     st.write(f"**Dispendio Totale:** {int(stats_opt['kcal_total_h'])} kcal")
+                     st.write(f"**CHO Ossidati Totali:** {int(df_opt['Carboidrati Esogeni (g)'].sum()/60 + stats_opt['total_liver_used'] + stats_opt['total_muscle_used'])} g")
+                     st.write(f"**Di cui da integrazione:** {int(df_opt['Carboidrati Esogeni (g)'].sum()/60)} g")
+                     st.write(f"**Grassi Ossidati:** {int(stats_opt['fat_total_g'])} g")
 
              else:
-                 st.error("❌ Impossibile finire la gara!")
-                 st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+                 st.error("❌ **IMPOSSIBILE FINIRE LA GARA**")
+                 st.markdown(f"""
+                 Anche assumendo il massimo teorico ({120} g/h), le tue riserve si esauriscono prima della fine.
+                 
+                 **Consigli:**
+                 1. **Riduci l'intensità**: Abbassa i Watt/FC medi o il target FTP.
+                 2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
+                 """)
+
