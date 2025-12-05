@@ -455,7 +455,7 @@ with tab3:
         if fit_df is not None:
             with st.expander("📈 Analisi Dettagliata File FIT", expanded=True):
                 # Usa la funzione di plotting che abbiamo messo in utils
-                st.pyplot(utils.create_fit_plot(fit_df))
+                st.altair_chart(utils.create_fit_plot(fit_df), use_container_width=True)
         
         # Variabile VI
         vi_input = 1.0
@@ -817,4 +817,5 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
 
