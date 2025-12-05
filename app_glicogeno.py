@@ -745,60 +745,86 @@ with tab3:
                  st.markdown("---")
                  st.subheader("⚔️ Confronto Impatto: Senza vs. Con Integrazione")
 
-                 # Layout a due colonne
                  col_bad, col_good = st.columns(2)
                  
-                 # Grafico Comune Helper
-                 def plot_reserves(df, title, color_scheme='red'):
+                 # Scala comune per confronto onesto
+                 max_y_scale = start_total * 1.1
+
+                 def plot_enhanced_scenario(df, stats, title, is_bad_scenario):
+                     # Dati per grafico stacked
                      df_melt = df.melt('Time (min)', value_vars=['Residuo Muscolare', 'Residuo Epatico'], var_name='Riserva', value_name='Grammi')
                      
-                     # Zone sfondo
-                     max_y = start_total * 1.1
+                     # Palette Colori: Rosso (Bad) vs Verde (Good)
+                     colors_range = ['#EF9A9A', '#C62828'] if is_bad_scenario else ['#A5D6A7', '#2E7D32'] # [Muscolo (chiaro), Fegato (scuro)]
+                     bg_color = '#FFEBEE' if is_bad_scenario else '#F1F8E9'
+                     
+                     # 1. Sfondo Zone (Evidenzia Zona Critica < 20g)
                      zones = pd.DataFrame([
-                         {'y': 0, 'y2': 20, 'c': '#FFCDD2'}, # Zona Bonk
-                         {'y': 20, 'y2': max_y, 'c': '#F1F8E9' if color_scheme=='green' else '#FFEBEE'}
+                         {'y': 0, 'y2': 20, 'c': '#FFCDD2'}, # Zona Critica (Rosso più scuro)
+                         {'y': 20, 'y2': max_y_scale, 'c': bg_color} # Zona Sicura/Normale
                      ])
                      
-                     bg = alt.Chart(zones).mark_rect(opacity=0.3).encode(
-                        y=alt.Y('y', scale=alt.Scale(domain=[0, max_y]), title='Glicogeno (g)'),
+                     bg = alt.Chart(zones).mark_rect(opacity=0.5).encode(
+                        y=alt.Y('y', scale=alt.Scale(domain=[0, max_y_scale]), title='Glicogeno (g)'),
                         y2='y2',
                         color=alt.Color('c', scale=None)
                      )
                      
-                     area = alt.Chart(df_melt).mark_area(opacity=0.7).encode(
+                     # 2. Area Chart
+                     area = alt.Chart(df_melt).mark_area(opacity=0.85).encode(
                          x='Time (min)',
                          y=alt.Y('Grammi', stack=True),
-                         color=alt.Color('Riserva', scale=alt.Scale(range=['#E57373', '#D32F2F'] if color_scheme=='red' else ['#81C784', '#388E3C'])),
+                         color=alt.Color('Riserva', scale=alt.Scale(domain=['Residuo Muscolare', 'Residuo Epatico'], range=colors_range), legend=alt.Legend(orient='bottom', title=None)),
                          tooltip=['Time (min)', 'Riserva', 'Grammi']
                      )
                      
-                     return (bg + area + cutoff_line).properties(title=title, height=300)
+                     layers = [bg, area, cutoff_line]
+                     
+                     # 3. Annotazioni Speciali (BONK vs SAFE) 
+
+[Image of annotated area chart]
+
+                     if is_bad_scenario:
+                         # Trova il momento del Bonk Epatico (<=0)
+                         bonk_row = df[df['Residuo Epatico'] <= 0]
+                         if not bonk_row.empty:
+                             bonk_time = bonk_row.iloc[0]['Time (min)']
+                             # Linea Verticale Bonk
+                             rule = alt.Chart(pd.DataFrame({'x': [bonk_time]})).mark_rule(color='red', strokeDash=[4,4], size=3).encode(x='x')
+                             # Testo
+                             text = alt.Chart(pd.DataFrame({'x': [bonk_time], 'y': [max_y_scale*0.5], 't': ['💀 BONK!']})).mark_text(
+                                 align='left', dx=5, color='#B71C1C', size=16, weight='bold'
+                             ).encode(x='x', y='y', text='t')
+                             layers.extend([rule, text])
+                     else:
+                         # Mostra valore finale salvato
+                         final_res = int(stats['final_glycogen'])
+                         final_time = df['Time (min)'].max()
+                         text = alt.Chart(pd.DataFrame({'x': [final_time], 'y': [final_res], 't': [f'✅ {final_res}g']})).mark_text(
+                             align='right', dy=-15, color='#1B5E20', size=16, weight='bold'
+                         ).encode(x='x', y='y', text='t')
+                         layers.append(text)
+                         
+                     return alt.layer(*layers).properties(title=title, height=320)
 
                  with col_bad:
-                     st.markdown("#### 🔴 Scenario: Digiuno (0 g/h)")
-                     st.altair_chart(plot_reserves(df_zero, "Esaurimento Riserve", 'red'), use_container_width=True)
+                     st.altair_chart(plot_enhanced_scenario(df_zero, stats_zero, "🔴 SCENARIO DIGIUNO (Fallimento)", True), use_container_width=True)
                      
-                     # KPI Crollo
-                     final_liv_zero = stats_zero['final_glycogen'] - df_zero['Residuo Muscolare'].iloc[-1]
-                     st.metric("Residuo Epatico Finale", f"{int(final_liv_zero)} g", delta="-CRITICO" if final_liv_zero < 5 else "Basso")
-                     if df_zero['Residuo Epatico'].min() <= 0:
-                         bonk_time = df_zero[df_zero['Residuo Epatico'] <= 0]['Time (min)'].iloc[0]
-                         st.error(f"⚠️ **BONK (Ipoglicemia)** previsto al minuto **{bonk_time}**!")
+                     # KPI Rapidi
+                     final_liv = df_zero['Residuo Epatico'].iloc[-1]
+                     if final_liv <= 0:
+                         st.error(f"**CROLLO METABOLICO**")
+                         st.caption("Il serbatoio epatico si è svuotato. Prestazione compromessa.")
                      else:
-                         st.warning("Rischio elevato di esaurimento.")
+                         st.warning("Riserve al limite.")
 
                  with col_good:
-                     st.markdown(f"#### 🟢 Scenario: Strategia ({opt_intake} g/h)")
-                     st.altair_chart(plot_reserves(df_opt, "Mantenimento Riserve", 'green'), use_container_width=True)
+                     st.altair_chart(plot_enhanced_scenario(df_opt, stats_opt, f"🟢 SCENARIO STRATEGIA ({opt_intake} g/h)", False), use_container_width=True)
                      
-                     # KPI Salvezza
-                     final_liv_opt = stats_opt['final_glycogen'] - df_opt['Residuo Muscolare'].iloc[-1]
-                     # Calcolo delta rispetto allo scenario 0
+                     # KPI Rapidi
                      saved_grams = int(stats_opt['final_glycogen'] - stats_zero['final_glycogen'])
-                     
-                     st.metric("Residuo Epatico Finale", f"{int(final_liv_opt)} g", delta=f"+{saved_grams} g salvati")
-                     st.success("✅ **Gara completata in sicurezza**")
-                     st.caption(f"Hai evitato il crollo mantenendo le scorte sopra la soglia critica.")
+                     st.success(f"**SALVATAGGIO: +{saved_grams}g**")
+                     st.caption(f"L'integrazione ha preservato {saved_grams}g di glicogeno extra, garantendo l'arrivo.")
 
                  # --- Dettagli Tecnici ---
                  with st.expander("🔎 Dettagli Tecnici Avanzati"):
@@ -816,5 +842,6 @@ with tab3:
                  1. **Riduci l'intensità**: Abbassa i Watt/FC medi o il target FTP.
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
+
 
 
