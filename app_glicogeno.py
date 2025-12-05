@@ -339,7 +339,7 @@ with tab2:
             st.write(f"- Fegato: **{int(final_tank['liver_glycogen_g'])} g**")
 
 # =============================================================================
-# TAB 3: SIMULAZIONE GARA & STRATEGIA
+# TAB 3: SIMULAZIONE GARA & STRATEGIA (AGGIORNATO)
 # =============================================================================
 with tab3:
     if 'tank_data' not in st.session_state:
@@ -350,100 +350,104 @@ with tab3:
     
     # --- OVERRIDE MODE ---
     st.markdown("### 🛠️ Modalità Test / Override")
-    enable_override = st.checkbox("Abilita Override Livello Iniziale (Bypassa Tab 2)", value=False)
+    enable_override = st.checkbox("Abilita Override Livello Iniziale", value=False)
     
     if enable_override:
         max_cap = tank_base['max_capacity_g']
-        st.warning(f"Modalità Test Attiva. Max Capacità: {int(max_cap)}g")
-        force_pct = st.slider("Forza Livello Riempimento (%)", 0, 120, 100, 5)
-        forced_muscle = (max_cap - 100) * (force_pct / 100.0)
-        forced_liver = 100 * (force_pct / 100.0)
+        st.warning(f"Modalità Test Attiva. Max: {int(max_cap)}g")
+        force_pct = st.slider("Forza Livello (%)", 0, 120, 100, 5)
         tank = tank_base.copy()
-        tank['muscle_glycogen_g'] = forced_muscle
-        tank['liver_glycogen_g'] = forced_liver
-        tank['actual_available_g'] = forced_muscle + forced_liver
-        tank['fill_pct'] = force_pct
+        tank['muscle_glycogen_g'] = (max_cap - 100) * (force_pct / 100.0)
+        tank['liver_glycogen_g'] = 100 * (force_pct / 100.0)
+        tank['actual_available_g'] = tank['muscle_glycogen_g'] + tank['liver_glycogen_g']
         start_total = tank['actual_available_g']
-        st.metric("Nuovo Start Glicogeno", f"{int(start_total)} g")
+        st.metric("Start Glicogeno", f"{int(start_total)} g")
     else:
         tank = tank_base
         start_total = tank['actual_available_g']
-        st.info(f"**Condizione di Partenza:** {int(start_total)}g di glicogeno disponibile.")
+        st.info(f"**Start Glicogeno (da Tab 2):** {int(start_total)}g")
     
     c_s1, c_s2, c_s3 = st.columns(3)
     
     # --- 1. PROFILO SFORZO ---
     with c_s1:
         st.markdown("### 1. Profilo Sforzo")
-        duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
-        uploaded_file = st.file_uploader("Importa File (.zwo, .fit, .csv)", type=['zwo', 'fit', 'gpx', 'csv'])
+        # Upload e Parsing FIT (Nuova Logica)
+        uploaded_file = st.file_uploader("Carica File Attività (.fit, .zwo)", type=['zwo', 'fit', 'gpx', 'csv'])
+        
         intensity_series = None
         fit_df = None 
+        file_loaded = False
         
         target_thresh_hr = st.session_state['thr_hr_input']
         target_ftp = st.session_state['ftp_watts_input']
         
         if uploaded_file:
             fname = uploaded_file.name.lower()
+            file_loaded = True
+            
             if fname.endswith('.zwo'):
                 series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
                 if series:
-                    if subj.sport == SportType.CYCLING:
-                        intensity_series = [val * target_ftp for val in series]
-                        st.success(f"ZWO: Media ~{int(w_calc)} W")
-                    else:
-                        intensity_series = [val * target_thresh_hr for val in series]
-                        st.success(f"ZWO: Media ~{int(hr_calc)} bpm")
+                    if subj.sport == SportType.CYCLING: intensity_series = [val * target_ftp for val in series]
+                    else: intensity_series = [val * target_thresh_hr for val in series]
                     duration = dur_calc
+                    st.success(f"ZWO: {dur_calc} min")
+                    
             elif fname.endswith('.fit'):
-                # 6 valori attesi: series, dur, avg_w, avg_hr, NP, df
-                fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_np, fit_clean_df = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
+                # 8 valori attesi ora! (Aggiunti dist, elev, work)
+                fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_np, fit_dist, fit_elev, fit_work, fit_clean_df = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
                 
                 if fit_clean_df is not None:
                     intensity_series = fit_series
                     duration = fit_dur
                     fit_df = fit_clean_df 
                     
-                    msg = f"FIT Caricato: {fit_dur} min."
-                    if subj.sport == SportType.CYCLING: 
-                        msg += f" Avg: {int(fit_avg_w)} W, NP: {int(fit_np)} W"
-                    else: 
-                        msg += f" Avg HR: {int(fit_avg_hr)} bpm"
-                    st.success(msg)
+                    # CRUSCOTTO INFORMATIVO (FILE LOADED)
+                    st.success("✅ File FIT elaborato")
+                    k1, k2 = st.columns(2)
+                    k1.metric("Durata", f"{fit_dur} min")
+                    k1.metric("Distanza", f"{fit_dist:.1f} km")
+                    k2.metric("Dislivello", f"{int(fit_elev)} m+")
+                    k2.metric("Lavoro", f"{int(fit_work)} kJ")
                     
-                    # Pre-popola i campi manuali per coerenza visiva
+                    st.markdown("---")
+                    k3, k4 = st.columns(2)
                     if subj.sport == SportType.CYCLING: 
-                        val = int(fit_avg_w)
-                        np_val_default = int(fit_np)
-                    else: 
-                        val = int(fit_avg_hr)
+                         k3.metric("Avg Power", f"{int(fit_avg_w)} W")
+                         k4.metric("Norm. Power (NP)", f"{int(fit_np)} W", help="Potenza Normalizzata (stress fisiologico reale)")
+                         val = int(fit_avg_w) # Per il motore
+                         vi_input = fit_np / fit_avg_w if fit_avg_w > 0 else 1.0
+                    else:
+                         k3.metric("Avg HR", f"{int(fit_avg_hr)} bpm")
+                         val = int(fit_avg_hr)
+                         vi_input = 1.0
+                else:
+                    st.error("Errore FIT.")
+                    duration = 120 # Fallback
 
-        # Variabile VI default
-        vi_input = 1.0
-
-        if subj.sport == SportType.CYCLING:
-            # Default value logic
-            default_val = int(np.mean(intensity_series)) if intensity_series else 200
-            val = st.number_input("Potenza Media Gara (Watt)", 50, 600, default_val, step=5)
+        if not file_loaded:
+            duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
+            vi_input = 1.0
             
-            params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
-            
-            if intensity_series is None: 
+            if subj.sport == SportType.CYCLING:
+                val = st.number_input("Potenza Media (Watt)", 50, 600, 200, step=5)
+                params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
                 params['avg_hr'] = val
-                st.caption("Per gare variabili, la NP è più alta della media.")
-                vi_input = st.slider("Indice Variabilità (VI = NP/Avg)", 1.00, 1.30, 1.00, 0.01, 
-                                     help="1.00=Crono, 1.05=Gran Fondo, 1.15+=Gara Nervosa")
-                if vi_input > 1.0: st.caption(f"Potenza Normalizzata Stimata: **{int(val * vi_input)} W**")
+                
+                st.caption("Gara Variabile?")
+                vi_input = st.slider("Indice Variabilità (VI)", 1.00, 1.30, 1.00, 0.01)
+                if vi_input > 1.0: st.caption(f"NP Stimata: **{int(val * vi_input)} W**")
             else:
-                # Se c'è un file FIT, VI è implicito nella serie, ma possiamo mostrarlo
-                if 'fit_np' in locals() and fit_avg_w > 0:
-                    real_vi = fit_np / fit_avg_w
-                    st.caption(f"Variability Index reale da file: **{real_vi:.2f}**")
-
+                val = st.number_input("FC Media (BPM)", 80, 220, 150, 1)
+                params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
         else:
-            default_val = int(np.mean(intensity_series)) if intensity_series else 150
-            val = st.number_input("FC Media Gara (BPM)", 80, 220, default_val, 1)
-            params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
+             # Se file caricato, i params sono derivati ma passiamo quelli base per sicurezza
+             if subj.sport == SportType.CYCLING:
+                 params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
+                 params['avg_hr'] = val
+             else:
+                 params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
             
     # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
@@ -777,3 +781,4 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
+
