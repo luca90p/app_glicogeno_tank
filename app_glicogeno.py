@@ -382,7 +382,7 @@ with tab3:
         target_thresh_hr = st.session_state['thr_hr_input']
         target_ftp = st.session_state['ftp_watts_input']
         
-        # Inizializzo params vuoto per evitare errori se non caricato
+        # Inizializzo params vuoto
         params = {}
 
         if uploaded_file:
@@ -392,13 +392,16 @@ with tab3:
             if fname.endswith('.zwo'):
                 series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
                 if series:
-                    if subj.sport.name == 'CYCLING': intensity_series = [val * target_ftp for val in series]
-                    else: intensity_series = [val * target_thresh_hr for val in series]
+                    # FIX 1: Confronto Robusto
+                    if subj.sport.name == 'CYCLING': 
+                        intensity_series = [val * target_ftp for val in series]
+                    else: 
+                        intensity_series = [val * target_thresh_hr for val in series]
+                    
                     duration = dur_calc
                     st.success(f"ZWO: {dur_calc} min")
                     
             elif fname.endswith('.fit'):
-                # 8 valori attesi ora! (Aggiunti dist, elev, work)
                 fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_np, fit_dist, fit_elev, fit_work, fit_clean_df = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
                 
                 if fit_clean_df is not None:
@@ -406,7 +409,6 @@ with tab3:
                     duration = fit_dur
                     fit_df = fit_clean_df 
                     
-                    # CRUSCOTTO INFORMATIVO (FILE LOADED)
                     st.success("✅ File FIT elaborato")
                     k1, k2 = st.columns(2)
                     k1.metric("Durata", f"{fit_dur} min")
@@ -416,17 +418,18 @@ with tab3:
                     
                     st.markdown("---")
                     k3, k4 = st.columns(2)
+                    
+                    # FIX 2: Confronto Robusto
                     if subj.sport.name == 'CYCLING': 
                          k3.metric("Avg Power", f"{int(fit_avg_w)} W")
                          k4.metric("Norm. Power (NP)", f"{int(fit_np)} W", help="Potenza Normalizzata (stress fisiologico reale)")
                          val = int(fit_avg_w) 
                          vi_input = fit_np / fit_avg_w if fit_avg_w > 0 else 1.0
                          
-                         # SALVA NP NEI PARAMS PER LA LOGIC
                          params = {
                              'mode': 'cycling', 
                              'avg_watts': val, 
-                             'np_watts': fit_np, # IMPORTANTE: Passiamo NP alla logica
+                             'np_watts': fit_np, 
                              'ftp_watts': target_ftp, 
                              'efficiency': 22.0
                          }
@@ -437,15 +440,15 @@ with tab3:
                          params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
                 else:
                     st.error("Errore FIT.")
-                    duration = 120 # Fallback
+                    duration = 120 
 
         if not file_loaded:
             duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
             vi_input = 1.0
             
+            # FIX 3: Confronto Robusto
             if subj.sport.name == 'CYCLING':
                 val = st.number_input("Potenza Media (Watt)", 50, 600, 200, step=5)
-                # Se non c'è file, NP = Avg * VI (se non specificato diversamente)
                 params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
                 params['avg_hr'] = val
                 
@@ -453,7 +456,6 @@ with tab3:
                 vi_input = st.slider("Indice Variabilità (VI)", 1.00, 1.30, 1.00, 0.01)
                 if vi_input > 1.0: 
                     st.caption(f"NP Stimata: **{int(val * vi_input)} W**")
-                    # Qui non passiamo np_watts esplicito, la logic lo calcolerà con vi_input se manca il file
             else:
                 val = st.number_input("FC Media (BPM)", 80, 220, 150, 1)
                 params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
@@ -913,6 +915,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
