@@ -790,7 +790,7 @@ with tab3:
                              rule = alt.Chart(pd.DataFrame({'x': [bonk_time]})).mark_rule(color='red', strokeDash=[4,4], size=3).encode(x='x')
                              # Testo
                              text = alt.Chart(pd.DataFrame({'x': [bonk_time], 'y': [max_y_scale*0.5], 't': ['💀 BONK!']})).mark_text(
-                                 align='left', dx=5, color='#B71C1C', size=16, weight='bold'
+                                 align='left', dx=5, color='#B71C1C', size=16, fontWeight='bold'
                              ).encode(x='x', y='y', text='t')
                              layers.extend([rule, text])
                      else:
@@ -798,7 +798,7 @@ with tab3:
                          final_res = int(stats['final_glycogen'])
                          final_time = df['Time (min)'].max()
                          text = alt.Chart(pd.DataFrame({'x': [final_time], 'y': [final_res], 't': [f'✅ {final_res}g']})).mark_text(
-                             align='right', dy=-15, color='#1B5E20', size=16, weight='bold'
+                             align='right', dy=-15, color='#1B5E20', size=16, fontWeight='bold'
                          ).encode(x='x', y='y', text='t')
                          layers.append(text)
                          
@@ -839,6 +839,7 @@ with tab3:
                  1. **Riduci l'intensità**: Abbassa i Watt/FC medi o il target FTP.
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
+
 
 
 
