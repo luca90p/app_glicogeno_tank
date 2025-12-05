@@ -382,6 +382,9 @@ with tab3:
         target_thresh_hr = st.session_state['thr_hr_input']
         target_ftp = st.session_state['ftp_watts_input']
         
+        # Inizializzo params vuoto per evitare errori se non caricato
+        params = {}
+
         if uploaded_file:
             fname = uploaded_file.name.lower()
             file_loaded = True
@@ -416,12 +419,22 @@ with tab3:
                     if subj.sport == SportType.CYCLING: 
                          k3.metric("Avg Power", f"{int(fit_avg_w)} W")
                          k4.metric("Norm. Power (NP)", f"{int(fit_np)} W", help="Potenza Normalizzata (stress fisiologico reale)")
-                         val = int(fit_avg_w) # Per il motore
+                         val = int(fit_avg_w) 
                          vi_input = fit_np / fit_avg_w if fit_avg_w > 0 else 1.0
+                         
+                         # SALVA NP NEI PARAMS PER LA LOGIC
+                         params = {
+                             'mode': 'cycling', 
+                             'avg_watts': val, 
+                             'np_watts': fit_np, # IMPORTANTE: Passiamo NP alla logica
+                             'ftp_watts': target_ftp, 
+                             'efficiency': 22.0
+                         }
                     else:
                          k3.metric("Avg HR", f"{int(fit_avg_hr)} bpm")
                          val = int(fit_avg_hr)
                          vi_input = 1.0
+                         params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
                 else:
                     st.error("Errore FIT.")
                     duration = 120 # Fallback
@@ -432,22 +445,18 @@ with tab3:
             
             if subj.sport == SportType.CYCLING:
                 val = st.number_input("Potenza Media (Watt)", 50, 600, 200, step=5)
+                # Se non c'è file, NP = Avg * VI (se non specificato diversamente)
                 params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
                 params['avg_hr'] = val
                 
                 st.caption("Gara Variabile?")
                 vi_input = st.slider("Indice Variabilità (VI)", 1.00, 1.30, 1.00, 0.01)
-                if vi_input > 1.0: st.caption(f"NP Stimata: **{int(val * vi_input)} W**")
+                if vi_input > 1.0: 
+                    st.caption(f"NP Stimata: **{int(val * vi_input)} W**")
+                    # Qui non passiamo np_watts esplicito, la logic lo calcolerà con vi_input se manca il file
             else:
                 val = st.number_input("FC Media (BPM)", 80, 220, 150, 1)
                 params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
-        else:
-             # Se file caricato, i params sono derivati ma passiamo quelli base per sicurezza
-             if subj.sport == SportType.CYCLING:
-                 params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
-                 params['avg_hr'] = val
-             else:
-                 params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
             
     # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
@@ -552,7 +561,7 @@ with tab3:
         st.subheader("Analisi Cinetica e Substrati")
         
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}")
+        c1.metric("Intensity Factor (IF)", f"{stats_sim['intensity_factor']:.2f}", help="Basato su NP se disponibile")
         c2.metric("RER Stimato (RQ)", f"{stats_sim['avg_rer']:.2f}")
         c3.metric("Ripartizione Substrati", f"{int(stats_sim['cho_pct'])}% CHO", f"{100-int(stats_sim['cho_pct'])}% FAT", delta_color="off")
         c4.metric("Glicogeno Residuo", f"{int(stats_sim['final_glycogen'])} g", delta=f"{int(stats_sim['final_glycogen'] - start_total)} g")
@@ -781,4 +790,3 @@ with tab3:
              else:
                  st.error("❌ Impossibile finire la gara!")
                  st.write("Anche con 120 g/h, le riserve si esauriscono. Devi ridurre l'intensità.")
-
