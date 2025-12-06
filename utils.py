@@ -194,121 +194,116 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
     return series, total_duration_min, avg_power, avg_hr, norm_power, dist, elev_gain, work_kj, df
 
 # ==============================================================================
-# PARSING METABOLICO (VERSIONE ROBUSTA & DEBUG)
+# PARSING METABOLICO (STRATEGIA "SCAN & SLICE" - INFALLIBILE)
 # ==============================================================================
 def parse_metabolic_report(uploaded_file):
     try:
-        df = None
-        # --- 1. GESTIONE FILE CSV / TXT ---
+        df_raw = None
+        uploaded_file.seek(0)
+        
+        # 1. LEGGI TUTTO IL FILE COME GREZZO (Senza cercare header)
         if uploaded_file.name.lower().endswith(('.csv', '.txt')):
-            content = uploaded_file.getvalue().decode('latin-1', errors='replace')
-            lines = content.splitlines()
-            
-            # A. TROVA LA RIGA DI INTESTAZIONE (HEADER)
-            header_row = None
-            # Termini chiave da cercare (tutti maiuscoli)
-            must_have = ["CHO", "FAT"]
-            # Almeno uno di questi per l'intensità
-            intensity_opts = ["WR", "WATT", "POW", "FC", "HR", "BPM", "SPEED", "VEL", "KM/H"]
-
-            for i, line in enumerate(lines[:300]):
-                l_up = line.upper()
-                # Cerca riga con CHO, FAT e almeno un indicatore di intensità
-                # Nota: Aggiungiamo separatori di controllo per evitare falsi positivi (es. "SPEED" in "XSPEED")
-                if all(t in l_up for t in must_have) and any(t in l_up for t in intensity_opts):
-                    header_row = i
-                    break
-            
-            if header_row is None:
-                return None, None, "Intestazione non trovata. Verifica che il file abbia colonne CHO, FAT e WR/FC."
-
-            # B. DETERMINA IL SEPARATORE
-            h_line = lines[header_row]
-            sep = ',' 
-            if h_line.count(';') > h_line.count(','): sep = ';'
-            elif h_line.count('\t') > h_line.count(','): sep = '\t'
-
-            # C. LEGGI DATAFRAME
-            uploaded_file.seek(0)
             try:
-                # skipinitialspace=True aiuta se ci sono spazi dopo la virgola (es. "WR, FC")
-                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal=',', 
-                               encoding='latin-1', engine='python', skipinitialspace=True)
+                # sep=None abilita lo "sniffer" automatico di separatori (virgola, punto e virgola, tab)
+                df_raw = pd.read_csv(uploaded_file, header=None, sep=None, engine='python', encoding='latin-1', dtype=str)
             except:
+                # Fallback se lo sniffer fallisce
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal='.', 
-                               encoding='latin-1', engine='python', skipinitialspace=True)
-
+                df_raw = pd.read_csv(uploaded_file, header=None, sep=',', engine='python', encoding='latin-1', dtype=str)
+                
         elif uploaded_file.name.lower().endswith(('.xls', '.xlsx')):
-            df = pd.read_excel(uploaded_file)
+            df_raw = pd.read_excel(uploaded_file, header=None, dtype=str)
         else:
             return None, None, "Formato file non supportato."
 
-        if df is None or df.empty: 
-            return None, None, "File vuoto."
+        if df_raw is None or df_raw.empty:
+            return None, None, "File vuoto o illeggibile."
 
-        # --- 3. MAPPATURA INTELLIGENTE ---
-        # Pulizia nomi colonne: Rimuove spazi e trasforma in maiuscolo
+        # 2. CERCA LA RIGA DI INTESTAZIONE DENTRO I DATI
+        header_idx = None
+        
+        # Parole chiave obbligatorie (Maiuscole)
+        targets = ["CHO", "FAT"]
+        # Parole chiave intensità (almeno una)
+        intensities = ["WR", "WATT", "POW", "FC", "HR", "BPM", "SPEED", "VEL", "KM/H", "V"]
+
+        # Scansiona le prime 300 righe del DataFrame
+        for i, row in df_raw.head(300).iterrows():
+            # Crea una stringa unica della riga per cercare le parole (es. "TIME WR FC CHO FAT")
+            row_text = " ".join([str(x).upper() for x in row.values if pd.notna(x)])
+            
+            # Verifica presenza
+            if all(t in row_text for t in targets) and any(t in row_text for t in intensities):
+                header_idx = i
+                break
+        
+        if header_idx is None:
+            return None, None, "Intestazione (CHO/FAT/Watt) non trovata nel file."
+
+        # 3. APPLICA L'INTESTAZIONE E TAGLIA
+        # La riga 'i' diventa l'intestazione
+        df_raw.columns = df_raw.iloc[header_idx] 
+        # Teniamo solo le righe SOTTO l'intestazione
+        df = df_raw.iloc[header_idx + 1:].reset_index(drop=True)
+
+        # --- DA QUI IN POI È LA LOGICA STANDARD DI PULIZIA ---
+        
+        # Pulizia nomi colonne
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
-        
         col_map = {}
 
         def find_exact_or_partial(targets):
-            # 1. Cerca corrispondenza esatta (Priorità alta)
             for col in cols:
-                if col in targets: return col
-            # 2. Cerca corrispondenza parziale (es. "WR (WATT)" contiene "WR")
+                if col in targets: return col # Match esatto
             for col in cols:
                 for t in targets:
-                    # Evitiamo match corti pericolosi (es. "V" in "V'O2")
-                    if t in col:
-                        # Se il target è cortissimo (es "V"), deve essere isolato o quasi
-                        if len(t) < 2 and len(col) > 3: continue 
-                        return col
+                    if t in col and len(col) < len(t) + 5: return col # Match parziale
             return None
 
-        # Mappatura
-        col_map['CHO'] = find_exact_or_partial(['CHO', 'CARBOHYDRATES', 'V\'CO2']) # Fallback
+        # Mappatura Colonne
+        col_map['CHO'] = find_exact_or_partial(['CHO', 'CARBOHYDRATES'])
         col_map['FAT'] = find_exact_or_partial(['FAT', 'LIPIDS'])
         
-        # Intensità (Cerca nell'ordine: Watt -> Speed -> FC)
         watt_c = find_exact_or_partial(['WR', 'WATT', 'POWER', 'POW', 'LOAD'])
-        speed_c = find_exact_or_partial(['SPEED', 'VEL', 'KM/H', 'V']) # 'V' minuscola nel file orig
-        fc_c = find_exact_or_partial(['FC', 'HR', 'HEART', 'BPM', 'HF'])
+        speed_c = find_exact_or_partial(['SPEED', 'VEL', 'KM/H', 'V'])
+        fc_c = find_exact_or_partial(['FC', 'HR', 'HEART', 'BPM'])
         
         int_type = None
-        if watt_c: 
-            col_map['Intensity'] = watt_c; int_type = 'watt'
-        elif speed_c: 
-            col_map['Intensity'] = speed_c; int_type = 'speed'
-        elif fc_c: 
-            col_map['Intensity'] = fc_c; int_type = 'hr'
+        if watt_c: col_map['Intensity'] = watt_c; int_type = 'watt'
+        elif speed_c: col_map['Intensity'] = speed_c; int_type = 'speed'
+        elif fc_c: col_map['Intensity'] = fc_c; int_type = 'hr'
 
-        # CHECK ERRORI CON DEBUG INFO
+        # Check Errori
         if not (col_map.get('CHO') and col_map.get('FAT') and int_type):
-             # Restituisce l'elenco delle colonne lette per capire cosa manca
              missing = []
              if not col_map.get('CHO'): missing.append("CHO")
              if not col_map.get('FAT'): missing.append("FAT")
-             if not int_type: missing.append("INTENSITY (WR/FC/Speed)")
-             
-             return None, None, f"⚠️ Colonne mancanti: {missing}. \n\nColonne lette dal file: {cols}"
+             if not int_type: missing.append("INTENSITY")
+             return None, None, f"⚠️ Colonne non identificate: {missing}. Trovate: {cols}"
 
-        # --- 4. ESTRAZIONE DATI ---
+        # 4. ESTRAZIONE E CONVERSIONE NUMERICA
         clean_df = pd.DataFrame()
-        clean_df['Intensity'] = pd.to_numeric(df[col_map['Intensity']], errors='coerce')
-        clean_df['CHO'] = pd.to_numeric(df[col_map['CHO']], errors='coerce')
-        clean_df['FAT'] = pd.to_numeric(df[col_map['FAT']], errors='coerce')
         
-        # Pulizia NaN e Zeri
+        # Funzione helper per convertire gestendo virgole/punti
+        def to_float(series):
+            # Rimuove 'g/h' o unità se presenti, sostituisce virgola con punto
+            s_clean = series.astype(str).str.replace(',', '.', regex=False).str.extract(r'(\d+\.?\d*)')[0]
+            return pd.to_numeric(s_clean, errors='coerce')
+
+        clean_df['Intensity'] = to_float(df[col_map['Intensity']])
+        clean_df['CHO'] = to_float(df[col_map['CHO']])
+        clean_df['FAT'] = to_float(df[col_map['FAT']])
+        
+        # Rimuovi righe sporche (NaN)
         clean_df.dropna(inplace=True)
+        # Rimuovi valori zero/negativi di intensità (fasi di riposo/pre-test)
         clean_df = clean_df[clean_df['Intensity'] > 0]
         
-        # Ordinamento
+        # Ordina e Reset
         clean_df = clean_df.sort_values('Intensity').reset_index(drop=True)
         
-        # Check Unità Misura (Se CHO max < 8, probabilmente sono g/min -> converti in g/h)
+        # Check Unità Misura (Se CHO max < 8, sono g/min -> converti in g/h)
         if not clean_df.empty and clean_df['CHO'].max() < 8.0:
             clean_df['CHO'] *= 60
             clean_df['FAT'] *= 60
@@ -316,7 +311,7 @@ def parse_metabolic_report(uploaded_file):
         return clean_df, int_type, None
 
     except Exception as e:
-        return None, None, f"Errore critico parser: {str(e)}"
+        return None, None, f"Errore parsing avanzato: {str(e)}"
 
 # --- ZWO ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
@@ -350,5 +345,6 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
 
 
