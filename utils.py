@@ -194,77 +194,129 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
     return series, total_duration_min, avg_power, avg_hr, norm_power, dist, elev_gain, work_kj, df
 
 # ==============================================================================
-# PARSING METABOLICO (INVARIATO)
+# PARSING METABOLICO (VERSIONE POTENZIATA METASOFT/GENERICA)
 # ==============================================================================
 def parse_metabolic_report(uploaded_file):
     try:
         df = None
+        # --- 1. GESTIONE FILE CSV / TXT ---
         if uploaded_file.name.lower().endswith(('.csv', '.txt')):
+            # Decodifica il contenuto cercando di gestire encoding diversi (latin-1 è comune per strumenti medicali)
             content = uploaded_file.getvalue().decode('latin-1', errors='replace')
             lines = content.splitlines()
+            
+            # A. TROVA LA RIGA DI INTESTAZIONE (HEADER)
             header_row = None
-            search_terms = ["FC", "WR", "CHO", "FAT"]
-            for i, line in enumerate(lines[:300]):
-                if sum(1 for term in search_terms if term in line.upper()) >= 2:
-                    header_row = i; break
-            if header_row is None:
-                for i, line in enumerate(lines[:300]):
-                    if line.strip().startswith("t") and "Fase" in line:
-                        header_row = i; break
-            parse_header = header_row if header_row is not None else 0
-            sep = ','
-            if header_row is not None:
-                h_line = lines[header_row]
-                if h_line.count(';') > h_line.count(','): sep = ';'
-                elif h_line.count('\t') > h_line.count(','): sep = '\t'
-            uploaded_file.seek(0)
-            try: df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal='.')
-            except: 
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, header=parse_header, sep=sep, engine='python', decimal=',')
+            # Cerchiamo una riga che contenga ENTRAMBI i termini metabolici E almeno un termine di intensità
+            target_cols = ["CHO", "FAT"]
+            intensity_cols = ["WR", "WATT", "POWER", "FC", "HR", "HEART", "SPEED", "VEL", "KM/H", "V"] # 'v' è tipico di Metasoft
 
+            # Scansioniamo le prime 300 righe (solitamente sufficienti)
+            for i, line in enumerate(lines[:300]):
+                line_upper = line.upper()
+                # La riga deve avere CHO e FAT
+                if all(term in line_upper for term in target_cols):
+                    # E deve avere un dato di intensità (Watt, FC o Velocità)
+                    # Usiamo un controllo più lasco per trovare 'V' o 'WR' isolati separati da virgole
+                    if any(term in line_upper for term in intensity_cols):
+                        header_row = i
+                        break
+            
+            if header_row is None:
+                return None, None, "Intestazione colonne (CHO, FAT, Intensity) non trovata."
+
+            # B. DETERMINA IL SEPARATORE (CSV)
+            h_line = lines[header_row]
+            sep = ',' 
+            if h_line.count(';') > h_line.count(','): sep = ';'
+            elif h_line.count('\t') > h_line.count(','): sep = '\t'
+
+            # C. LEGGI IL DATAFRAME
+            uploaded_file.seek(0)
+            # Tentativo 1: Formato Europeo (Decimale = Virgola) -> Tipico Metasoft
+            try:
+                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal=',', encoding='latin-1', engine='python')
+            except:
+                # Tentativo 2: Formato Standard (Decimale = Punto)
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal='.', encoding='latin-1', engine='python')
+
+        # --- 2. GESTIONE FILE EXCEL ---
         elif uploaded_file.name.lower().endswith(('.xls', '.xlsx')):
             df = pd.read_excel(uploaded_file)
-        else: return None, None, "Formato non supportato."
+        else: 
+            return None, None, "Formato file non supportato."
 
-        if df is None or df.empty: return None, None, "File vuoto."
+        if df is None or df.empty: 
+            return None, None, "File vuoto o illeggibile."
 
+        # --- 3. MAPPATURA E PULIZIA COLONNE ---
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
         col_map = {}
-        def find_col(keywords):
-            for c in cols:
-                for k in keywords:
-                    if k == c or (k in c and len(c) < len(k)+5): return c
+
+        def find_col(candidates):
+            for col in cols:
+                # Match esatto
+                if col in candidates: return col
+                # Match parziale (es. "CHO (g/h)" matcha con "CHO")
+                for cand in candidates:
+                    if cand in col and len(col) < len(cand) + 10: 
+                        return col
             return None
 
+        # Mappatura dinamica
         col_map['CHO'] = find_col(['CHO', 'CARBOHYDRATES'])
         col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
-        watt_c = find_col(['WR', 'WATT', 'POWER', 'POW'])
-        speed_c = find_col(['SPEED', 'VEL', 'KM/H', 'V'])
+        
+        # Priorità Intensità: Watt > Speed > FC
+        watt_c = find_col(['WR', 'WATT', 'POWER', 'POW']) # WR è lo standard Metasoft per i Watt
+        speed_c = find_col(['SPEED', 'VEL', 'KM/H', 'V']) # V è lo standard Metasoft per la velocità
         fc_c = find_col(['FC', 'HR', 'HEART', 'BPM'])
         
         int_type = None
-        if watt_c: col_map['Intensity'] = watt_c; int_type = 'watt'
-        elif speed_c: col_map['Intensity'] = speed_c; int_type = 'speed'
-        elif fc_c: col_map['Intensity'] = fc_c; int_type = 'hr'
+        if watt_c: 
+            col_map['Intensity'] = watt_c
+            int_type = 'watt'
+        elif speed_c: 
+            col_map['Intensity'] = speed_c
+            int_type = 'speed'
+        elif fc_c: 
+            col_map['Intensity'] = fc_c
+            int_type = 'hr'
 
         if not (col_map.get('CHO') and col_map.get('FAT') and int_type):
-             return None, None, "Colonne chiave mancanti."
+             return None, None, f"Colonne mancanti. Trovate: {list(col_map.keys())}"
 
+        # --- 4. ESTRAZIONE DATI ---
         clean_df = pd.DataFrame()
         clean_df['Intensity'] = df[col_map['Intensity']]
         clean_df['CHO'] = df[col_map['CHO']]
         clean_df['FAT'] = df[col_map['FAT']]
-        for c in clean_df.columns: clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
+        
+        # Conversione forzata a numeri (i valori "g/h" o "L/min" diventeranno NaN)
+        for c in clean_df.columns: 
+            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
+        
+        # Rimuovi righe con NaN (es. le righe delle unità di misura)
         clean_df.dropna(inplace=True)
+        
+        # Filtra valori senza senso (Intensità <= 0) e ordina
         clean_df = clean_df[clean_df['Intensity'] > 0].sort_values('Intensity')
         
-        if not clean_df.empty and clean_df['CHO'].max() < 10:
-            clean_df['CHO'] *= 60; clean_df['FAT'] *= 60
+        # Reset indice
+        clean_df.reset_index(drop=True, inplace=True)
+        
+        # Check unità di misura (Se CHO < 10 max, probabilmente sono g/min -> converto in g/h)
+        # Nota: Metasoft di solito è già in g/h, ma manteniamo il check per altri file
+        if not clean_df.empty and clean_df['CHO'].max() < 8.0:
+            clean_df['CHO'] *= 60
+            clean_df['FAT'] *= 60
             
         return clean_df, int_type, None
-    except Exception as e: return None, None, str(e)
+
+    except Exception as e: 
+        return None, None, f"Errore parsing: {str(e)}"
 
 # --- ZWO ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
@@ -298,3 +350,4 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
