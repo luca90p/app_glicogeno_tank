@@ -512,7 +512,7 @@ with tab3:
             st.info("ℹ️ **Modello Teorico**")
             st.caption("Regola i parametri per stimare il profilo metabolico.")
             crossover_val = st.slider("Crossover Point (% Soglia)", 50, 90, 75)
-            if subj.sport == SportType.CYCLING:
+            if subj.sport.name == 'CYCLING':
                 eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5)
                 params['efficiency'] = eff_mech
             tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
@@ -706,12 +706,16 @@ with tab3:
         st.subheader("🎯 Calcolatore Strategia Minima")
         st.markdown("Il sistema calcolerà l'apporto di carboidrati minimo necessario per terminare la gara senza crisi.")
         
+        # FIX IMPORTANTE: Se il lab data è disattivato, forziamo None
+        curve_to_use = curve_data if use_lab_active else None
+
         if st.button("Calcola Fabbisogno Minimo"):
              with st.spinner("Simulazione scenari multipli in corso..."):
-                 # 1. Trova il numero magico (es. 40 g/h)
                  opt_intake = logic.calculate_minimum_strategy(
                      tank, duration, subj, params, 
-                     st.session_state.get('metabolic_curve'), mix_sel, intake_mode_enum, intake_cutoff
+                     curve_to_use, # <--- Passiamo la curva corretta (o None)
+                     mix_sel, intake_mode_enum, intake_cutoff,
+                     variability_index=vi_input # Manteniamo coerenza col VI
                  )
                  
              if opt_intake is not None:
@@ -720,7 +724,6 @@ with tab3:
                       st.caption("Le tue riserve sono sufficienti per coprire la durata a questa intensità.")
                  
                  else:
-                     # Messaggio Principale
                      st.success(f"### ✅ Strategia Minima: {opt_intake} g/h")
                      if intake_mode_enum == IntakeMode.DISCRETE and cho_unit > 0:
                          interval_min = int(60 / (opt_intake / cho_unit))
@@ -733,15 +736,19 @@ with tab3:
                  # Scenario A: Il Crollo (0 g/h)
                  df_zero, stats_zero = logic.simulate_metabolism(
                      tank, duration, 0, 0, 70, 20, subj, params, 
-                     mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
-                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
+                     mix_type_input=mix_sel, 
+                     metabolic_curve=curve_to_use, # <--- Corretto
+                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
+                     variability_index=vi_input # <--- Corretto
                  )
                  
                  # Scenario B: Il Salvataggio (opt_intake g/h)
                  df_opt, stats_opt = logic.simulate_metabolism(
                      tank, duration, opt_intake, cho_unit if cho_unit > 0 else 25, 70, 20, subj, params, 
-                     mix_type_input=mix_sel, metabolic_curve=st.session_state.get('metabolic_curve'),
-                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff
+                     mix_type_input=mix_sel, 
+                     metabolic_curve=curve_to_use, # <--- Corretto
+                     intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
+                     variability_index=vi_input # <--- Corretto
                  )
 
                  st.markdown("---")
@@ -749,21 +756,16 @@ with tab3:
 
                  col_bad, col_good = st.columns(2)
                  
-                 # Scala comune per confronto onesto
                  max_y_scale = start_total * 1.1
 
                  def plot_enhanced_scenario(df, stats, title, is_bad_scenario):
-                     # Dati per grafico stacked
                      df_melt = df.melt('Time (min)', value_vars=['Residuo Muscolare', 'Residuo Epatico'], var_name='Riserva', value_name='Grammi')
-                     
-                     # Palette Colori: Rosso (Bad) vs Verde (Good)
-                     colors_range = ['#EF9A9A', '#C62828'] if is_bad_scenario else ['#A5D6A7', '#2E7D32'] # [Muscolo (chiaro), Fegato (scuro)]
+                     colors_range = ['#EF9A9A', '#C62828'] if is_bad_scenario else ['#A5D6A7', '#2E7D32']
                      bg_color = '#FFEBEE' if is_bad_scenario else '#F1F8E9'
                      
-                     # 1. Sfondo Zone (Evidenzia Zona Critica < 20g)
                      zones = pd.DataFrame([
-                         {'y': 0, 'y2': 20, 'c': '#FFCDD2'}, # Zona Critica (Rosso più scuro)
-                         {'y': 20, 'y2': max_y_scale, 'c': bg_color} # Zona Sicura/Normale
+                         {'y': 0, 'y2': 20, 'c': '#FFCDD2'}, 
+                         {'y': 20, 'y2': max_y_scale, 'c': bg_color}
                      ])
                      
                      bg = alt.Chart(zones).mark_rect(opacity=0.5).encode(
@@ -772,7 +774,6 @@ with tab3:
                         color=alt.Color('c', scale=None)
                      )
                      
-                     # 2. Area Chart
                      area = alt.Chart(df_melt).mark_area(opacity=0.85).encode(
                          x='Time (min)',
                          y=alt.Y('Grammi', stack=True),
@@ -782,23 +783,20 @@ with tab3:
                      
                      layers = [bg, area, cutoff_line]
                      
-                     # 3. Annotazioni Speciali (BONK vs SAFE)
                      if is_bad_scenario:
-                         # Trova il momento del Bonk Epatico (<=0)
                          bonk_row = df[df['Residuo Epatico'] <= 0]
                          if not bonk_row.empty:
                              bonk_time = bonk_row.iloc[0]['Time (min)']
-                             # Linea Verticale Bonk
                              rule = alt.Chart(pd.DataFrame({'x': [bonk_time]})).mark_rule(color='red', strokeDash=[4,4], size=3).encode(x='x')
-                             # Testo
+                             # FIX VALIDAZIONE: fontWeight invece di weight
                              text = alt.Chart(pd.DataFrame({'x': [bonk_time], 'y': [max_y_scale*0.5], 't': ['💀 BONK!']})).mark_text(
-                                 align='left', dx=5, color='#B71C1C', size=16, fontWeight='bold'
+                                 align='left', dx=5, color='#B71C1C', size=16, fontWeight='bold' 
                              ).encode(x='x', y='y', text='t')
                              layers.extend([rule, text])
                      else:
-                         # Mostra valore finale salvato
                          final_res = int(stats['final_glycogen'])
                          final_time = df['Time (min)'].max()
+                         # FIX VALIDAZIONE: fontWeight invece di weight
                          text = alt.Chart(pd.DataFrame({'x': [final_time], 'y': [final_res], 't': [f'✅ {final_res}g']})).mark_text(
                              align='right', dy=-15, color='#1B5E20', size=16, fontWeight='bold'
                          ).encode(x='x', y='y', text='t')
@@ -808,8 +806,6 @@ with tab3:
 
                  with col_bad:
                      st.altair_chart(plot_enhanced_scenario(df_zero, stats_zero, "🔴 SCENARIO DIGIUNO (Fallimento)", True), use_container_width=True)
-                     
-                     # KPI Rapidi
                      final_liv = df_zero['Residuo Epatico'].iloc[-1]
                      if final_liv <= 0:
                          st.error(f"**CROLLO METABOLICO**")
@@ -819,8 +815,6 @@ with tab3:
 
                  with col_good:
                      st.altair_chart(plot_enhanced_scenario(df_opt, stats_opt, f"🟢 SCENARIO STRATEGIA ({opt_intake} g/h)", False), use_container_width=True)
-                     
-                     # KPI Rapidi
                      saved_grams = int(stats_opt['final_glycogen'] - stats_zero['final_glycogen'])
                      st.success(f"**SALVATAGGIO: +{saved_grams}g**")
                      st.caption(f"L'integrazione ha preservato {saved_grams}g di glicogeno extra, garantendo l'arrivo.")
@@ -915,6 +909,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
