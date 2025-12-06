@@ -194,129 +194,129 @@ def parse_fit_file_wrapper(uploaded_file, sport_type):
     return series, total_duration_min, avg_power, avg_hr, norm_power, dist, elev_gain, work_kj, df
 
 # ==============================================================================
-# PARSING METABOLICO (VERSIONE POTENZIATA METASOFT/GENERICA)
+# PARSING METABOLICO (VERSIONE ROBUSTA & DEBUG)
 # ==============================================================================
 def parse_metabolic_report(uploaded_file):
     try:
         df = None
         # --- 1. GESTIONE FILE CSV / TXT ---
         if uploaded_file.name.lower().endswith(('.csv', '.txt')):
-            # Decodifica il contenuto cercando di gestire encoding diversi (latin-1 è comune per strumenti medicali)
             content = uploaded_file.getvalue().decode('latin-1', errors='replace')
             lines = content.splitlines()
             
             # A. TROVA LA RIGA DI INTESTAZIONE (HEADER)
             header_row = None
-            # Cerchiamo una riga che contenga ENTRAMBI i termini metabolici E almeno un termine di intensità
-            target_cols = ["CHO", "FAT"]
-            intensity_cols = ["WR", "WATT", "POWER", "FC", "HR", "HEART", "SPEED", "VEL", "KM/H", "V"] # 'v' è tipico di Metasoft
+            # Termini chiave da cercare (tutti maiuscoli)
+            must_have = ["CHO", "FAT"]
+            # Almeno uno di questi per l'intensità
+            intensity_opts = ["WR", "WATT", "POW", "FC", "HR", "BPM", "SPEED", "VEL", "KM/H"]
 
-            # Scansioniamo le prime 300 righe (solitamente sufficienti)
             for i, line in enumerate(lines[:300]):
-                line_upper = line.upper()
-                # La riga deve avere CHO e FAT
-                if all(term in line_upper for term in target_cols):
-                    # E deve avere un dato di intensità (Watt, FC o Velocità)
-                    # Usiamo un controllo più lasco per trovare 'V' o 'WR' isolati separati da virgole
-                    if any(term in line_upper for term in intensity_cols):
-                        header_row = i
-                        break
+                l_up = line.upper()
+                # Cerca riga con CHO, FAT e almeno un indicatore di intensità
+                # Nota: Aggiungiamo separatori di controllo per evitare falsi positivi (es. "SPEED" in "XSPEED")
+                if all(t in l_up for t in must_have) and any(t in l_up for t in intensity_opts):
+                    header_row = i
+                    break
             
             if header_row is None:
-                return None, None, "Intestazione colonne (CHO, FAT, Intensity) non trovata."
+                return None, None, "Intestazione non trovata. Verifica che il file abbia colonne CHO, FAT e WR/FC."
 
-            # B. DETERMINA IL SEPARATORE (CSV)
+            # B. DETERMINA IL SEPARATORE
             h_line = lines[header_row]
             sep = ',' 
             if h_line.count(';') > h_line.count(','): sep = ';'
             elif h_line.count('\t') > h_line.count(','): sep = '\t'
 
-            # C. LEGGI IL DATAFRAME
+            # C. LEGGI DATAFRAME
             uploaded_file.seek(0)
-            # Tentativo 1: Formato Europeo (Decimale = Virgola) -> Tipico Metasoft
             try:
-                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal=',', encoding='latin-1', engine='python')
+                # skipinitialspace=True aiuta se ci sono spazi dopo la virgola (es. "WR, FC")
+                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal=',', 
+                               encoding='latin-1', engine='python', skipinitialspace=True)
             except:
-                # Tentativo 2: Formato Standard (Decimale = Punto)
                 uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal='.', encoding='latin-1', engine='python')
+                df = pd.read_csv(uploaded_file, header=header_row, sep=sep, decimal='.', 
+                               encoding='latin-1', engine='python', skipinitialspace=True)
 
-        # --- 2. GESTIONE FILE EXCEL ---
         elif uploaded_file.name.lower().endswith(('.xls', '.xlsx')):
             df = pd.read_excel(uploaded_file)
-        else: 
+        else:
             return None, None, "Formato file non supportato."
 
         if df is None or df.empty: 
-            return None, None, "File vuoto o illeggibile."
+            return None, None, "File vuoto."
 
-        # --- 3. MAPPATURA E PULIZIA COLONNE ---
+        # --- 3. MAPPATURA INTELLIGENTE ---
+        # Pulizia nomi colonne: Rimuove spazi e trasforma in maiuscolo
         df.columns = [str(c).strip().upper() for c in df.columns]
         cols = df.columns.tolist()
+        
         col_map = {}
 
-        def find_col(candidates):
+        def find_exact_or_partial(targets):
+            # 1. Cerca corrispondenza esatta (Priorità alta)
             for col in cols:
-                # Match esatto
-                if col in candidates: return col
-                # Match parziale (es. "CHO (g/h)" matcha con "CHO")
-                for cand in candidates:
-                    if cand in col and len(col) < len(cand) + 10: 
+                if col in targets: return col
+            # 2. Cerca corrispondenza parziale (es. "WR (WATT)" contiene "WR")
+            for col in cols:
+                for t in targets:
+                    # Evitiamo match corti pericolosi (es. "V" in "V'O2")
+                    if t in col:
+                        # Se il target è cortissimo (es "V"), deve essere isolato o quasi
+                        if len(t) < 2 and len(col) > 3: continue 
                         return col
             return None
 
-        # Mappatura dinamica
-        col_map['CHO'] = find_col(['CHO', 'CARBOHYDRATES'])
-        col_map['FAT'] = find_col(['FAT', 'LIPIDS'])
+        # Mappatura
+        col_map['CHO'] = find_exact_or_partial(['CHO', 'CARBOHYDRATES', 'V\'CO2']) # Fallback
+        col_map['FAT'] = find_exact_or_partial(['FAT', 'LIPIDS'])
         
-        # Priorità Intensità: Watt > Speed > FC
-        watt_c = find_col(['WR', 'WATT', 'POWER', 'POW']) # WR è lo standard Metasoft per i Watt
-        speed_c = find_col(['SPEED', 'VEL', 'KM/H', 'V']) # V è lo standard Metasoft per la velocità
-        fc_c = find_col(['FC', 'HR', 'HEART', 'BPM'])
+        # Intensità (Cerca nell'ordine: Watt -> Speed -> FC)
+        watt_c = find_exact_or_partial(['WR', 'WATT', 'POWER', 'POW', 'LOAD'])
+        speed_c = find_exact_or_partial(['SPEED', 'VEL', 'KM/H', 'V']) # 'V' minuscola nel file orig
+        fc_c = find_exact_or_partial(['FC', 'HR', 'HEART', 'BPM', 'HF'])
         
         int_type = None
         if watt_c: 
-            col_map['Intensity'] = watt_c
-            int_type = 'watt'
+            col_map['Intensity'] = watt_c; int_type = 'watt'
         elif speed_c: 
-            col_map['Intensity'] = speed_c
-            int_type = 'speed'
+            col_map['Intensity'] = speed_c; int_type = 'speed'
         elif fc_c: 
-            col_map['Intensity'] = fc_c
-            int_type = 'hr'
+            col_map['Intensity'] = fc_c; int_type = 'hr'
 
+        # CHECK ERRORI CON DEBUG INFO
         if not (col_map.get('CHO') and col_map.get('FAT') and int_type):
-             return None, None, f"Colonne mancanti. Trovate: {list(col_map.keys())}"
+             # Restituisce l'elenco delle colonne lette per capire cosa manca
+             missing = []
+             if not col_map.get('CHO'): missing.append("CHO")
+             if not col_map.get('FAT'): missing.append("FAT")
+             if not int_type: missing.append("INTENSITY (WR/FC/Speed)")
+             
+             return None, None, f"⚠️ Colonne mancanti: {missing}. \n\nColonne lette dal file: {cols}"
 
         # --- 4. ESTRAZIONE DATI ---
         clean_df = pd.DataFrame()
-        clean_df['Intensity'] = df[col_map['Intensity']]
-        clean_df['CHO'] = df[col_map['CHO']]
-        clean_df['FAT'] = df[col_map['FAT']]
+        clean_df['Intensity'] = pd.to_numeric(df[col_map['Intensity']], errors='coerce')
+        clean_df['CHO'] = pd.to_numeric(df[col_map['CHO']], errors='coerce')
+        clean_df['FAT'] = pd.to_numeric(df[col_map['FAT']], errors='coerce')
         
-        # Conversione forzata a numeri (i valori "g/h" o "L/min" diventeranno NaN)
-        for c in clean_df.columns: 
-            clean_df[c] = pd.to_numeric(clean_df[c], errors='coerce')
-        
-        # Rimuovi righe con NaN (es. le righe delle unità di misura)
+        # Pulizia NaN e Zeri
         clean_df.dropna(inplace=True)
+        clean_df = clean_df[clean_df['Intensity'] > 0]
         
-        # Filtra valori senza senso (Intensità <= 0) e ordina
-        clean_df = clean_df[clean_df['Intensity'] > 0].sort_values('Intensity')
+        # Ordinamento
+        clean_df = clean_df.sort_values('Intensity').reset_index(drop=True)
         
-        # Reset indice
-        clean_df.reset_index(drop=True, inplace=True)
-        
-        # Check unità di misura (Se CHO < 10 max, probabilmente sono g/min -> converto in g/h)
-        # Nota: Metasoft di solito è già in g/h, ma manteniamo il check per altri file
+        # Check Unità Misura (Se CHO max < 8, probabilmente sono g/min -> converti in g/h)
         if not clean_df.empty and clean_df['CHO'].max() < 8.0:
             clean_df['CHO'] *= 60
             clean_df['FAT'] *= 60
             
         return clean_df, int_type, None
 
-    except Exception as e: 
-        return None, None, f"Errore parsing: {str(e)}"
+    except Exception as e:
+        return None, None, f"Errore critico parser: {str(e)}"
 
 # --- ZWO ---
 def parse_zwo_file(uploaded_file, ftp_watts, thr_hr, sport_type):
@@ -350,4 +350,5 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
 
