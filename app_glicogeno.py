@@ -162,19 +162,44 @@ with tab1:
 
                 elif met_method == "Carica File (Completo)":
                     upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx', 'txt'])
+                    
                     if upl_file:
-                        df_curve, int_type, err = utils.parse_metabolic_report(upl_file)
-                        if df_curve is not None:
-                            st.success(f"✅ Curva caricata! ({len(df_curve)} punti). Intensità basata su: {int_type.upper()}")
+                        # Chiama il parser aggiornato
+                        df_raw, avail_metrics, err = utils.parse_metabolic_report(upl_file)
+                        
+                        if df_raw is not None:
+                            st.success("✅ File decodificato con successo!")
+                            
+                            # --- SELETTORE INTENSITÀ ---
+                            # Se ci sono più metriche (es. Watt e HR), fai scegliere all'utente
+                            sel_metric = avail_metrics[0]
+                            if len(avail_metrics) > 1:
+                                st.markdown("##### 📐 Seleziona il Riferimento (Asse X)")
+                                # Default: Watt se c'è, altrimenti il primo disponibile
+                                def_idx = avail_metrics.index('Watt') if 'Watt' in avail_metrics else 0
+                                sel_metric = st.radio("Scegli su cosa basare le curve:", avail_metrics, index=def_idx, horizontal=True)
+                            
+                            # Costruisci il DataFrame finale 'Intensity'
+                            df_curve = df_raw.copy()
+                            df_curve['Intensity'] = df_curve[sel_metric]
+                            
+                            # Filtra valori nulli/zero e ordina
+                            df_curve = df_curve[df_curve['Intensity'] > 0].sort_values('Intensity').reset_index(drop=True)
+                            
+                            # Plot
                             c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
-                                x=alt.X('Intensity', title='Intensità'), 
+                                x=alt.X('Intensity', title=f'Intensità ({sel_metric})'), 
                                 y='CHO', color=alt.value('blue'), tooltip=['Intensity', 'CHO', 'FAT']
                             ) + alt.Chart(df_curve).mark_line(point=True).encode(
                                 x='Intensity', y='FAT', color=alt.value('orange')
                             )
                             st.altair_chart(c_chart, use_container_width=True)
+                            
+                            # Salvataggio Session State
                             st.session_state['use_lab_data'] = True
                             st.session_state['metabolic_curve'] = df_curve
+                            st.info(f"Curve salvate basate su: **{sel_metric}**")
+                            
                         else:
                             st.error(f"Errore: {err}")
             else:
@@ -909,6 +934,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
