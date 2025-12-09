@@ -252,7 +252,7 @@ with tab1:
             st.table(pd.DataFrame(utils.calculate_zones_running_hr(thr_hr)))
 
 # =============================================================================
-# TAB 2: DIARIO IBRIDO (ORARIO & CALENDARIO) - V2 Flessibile
+# TAB 2: DIARIO IBRIDO (ORARIO & CALENDARIO) - V3 Layout Chiaro
 # =============================================================================
 with tab2:
     if 'base_tank_data' not in st.session_state:
@@ -269,89 +269,77 @@ with tab2:
     c_cal1, c_cal2, c_cal3 = st.columns([1, 1, 1])
     
     race_date = c_cal1.date_input("Data Evento Target", value=pd.Timestamp.today() + pd.Timedelta(days=7))
-    num_days_taper = c_cal2.slider("Durata Diario (Giorni)", 2, 7, 7, help="Quanti giorni prima della gara vuoi monitorare?")
+    num_days_taper = c_cal2.slider("Durata Diario (Giorni)", 2, 7, 7)
     
     from data_models import GlycogenState
     gly_states = list(GlycogenState)
-    # Calcoliamo l'etichetta dinamica per lo stato iniziale
     start_label = f"Condizione a -{num_days_taper}gg"
     sel_state = c_cal3.selectbox(start_label, gly_states, format_func=lambda x: x.label, index=2)
     
-    # --- DEFAULT SCHEDULE (Per velocizzare input) ---
+    # --- DEFAULT SCHEDULE ---
     with st.expander("⚙️ Impostazioni Orarie Standard (Default)", expanded=False):
         d_c1, d_c2 = st.columns(2)
         def_sleep_start = d_c1.time_input("Orario Sonno (Inizio)", value=pd.to_datetime("23:00").time())
         def_sleep_end = d_c2.time_input("Orario Sveglia", value=pd.to_datetime("07:00").time())
-        def_work_start = pd.to_datetime("18:00").time() # Default allenamento serale
+        def_work_start = pd.to_datetime("18:00").time()
 
     st.markdown("---")
     
-    # --- GESTIONE STATO E RIGENERAZIONE ---
-    # Se la lista non esiste o ha una lunghezza diversa da quella scelta, la rigeneriamo/adattiamo
+    # --- GESTIONE STATO ---
     if "tapering_data" not in st.session_state:
         st.session_state["tapering_data"] = []
-        
-    current_len = len(st.session_state["tapering_data"])
     
-    # Se la lunghezza è diversa, dobbiamo ricostruire la lista
-    # Nota: Resettiamo ai default richiesti (Riposo, 300g, Sufficiente) se cambia la lunghezza
-    if current_len != num_days_taper:
+    # Reset/Resize logica
+    if len(st.session_state["tapering_data"]) != num_days_taper:
         new_data = []
         for i in range(num_days_taper, 0, -1):
             day_offset = -i
             d_date = race_date + pd.Timedelta(days=day_offset)
-            
-            # --- DEFAULT RICHIESTI ---
-            w_type = "Riposo"
-            val = 0
-            dur = 0
-            cho = 300 # Default richiesto
-            sq = "Sufficiente (6-7h)" # Default richiesto
-            
             new_data.append({
                 "day_offset": day_offset,
                 "date_obj": d_date,
-                "type": w_type,
-                "val": val,
-                "dur": dur,
-                "cho": cho,
-                "sleep_quality": sq,
-                "sleep_start": def_sleep_start,
-                "sleep_end": def_sleep_end,
-                "workout_start": def_work_start
+                "type": "Riposo", "val": 0, "dur": 0, "cho": 300,
+                "sleep_quality": "Sufficiente (6-7h)",
+                "sleep_start": def_sleep_start, "sleep_end": def_sleep_end, "workout_start": def_work_start
             })
         st.session_state["tapering_data"] = new_data
-        st.rerun() # Ricarica per mostrare la tabella corretta
-        
+        st.rerun()
     else:
-        # Se la lunghezza è giusta, aggiorniamo solo le date (se l'utente ha cambiato la data gara)
+        # Update date only
         for i, row in enumerate(st.session_state["tapering_data"]):
-            day_offset = - (num_days_taper - i) # Ricalcolo offset es: -3, -2, -1
+            day_offset = - (num_days_taper - i)
             row['date_obj'] = race_date + pd.Timedelta(days=day_offset)
             row['day_offset'] = day_offset
 
-    # --- TABELLA INPUT ---
-    # Header
-    h1, h2, h3, h4 = st.columns([1.2, 1.2, 1.2, 3])
+    # --- TABELLA INPUT (LAYOUT ESPLOSO) ---
+    # Definiamo le colonne: Data | Tipo | Durata | Intensità | CHO | Orari
+    # Rapporti: 1.2 | 1.4 | 0.9 | 1.0 | 1.0 | 0.5
+    cols_layout = [1.2, 1.4, 0.9, 1.0, 1.0, 0.6]
+    
+    h1, h2, h3, h4, h5, h6 = st.columns(cols_layout)
     h1.markdown("**Data**")
-    h2.markdown("**Attività**")
-    h3.markdown("**CHO (g)**")
-    h4.markdown("**Dettagli Orari**")
+    h2.markdown("**Tipo Attività**")
+    h3.markdown("**Durata** (min)")
+    h4.markdown("**Intensità** (W/Bpm)")
+    h5.markdown("**CHO** (g)")
+    h6.markdown("**Orari**")
     
     sleep_opts_map = {"Ottimale (>7h)": 1.0, "Sufficiente (6-7h)": 0.95, "Insufficiente (<6h)": 0.85}
     type_opts = ["Riposo", "Ciclismo", "Corsa/Altro"] 
     
-    input_result_data = [] # Lista pulita da passare alla logica
+    input_result_data = [] 
     
     for i, row in enumerate(st.session_state["tapering_data"]):
-        st.markdown(f"##### Giorno {row['day_offset']} ({row['date_obj'].strftime('%A %d')})")
-        c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.2, 3])
+        # Separatore visivo leggero tra i giorni
+        st.markdown(f"<div style='border-top: 1px solid #e0e0e0; margin-bottom: 5px;'></div>", unsafe_allow_html=True)
         
-        # Col 1: Data (Display only)
-        c1.info(f"📅 **{row['date_obj'].strftime('%d/%m')}**")
+        c1, c2, c3, c4, c5, c6 = st.columns(cols_layout)
+        
+        # Col 1: Data
+        c1.write(f"**{row['date_obj'].strftime('%a %d/%m')}**")
         if row['day_offset'] >= -2: c1.caption("⚠️ Carico")
         
-        # Col 2: Tipo Attività & Intensità
+        # Col 2: Tipo
         act_idx = type_opts.index(row['type']) if row['type'] in type_opts else 0
         new_type = c2.selectbox("Tipo", type_opts, index=act_idx, key=f"t_{i}", label_visibility="collapsed")
         
@@ -359,53 +347,59 @@ with tab2:
         new_dur = 0
         new_val = 0
         
+        # Logica Visibilità Input
         if new_type != "Riposo":
-            sc2_a, sc2_b = c2.columns(2)
-            new_dur = sc2_a.number_input("Min", 0, 300, row['dur'], step=15, key=f"d_{i}", label_visibility="collapsed")
-            new_val = sc2_b.number_input("Watt/Fc", 0, 500, row['val'], step=10, key=f"v_{i}", label_visibility="collapsed")
+            # Col 3: Durata
+            new_dur = c3.number_input("Min", 0, 400, row['dur'], step=15, key=f"d_{i}", label_visibility="collapsed")
+            
+            # Col 4: Intensità (Con Label/Tooltip contestuale)
+            help_label = "Watt" if new_type == "Ciclismo" else "Bpm"
+            new_val = c4.number_input(help_label, 0, 500, row['val'], step=10, key=f"v_{i}", label_visibility="collapsed", help=f"Inserisci {help_label} medi")
+            
+            # Calcolo IF
             if new_type == "Ciclismo" and user_ftp > 0: calc_if = new_val / user_ftp
             elif new_type == "Corsa/Altro" and user_thr > 0: calc_if = new_val / user_thr
-            c2.caption(f"IF: {calc_if:.2f}")
+            
+            if calc_if > 0: c4.caption(f"IF: {calc_if:.2f}")
         else:
-            c2.write("-")
+            c3.markdown("<div style='text-align: center; color: gray;'>-</div>", unsafe_allow_html=True)
+            c4.markdown("<div style='text-align: center; color: gray;'>-</div>", unsafe_allow_html=True)
             
-        # Col 3: Nutrizione
-        new_cho = c3.number_input(f"CHO g", 0, 1500, row['cho'], step=50, key=f"c_{i}")
-        
-        # FIX PRECEDENTE: Uso subj_base per evitare NameError
+        # Col 5: Nutrizione
+        new_cho = c5.number_input("CHO", 0, 1500, row['cho'], step=50, key=f"c_{i}", label_visibility="collapsed")
         kg_rel = new_cho / subj_base.weight_kg
-        c3.caption(f"({kg_rel:.1f} g/kg)")
+        c5.caption(f"{kg_rel:.1f} g/kg")
         
-        # Col 4: Orari (Expandable per pulizia)
-        with c4.expander("🕒 Orari Sonno & Allenamento", expanded=False):
-            t1, t2, t3 = st.columns(3)
-            new_s_start = t1.time_input("Zzz Inizio", row.get('sleep_start', def_sleep_start), key=f"ss_{i}")
-            new_s_end = t2.time_input("Zzz Fine", row.get('sleep_end', def_sleep_end), key=f"se_{i}")
+        # Col 6: Orari (Expander)
+        with c6.expander("🕒", expanded=False):
+            st.caption("Dettagli Orari")
+            new_s_start = st.time_input("Zzz Inizio", row.get('sleep_start', def_sleep_start), key=f"ss_{i}")
+            new_s_end = st.time_input("Zzz Fine", row.get('sleep_end', def_sleep_end), key=f"se_{i}")
             
-            new_w_start = row.get('workout_start', def_work_start)
             if new_type != "Riposo":
-                new_w_start = t3.time_input("Start Allenamento", new_w_start, key=f"ws_{i}")
+                new_w_start = st.time_input("Start Sport", row.get('workout_start', def_work_start), key=f"ws_{i}")
             else:
-                t3.write("-")
+                new_w_start = row.get('workout_start', def_work_start)
+                st.write("Nessun Allenamento")
             
             sq_idx = list(sleep_opts_map.keys()).index(row['sleep_quality']) if row['sleep_quality'] in sleep_opts_map else 0
-            new_sq = t1.selectbox("Qualità Sonno", list(sleep_opts_map.keys()), index=sq_idx, key=f"sq_{i}")
+            new_sq = st.selectbox("Sonno", list(sleep_opts_map.keys()), index=sq_idx, key=f"sq_{i}")
 
-        # Aggiornamento Stato Sessione (per persistenza)
+        # Update Session
         st.session_state["tapering_data"][i].update({
             "type": new_type, "val": new_val, "dur": new_dur, "cho": new_cho,
             "sleep_start": new_s_start, "sleep_end": new_s_end, "workout_start": new_w_start,
             "sleep_quality": new_sq
         })
         
-        # Preparazione dati per Logic
         input_result_data.append({
             "date_obj": row['date_obj'],
             "type": new_type, "val": new_val, "duration": new_dur, "calculated_if": calc_if,
             "cho_in": new_cho, "sleep_factor": sleep_opts_map[new_sq],
             "sleep_start": new_s_start, "sleep_end": new_s_end, "workout_start": new_w_start
         })
-        st.markdown("<hr style='margin: 5px 0;'>", unsafe_allow_html=True) # Separatore sottile
+
+    st.markdown("---")
 
     # --- SIMULAZIONE ---
     if st.button("🚀 Calcola Traiettoria Oraria", type="primary"):
@@ -418,8 +412,6 @@ with tab2:
         
         # Grafico Area Stacked (Fegato + Muscolo)
         df_melt = df_hourly.melt('Timestamp', value_vars=['Muscolare', 'Epatico'], var_name='Riserva', value_name='Grammi')
-        
-        # Colori: Muscolo (Verde), Fegato (Arancione scuro)
         c_range = ['#43A047', '#FB8C00'] 
         
         chart = alt.Chart(df_melt).mark_area(opacity=0.8).encode(
@@ -431,7 +423,6 @@ with tab2:
         
         st.altair_chart(chart, use_container_width=True)
         
-        # KPI Finali
         k1, k2, k3 = st.columns(3)
         pct = final_tank['fill_pct']
         k1.metric("Riempimento Finale", f"{pct:.1f}%")
@@ -1196,6 +1187,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
