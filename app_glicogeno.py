@@ -485,7 +485,7 @@ with tab3:
                     st.success(f"ZWO: {dur_calc} min")
                     
             elif fname.endswith('.fit'):
-                fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_np, fit_dist, fit_elev, fit_work, fit_clean_df = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
+                fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_np, fit_dist, fit_elev, fit_work, fit_clean_df, graphs_data = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
                 
                 if fit_clean_df is not None:
                     intensity_series = fit_series
@@ -1179,6 +1179,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
