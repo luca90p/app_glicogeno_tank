@@ -411,3 +411,54 @@ def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_typ
             break
             
     return optimal
+
+# ==============================================================================
+# MODULO MORTON / SKIBA (W' BALANCE)
+# ==============================================================================
+
+def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_interval_sec=60):
+    """
+    Calcola il bilancio di W' (W_prime) utilizzando il modello di Skiba (2012)
+    per il recupero esponenziale variabile.
+    
+    Args:
+        intensity_series: Lista di valori di potenza (Watt).
+        cp_watts: Critical Power dell'atleta.
+        w_prime_j: Capacità di lavoro anaerobico (Joule).
+        sampling_interval_sec: Durata di ogni step (default 60s per la logica dell'app).
+    
+    Returns:
+        Lista con i valori residui di W' (Joule) per ogni istante.
+    """
+    balance = []
+    current_w = w_prime_j
+    
+    for p in intensity_series:
+        if p > cp_watts:
+            # --- DEPLEZIONE (Lineare) ---
+            # W' si consuma linearmente in base a quanto sei sopra la CP
+            usage = (p - cp_watts) * sampling_interval_sec
+            current_w -= usage
+        else:
+            # --- RECUPERO (Esponenziale Skiba) ---
+            # La velocità di recupero dipende da quanto vai PIANO rispetto alla CP.
+            # Più sei sotto soglia, più veloce ricarichi.
+            d_cp = cp_watts - p
+            if d_cp < 0: d_cp = 0 # Safety check
+            
+            # Costante di tempo Tau dinamica (Skiba 2012)
+            # Tau = 546 * e^(-0.01 * D_CP) + 316
+            tau = 546 * math.exp(-0.01 * d_cp) + 316
+            
+            # Formula di ricostituzione asintotica verso W'_max
+            # W_new = W_max - (W_max - W_prev) * e^(-dt/tau)
+            current_w = w_prime_j - (w_prime_j - current_w) * math.exp(-sampling_interval_sec / tau)
+
+        # Clamp ai limiti fisici (0 = Esaurimento, W'_max = Pieno)
+        if current_w > w_prime_j: current_w = w_prime_j
+        if current_w < 0: current_w = 0 
+        
+        balance.append(current_w)
+        
+    return balance
+
