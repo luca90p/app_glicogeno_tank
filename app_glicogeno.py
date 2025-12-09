@@ -111,6 +111,17 @@ with tab1:
         max_hr = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 230, 185, step=1)
             
         st.session_state.update({'ftp_watts_input': ftp_watts, 'thr_hr_input': thr_hr, 'max_hr_input': max_hr})
+
+        # --- INPUT MORTON (CRITICAL POWER) ---
+        st.markdown("---")
+        with st.expander("⚡ Profilo Potenza Critica (Modello Morton)", expanded=False):
+            st.info("Necessario per monitorare la fatica anaerobica (W') ad alta intensità.")
+            cm1, cm2 = st.columns(2)
+            cp_input = cm1.number_input("Critical Power (CP) [Watt]", 100, 600, ftp_watts, help="Spesso coincide o è leggermente superiore alla FTP.")
+            w_prime_input = cm2.number_input("W' (W Prime) [Joule]", 5000, 50000, 20000, step=500, help="Serbatoio di energia anaerobica. Valori tipici: 15.000 - 30.000 J")
+            
+            st.session_state['cp_input'] = cp_input
+            st.session_state['w_prime_input'] = w_prime_input
         
         # --- NUOVA SEZIONE: PROFILO METABOLICO ---
         st.markdown("---")
@@ -548,6 +559,51 @@ with tab3:
         with st.expander("📈 Analisi Dettagliata File FIT", expanded=True):
             st.altair_chart(utils.create_fit_plot(fit_df), use_container_width=True)
 
+
+    # --- ANALISI MORTON (W' BALANCE) ---
+    # Eseguiamo solo se abbiamo una serie temporale (da file o ZWO) e se l'utente è un ciclista
+    if intensity_series is not None and subj.sport.name == 'CYCLING':
+        st.markdown("---")
+        st.subheader("⚡ Analisi Neuromuscolare (W' Balance)")
+        
+        # Recupera input (o usa default FTP/20kJ se non settati)
+        user_cp = st.session_state.get('cp_input', target_ftp)
+        user_w_prime = st.session_state.get('w_prime_input', 20000)
+        
+        # Calcolo Logica
+        w_bal_series = logic.calculate_w_prime_balance(intensity_series, user_cp, user_w_prime, sampling_interval_sec=60)
+        
+        # Preparazione Dati Grafico
+        df_morton = pd.DataFrame({
+            'Time (min)': range(len(w_bal_series)),
+            'W\' Balance (J)': w_bal_series,
+            'Potenza (W)': intensity_series[:len(w_bal_series)] # Taglia per sicurezza
+        })
+        
+        # Trova eventuale punto di rottura (W' = 0)
+        failure_points = df_morton[df_morton['W\' Balance (J)'] <= 0]
+        
+        # Grafico Altair combinato
+        base_m = alt.Chart(df_morton).encode(x='Time (min)')
+        
+        # Area W' (Rossa se bassa)
+        chart_w = base_m.mark_area(opacity=0.3, color='purple').encode(
+            y=alt.Y('W\' Balance (J)', scale=alt.Scale(domain=[0, user_w_prime])),
+            tooltip=['Time (min)', 'W\' Balance (J)', 'Potenza (W)']
+        )
+        
+        # Linea CP di riferimento
+        line_cp = alt.Chart(pd.DataFrame({'y': [user_cp]})).mark_rule(color='blue', strokeDash=[5,5]).encode(y='y')
+        
+        st.altair_chart((chart_w + line_cp).properties(height=200, title="Scarica della Batteria Anaerobica (W')"), use_container_width=True)
+        
+        if not failure_points.empty:
+            fail_time = failure_points.iloc[0]['Time (min)']
+            st.error(f"⚠️ **FALLIMENTO NEUROMUSCOLARE RILEVATO AL MINUTO {fail_time}**")
+            st.caption(f"Hai esaurito il W' ({int(user_w_prime)} J). Anche se hai glicogeno, i muscoli cederanno per acidosi.")
+        else:
+            min_w = min(w_bal_series)
+            st.success(f"✅ **Tenuta Muscolare OK** (Minimo W': {int(min_w)} J)")
     # --- SELEZIONE MODALITÀ SIMULAZIONE ---
     st.markdown("---")
     sim_mode = st.radio("Modalità Simulazione:", ["Simulazione Manuale (Verifica Tattica)", "Calcolatore Strategia Minima (Reverse)"], horizontal=True)
@@ -934,6 +990,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
