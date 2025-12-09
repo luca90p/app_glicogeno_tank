@@ -657,16 +657,35 @@ with tab3:
 
         st.markdown("### 📊 Bilancio Energetico: Richiesta vs. Fonti di Ossidazione")
         
+        # 1. Calcoliamo la colonna del Totale (Somma di tutte le fonti)
+        df_sim['Consumo Totale (g/h)'] = (
+            df_sim['Glicogeno Epatico (g)'] + 
+            df_sim['Carboidrati Esogeni (g)'] + 
+            df_sim['Ossidazione Lipidica (g)'] + 
+            df_sim['Glicogeno Muscolare (g)']
+        )
+        
+        # Preparazione dati per l'area stack
         df_melt = df_sim.melt('Time (min)', value_vars=['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)'], var_name='Fonte', value_name='g/h')
         order = ['Glicogeno Epatico (g)', 'Carboidrati Esogeni (g)', 'Ossidazione Lipidica (g)', 'Glicogeno Muscolare (g)']
         colors = ['#B71C1C', '#1E88E5', '#FFCA28', '#EF5350']
         
+        # A. Grafico a Aree (Le fonti)
         chart_stack = alt.Chart(df_melt).mark_area().encode(
             x='Time (min)', y='g/h', 
             color=alt.Color('Fonte', scale=alt.Scale(domain=order, range=colors), sort=order),
             tooltip=['Time (min)', 'Fonte', 'g/h']
-        ).properties(height=350)
-        st.altair_chart(chart_stack + cutoff_line, use_container_width=True)
+        )
+        
+        # B. Linea del Totale (Il contorno superiore)
+        chart_total = alt.Chart(df_sim).mark_line(color='black', strokeDash=[3,3], opacity=0.8, strokeWidth=2).encode(
+            x='Time (min)',
+            y='Consumo Totale (g/h)',
+            tooltip=[alt.Tooltip('Time (min)'), alt.Tooltip('Consumo Totale (g/h)', format='.1f')]
+        )
+        
+        # Uniamo tutto
+        st.altair_chart((chart_stack + chart_total + cutoff_line).interactive(), use_container_width=True)
 
         st.markdown("---")
         st.markdown("#### Ossidazione Lipidica (Tasso Orario)")
@@ -993,6 +1012,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
