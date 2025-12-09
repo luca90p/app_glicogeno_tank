@@ -393,14 +393,15 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
 
 # --- 4. CALCOLO REVERSE STRATEGY ---
 
-def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0):
+def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0, intensity_series=None):
     optimal = None
     for intake in range(0, 125, 5):
         df, stats = simulate_metabolism(
             tank, duration, intake, 25, 75, 20, subj, params, 
             mix_type_input=mix_type, metabolic_curve=curve_data,
             intake_mode=intake_mode, intake_cutoff_min=intake_cutoff_min,
-            variability_index=variability_index
+            variability_index=variability_index,
+            intensity_series=intensity_series # <--- ORA LO PASSIAMO!
         )
         
         min_liver = df['Residuo Epatico'].min()
@@ -461,5 +462,6 @@ def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_in
         balance.append(current_w)
         
     return balance
+
 
 
