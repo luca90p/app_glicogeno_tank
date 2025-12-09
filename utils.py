@@ -154,53 +154,134 @@ def create_fit_plot(df):
     else:
         return alt.Chart(pd.DataFrame({'T':['Nessun dato valido']})).mark_text().encode(text='T')
 
-def parse_fit_file_wrapper(uploaded_file, sport_type):
-    """Wrapper che estrae dati e calcola statistiche avanzate su TEMPO IN MOVIMENTO."""
-    df, error = process_fit_data(uploaded_file)
-    if error or df is None or df.empty: return [], 0, 0, 0, 0, 0, 0, 0, None
+import pandas as pd
+import numpy as np
+import math
 
-    # Medie su tempo in movimento (già filtrato in process_fit_data)
+# Assicurati di importare l'enum SportType se lo usi, o usa stringhe
+# from constants import SportType 
+
+def parse_fit_file_wrapper(uploaded_file, sport_type):
+    """
+    Wrapper intelligente che adatta l'analisi al tipo di sport.
+    """
+    df, error = process_fit_data(uploaded_file)
+    if error or df is None or df.empty: 
+        return {}, 0, 0, 0, 0, 0, 0, 0, None
+
+    # --- 1. Calcoli Scalari (Comuni a tutti gli sport) ---
     avg_power = df['power'].mean() if 'power' in df.columns else 0
     avg_hr = df['heart_rate'].mean() if 'heart_rate' in df.columns else 0
-    norm_power = calculate_normalized_power(df) if 'power' in df.columns else 0
     
-    # Statistiche extra per Dashboard
-    # Nota: len(df) sono i secondi ATTIVI, quindi diviso 60 sono i minuti ATTIVI
+    # Normalizzazione potenza (solo utile per ciclismo con power meter)
+    norm_power = 0
+    if 'power' in df.columns:
+        norm_power = calculate_normalized_power(df)
+
+    # Durata totale in minuti
     total_duration_min = math.ceil(len(df) / 60)
     
+    # Distanza (km)
     dist = 0
     if 'distance' in df.columns:
-        dist = (df['distance'].max() - df['distance'].min()) / 1000.0 # km
-    elif 'speed_kmh' in df.columns:
-        dist = (df['speed_kmh'].mean() * (total_duration_min/60))
+        dist = (df['distance'].max() - df['distance'].min()) / 1000.0
+    elif 'speed' in df.columns:
+        dist = (df['speed'].mean() * 3.6 * (total_duration_min/60))
         
+    # Dislivello (m)
     elev_gain = 0
-    if 'altitude' in df.columns:
-        deltas = df['altitude'].diff()
+    alt_col = next((c for c in ['enhanced_altitude', 'altitude'] if c in df.columns), None)
+    if alt_col:
+        deltas = df[alt_col].diff()
         elev_gain = deltas[deltas > 0].sum()
     
-    work_kj = 0
-    if 'power' in df.columns:
-        # Lavoro calcolato sul tempo attivo
-        work_kj = (avg_power * (len(df))) / 1000 
-    
-    # --- FIX CRITICO: Resampling su MOVING TIME invece che su CLOCK TIME ---
-    # Invece di usare resample('1T') che reintroduce i buchi temporali (pause),
-    # raggruppiamo i record attivi (già filtrati) in blocchi da 60.
-    
-    # 1. Reset dell'indice temporale per lavorare sequenzialmente
+    # Lavoro (kJ) - Ha senso quasi solo per il ciclismo
+    work_kj = (avg_power * len(df)) / 1000 if 'power' in df.columns else 0
+
+    # --- 2. Preparazione Dati Grafici (Resampling) ---
+    # Raggruppiamo i dati ogni 10 secondi per rendere i grafici più leggeri e leggibili
     df_active = df.reset_index(drop=True)
+    resample_rule = 10 
+    # Raggruppa per indice intero (ogni 10 righe)
+    df_res = df_active.groupby(df_active.index // resample_rule).mean()
+
+    # Struttura dati di output
+    graphs_data = {
+        'x_axis_dist': [], 
+        'elevation': [],
+        'hr': [],
+        # Chiavi specifiche Ciclismo
+        'power': [],
+        # Chiavi specifiche Corsa
+        'pace': [],
+        'lap_pace': [],
+        'cadence': []
+    }
+
+    # Asse X e Dati Comuni
+    if 'distance' in df_res.columns:
+        graphs_data['x_axis_dist'] = (df_res['distance'] / 1000.0).round(2).tolist()
+    else:
+        # Fallback temporale
+        graphs_data['x_axis_dist'] = [i * resample_rule / 60 for i in range(len(df_res))]
+
+    if alt_col in df_res.columns:
+        graphs_data['elevation'] = df_res[alt_col].round(1).fillna(0).tolist()
+        
+    if 'heart_rate' in df_res.columns:
+        graphs_data['hr'] = df_res['heart_rate'].round(0).fillna(0).tolist()
+
+    # --- 3. Logica Specifica per Sport ---
     
-    # 2. Raggruppa ogni 60 righe (poiché i dati sono a 1s)
-    df_res = df_active.groupby(df_active.index // 60).mean()
-    
-    series = []
-    target = 'power' if sport_type == SportType.CYCLING and 'power' in df_res.columns else 'heart_rate'
-    
-    if target in df_res.columns:
-        series = [float(x) for x in df_res[target].fillna(0).tolist()]
-    
-    return series, total_duration_min, avg_power, avg_hr, norm_power, dist, elev_gain, work_kj, df
+    # CASO A: CICLISMO (Mantiene logica attuale)
+    # Si suppone che sport_type sia una stringa 'Cycling' o enum SportType.CYCLING
+    if str(sport_type).lower() == 'cycling' or sport_type == 'Cycling':
+        if 'power' in df_res.columns:
+            graphs_data['power'] = df_res['power'].round(0).fillna(0).tolist()
+        # Per il ciclismo potresti voler aggiungere anche la velocità o cadenza qui se serve
+
+    # CASO B: CORSA (Logica richiesta)
+    else:
+        # 1. Passo (min/km) e Passo Medio Lap
+        if 'speed' in df_res.columns:
+            # Calcolo Passo Istantaneo (con pulizia outlier)
+            # Evitiamo divisione per zero
+            speed_clean = df_res['speed'].replace(0, np.nan)
+            pace_decimal = (1000 / speed_clean) / 60
+            
+            # Filtro: teniamo solo passi tra 2:00 e 20:00 min/km per pulizia grafico
+            graphs_data['pace'] = [
+                round(x, 2) if (x and 2 < x < 20) else None 
+                for x in pace_decimal.tolist()
+            ]
+
+            # Calcolo Passo Medio "Lap" (Split automatico ogni 1km)
+            # Usiamo il dataframe originale (df_active) per precisione
+            if 'distance' in df_active.columns:
+                # Crea colonna split (km 0, km 1, km 2...)
+                df_active['split_km'] = (df_active['distance'] / 1000).astype(int)
+                # Calcola velocità media per quello split
+                split_avg_speed = df_active.groupby('split_km')['speed'].transform('mean')
+                # Mappa sul dataframe resamplato
+                # Nota: prendiamo la 'mode' o 'mean' dello split_km nel bucket resamplato
+                res_split_idx = (df_res['distance'] / 1000).astype(int)
+                
+                # Creiamo un dizionario {km: avg_pace}
+                avg_pace_map = ((1000 / df_active.groupby('split_km')['speed'].mean()) / 60).to_dict()
+                
+                # Popoliamo la lista lap_pace
+                graphs_data['lap_pace'] = [
+                    round(avg_pace_map.get(k, 0), 2) if k in avg_pace_map else None 
+                    for k in res_split_idx
+                ]
+
+        # 3. Cadenza (Running Cadence)
+        if 'cadence' in df_res.columns:
+            # Garmin a volte registra passi totali (170-180) o passi per gamba (85-90).
+            # Qui passiamo il dato raw, il frontend può gestirlo.
+            graphs_data['cadence'] = df_res['cadence'].round(0).fillna(0).tolist()
+
+    return graphs_data, total_duration_min, avg_power, avg_hr, norm_power, dist, elev_gain, work_kj, df
 
 # ==============================================================================
 # PARSING METABOLICO (ESTRAZIONE MULTIPLA SMART)
@@ -322,6 +403,7 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
 
 
 
