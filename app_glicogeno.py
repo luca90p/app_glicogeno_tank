@@ -945,26 +945,48 @@ with tab3:
     st.caption("Muovi il cursore temporale per analizzare lo stato istante per istante.")
 
     # 1. Preparazione Dati per il Replay
-    # Dobbiamo essere sicuri di avere tutti i dati sincronizzati
     if 'df_sim' in locals() and intensity_series is not None:
         
-        # Sincronizziamo la lunghezza (il simulatore potrebbe avere 1 min in più o in meno)
-        max_len = min(len(intensity_series), len(df_sim), len(w_bal_series) if 'w_bal_series' in locals() else 9999)
+        # Sincronizziamo la lunghezza basandoci sulla simulazione (che comanda i tempi)
+        sim_len = len(df_sim)
         
-        # SLIDER TEMPORALE (Il "Telecomando")
-        t_cursor = st.slider("⏱️ Timeline Gara (minuto)", 0, max_len - 1, 0, key="replay_slider")
+        # --- FIX ROBUSTEZZA W' BALANCE ---
+        # Creiamo una lista sicura per W' della lunghezza esatta del DataFrame
+        w_safe = [0] * sim_len 
+        
+        if 'w_bal_series' in locals() and len(w_bal_series) > 0:
+            # Prendiamo i dati disponibili
+            limit = min(len(w_bal_series), sim_len)
+            w_safe[:limit] = w_bal_series[:limit]
+            
+            # Se la serie W' è più corta del DataFrame (es. manca l'ultimo secondo), 
+            # riempiamo i buchi finali con l'ultimo valore valido
+            if limit < sim_len:
+                last_val = w_bal_series[-1]
+                for i in range(limit, sim_len):
+                    w_safe[i] = last_val
+        
+        # Max lunghezza per lo slider
+        max_slider = sim_len - 1
+        
+        # SLIDER TEMPORALE
+        t_cursor = st.slider("⏱️ Timeline Gara (minuto)", 0, max_slider, 0, key="replay_slider")
         
         # Recupero Dati Istantanei
-        # A. Dati Fisici
-        curr_watt = intensity_series[t_cursor]
-        curr_w_prime = w_bal_series[t_cursor] if 'w_bal_series' in locals() else 0
+        # A. Dati Fisici (con controllo bounds)
+        idx_intensity = min(t_cursor, len(intensity_series) - 1)
+        curr_watt = intensity_series[idx_intensity]
+        
+        curr_w_prime = w_safe[t_cursor]
         w_prime_max = st.session_state.get('w_prime_input', 20000)
         
         # B. Dati Metabolici (dal DataFrame simulato)
         row_sim = df_sim.iloc[t_cursor]
         curr_gly_musc = row_sim['Residuo Muscolare']
         curr_gly_liv = row_sim['Residuo Epatico']
-        start_gly_tot = tank['max_capacity_g'] # O il valore di start effettivo
+        # Recuperiamo il totale iniziale per calcolare la % corretta
+        start_gly_tot = tank['max_capacity_g'] 
+        if 'start_total' in locals(): start_gly_tot = start_total
         
         curr_cons_tot = row_sim.get('Consumo Totale (g/h)', 0)
         curr_fat = row_sim['Ossidazione Lipidica (g)']
@@ -972,23 +994,23 @@ with tab3:
         
         # --- IL CRUSCOTTO (METRICHE & BARRE) ---
         
-        # RIGA 1: I "Giri Motore" (Output)
+        # RIGA 1: I "Giri Motore"
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("⏱️ Tempo", f"{t_cursor} min")
         k2.metric("⚡ Potenza Istantanea", f"{int(curr_watt)} W")
         
-        # Colore dinamico per W' (Verde -> Rosso)
-        w_pct = max(0, min(1.0, curr_w_prime / w_prime_max))
+        # Colore dinamico per W'
+        w_pct = max(0.0, min(1.0, curr_w_prime / w_prime_max)) if w_prime_max > 0 else 0
         w_color = "🟢" if w_pct > 0.5 else "🟡" if w_pct > 0.2 else "🔴"
         k3.metric(f"{w_color} W' (Batteria)", f"{int(curr_w_prime)} J", delta=f"{int(w_pct*100)}%")
         
         # Colore dinamico Glicogeno
         gly_tot_curr = curr_gly_musc + curr_gly_liv
-        gly_pct = max(0, min(1.0, gly_tot_curr / start_total))
+        gly_pct = max(0.0, min(1.0, gly_tot_curr / start_gly_tot)) if start_gly_tot > 0 else 0
         g_color = "🟢" if gly_pct > 0.4 else "🟡" if gly_pct > 0.2 else "🔴"
         k4.metric(f"{g_color} Glicogeno (Benzina)", f"{int(gly_tot_curr)} g", delta=f"{int(gly_pct*100)}%")
 
-        # RIGA 2: BARRE VISIVE (Serbatoi)
+        # RIGA 2: BARRE VISIVE
         c_bar1, c_bar2 = st.columns(2)
         with c_bar1:
             st.write("**🔋 Batteria Anaerobica (W')**")
@@ -997,7 +1019,7 @@ with tab3:
             st.write("**⛽ Serbatoio Glicogeno Totale**")
             st.progress(gly_pct)
             
-        # RIGA 3: CONSUMI ISTANTANEI (Tachimetri)
+        # RIGA 3: CONSUMI ISTANTANEI
         st.markdown("##### 🔥 Consumo Istantaneo")
         m1, m2, m3 = st.columns(3)
         m1.metric("Totale Carboidrati", f"{int(curr_cons_tot - curr_fat)} g/h", help="Muscolare + Epatico + Esogeno")
@@ -1005,29 +1027,23 @@ with tab3:
         m3.metric("Grassi (Lipidi)", f"{int(curr_fat)} g/h", help="Risparmio di glicogeno")
 
         # --- GRAFICO SINCRONIZZATO ---
-        # Creiamo un grafico unico con una linea verticale che segue lo slider
-        
-        # Prepara dati per grafico di sfondo
         source = df_sim.copy()
-        source['W_Balance'] = w_bal_series[:len(source)] if 'w_bal_series' in locals() else 0
+        # Assegnazione SICURA usando la lista w_safe già corretta
+        source['W_Balance'] = w_safe 
         
-        # Base Chart (Glicogeno)
         base = alt.Chart(source).encode(x='Time (min)')
         
         line_gly = base.mark_line(color='green').encode(
             y=alt.Y('Residuo Totale', axis=alt.Axis(title='Glicogeno (g)', titleColor='green'))
         )
         
-        # Layer W' (Area viola)
         area_w = base.mark_area(opacity=0.2, color='purple').encode(
             y=alt.Y('W_Balance', axis=alt.Axis(title='W\' Balance (J)', titleColor='purple'))
         )
         
-        # LINEA CURSORE (Rossa Verticale)
         rule = alt.Chart(pd.DataFrame({'x': [t_cursor]})).mark_rule(color='red', size=2).encode(x='x')
         
-        # Testo sopra la linea
-        text = alt.Chart(pd.DataFrame({'x': [t_cursor], 'y': [max_y_scale], 'label': [f"T={t_cursor}"]})).mark_text(
+        text = alt.Chart(pd.DataFrame({'x': [t_cursor], 'y': [start_gly_tot], 'label': [f"T={t_cursor}"]})).mark_text(
             align='left', dx=5, color='red'
         ).encode(x='x', y='y', text='label')
 
@@ -1116,6 +1132,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
