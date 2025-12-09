@@ -355,7 +355,7 @@ with tab2:
             
         # Col 3: Nutrizione
         new_cho = c3.number_input(f"CHO g", 0, 1500, row['cho'], step=50, key=f"c_{i}")
-        kg_rel = new_cho / subj.weight_kg
+        kg_rel = new_cho / subj_base.weight_kg
         c3.caption(f"({kg_rel:.1f} g/kg)")
         
         # Col 4: Orari (Expandable per pulizia)
@@ -1179,6 +1179,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
