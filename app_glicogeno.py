@@ -252,7 +252,7 @@ with tab1:
             st.table(pd.DataFrame(utils.calculate_zones_running_hr(thr_hr)))
 
 # =============================================================================
-# TAB 2: DIARIO IBRIDO (ORARIO & CALENDARIO)
+# TAB 2: DIARIO IBRIDO (ORARIO & CALENDARIO) - V2 Flessibile
 # =============================================================================
 with tab2:
     if 'base_tank_data' not in st.session_state:
@@ -265,13 +265,17 @@ with tab2:
     
     st.subheader("🗓️ Diario di Avvicinamento (Timeline Oraria)")
     
-    # --- SETUP CALENDARIO ---
-    col_date, col_start = st.columns(2)
-    race_date = col_date.date_input("Data Evento Target", value=pd.Timestamp.today() + pd.Timedelta(days=7))
+    # --- SETUP CALENDARIO & DURATA ---
+    c_cal1, c_cal2, c_cal3 = st.columns([1, 1, 1])
+    
+    race_date = c_cal1.date_input("Data Evento Target", value=pd.Timestamp.today() + pd.Timedelta(days=7))
+    num_days_taper = c_cal2.slider("Durata Diario (Giorni)", 2, 7, 7, help="Quanti giorni prima della gara vuoi monitorare?")
     
     from data_models import GlycogenState
     gly_states = list(GlycogenState)
-    sel_state = col_start.selectbox("Condizione Partenza (-7gg)", gly_states, format_func=lambda x: x.label, index=2)
+    # Calcoliamo l'etichetta dinamica per lo stato iniziale
+    start_label = f"Condizione a -{num_days_taper}gg"
+    sel_state = c_cal3.selectbox(start_label, gly_states, format_func=lambda x: x.label, index=2)
     
     # --- DEFAULT SCHEDULE (Per velocizzare input) ---
     with st.expander("⚙️ Impostazioni Orarie Standard (Default)", expanded=False):
@@ -282,35 +286,47 @@ with tab2:
 
     st.markdown("---")
     
-    # Inizializzazione Struttura Dati (Se vuota o vecchia)
-    if "tapering_data" not in st.session_state or len(st.session_state["tapering_data"]) == 0 or 'date_obj' not in st.session_state["tapering_data"][0]:
+    # --- GESTIONE STATO E RIGENERAZIONE ---
+    # Se la lista non esiste o ha una lunghezza diversa da quella scelta, la rigeneriamo/adattiamo
+    if "tapering_data" not in st.session_state:
         st.session_state["tapering_data"] = []
-        # Creiamo 7 giorni a ritroso
-        for i in range(7, 0, -1):
+        
+    current_len = len(st.session_state["tapering_data"])
+    
+    # Se la lunghezza è diversa, dobbiamo ricostruire la lista
+    # Nota: Resettiamo ai default richiesti (Riposo, 300g, Sufficiente) se cambia la lunghezza
+    if current_len != num_days_taper:
+        new_data = []
+        for i in range(num_days_taper, 0, -1):
             day_offset = -i
             d_date = race_date + pd.Timedelta(days=day_offset)
-            # Default intensità variabile
-            w_type = "Riposo" if i in [5, 4, 2, 1] else "Ciclismo"
-            val = 0 if w_type == "Riposo" else (180 if i==7 else 200)
-            dur = 0 if w_type == "Riposo" else (60 if i==7 else 30)
-            cho = 350 + (50 * (7-i)) # Aumenta verso la gara (Carbo load)
             
-            st.session_state["tapering_data"].append({
+            # --- DEFAULT RICHIESTI ---
+            w_type = "Riposo"
+            val = 0
+            dur = 0
+            cho = 300 # Default richiesto
+            sq = "Sufficiente (6-7h)" # Default richiesto
+            
+            new_data.append({
                 "day_offset": day_offset,
                 "date_obj": d_date,
                 "type": w_type,
                 "val": val,
                 "dur": dur,
                 "cho": cho,
-                "sleep_quality": "Sufficiente (6-7h)",
+                "sleep_quality": sq,
                 "sleep_start": def_sleep_start,
                 "sleep_end": def_sleep_end,
                 "workout_start": def_work_start
             })
+        st.session_state["tapering_data"] = new_data
+        st.rerun() # Ricarica per mostrare la tabella corretta
+        
     else:
-        # Aggiorna le date se l'utente cambia la data gara
+        # Se la lunghezza è giusta, aggiorniamo solo le date (se l'utente ha cambiato la data gara)
         for i, row in enumerate(st.session_state["tapering_data"]):
-            day_offset = - (7 - i) # Ricalcolo offset -7 a -1
+            day_offset = - (num_days_taper - i) # Ricalcolo offset es: -3, -2, -1
             row['date_obj'] = race_date + pd.Timedelta(days=day_offset)
             row['day_offset'] = day_offset
 
@@ -355,6 +371,8 @@ with tab2:
             
         # Col 3: Nutrizione
         new_cho = c3.number_input(f"CHO g", 0, 1500, row['cho'], step=50, key=f"c_{i}")
+        
+        # FIX PRECEDENTE: Uso subj_base per evitare NameError
         kg_rel = new_cho / subj_base.weight_kg
         c3.caption(f"({kg_rel:.1f} g/kg)")
         
@@ -396,7 +414,7 @@ with tab2:
         st.session_state['tank_data'] = final_tank
         st.session_state['subject_struct'] = subj_base
         
-        st.markdown("### 📈 Evoluzione Oraria Riserve (-168h)")
+        st.markdown("### 📈 Evoluzione Oraria Riserve (Timeline)")
         
         # Grafico Area Stacked (Fegato + Muscolo)
         df_melt = df_hourly.melt('Timestamp', value_vars=['Muscolare', 'Epatico'], var_name='Riserva', value_name='Grammi')
@@ -420,7 +438,6 @@ with tab2:
         k2.metric("Muscolo Start Gara", f"{int(final_tank['muscle_glycogen_g'])} g")
         k3.metric("Fegato Start Gara", f"{int(final_tank['liver_glycogen_g'])} g", 
                   delta="Attenzione" if final_tank['liver_glycogen_g'] < 80 else "Ottimale", delta_color="normal")
-
 # =============================================================================
 # TAB 3: SIMULAZIONE GARA & STRATEGIA (AGGIORNATO)
 # =============================================================================
@@ -1179,6 +1196,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
