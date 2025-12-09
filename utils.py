@@ -155,39 +155,48 @@ def create_fit_plot(df):
         return alt.Chart(pd.DataFrame({'T':['Nessun dato valido']})).mark_text().encode(text='T')
 
 def parse_fit_file_wrapper(uploaded_file, sport_type):
-    """Wrapper che estrae dati e calcola statistiche avanzate."""
+    """Wrapper che estrae dati e calcola statistiche avanzate su TEMPO IN MOVIMENTO."""
     df, error = process_fit_data(uploaded_file)
-    if error or df is None or df.empty: return [], 0, 0, 0, 0, 0, 0, None
+    if error or df is None or df.empty: return [], 0, 0, 0, 0, 0, 0, 0, None
 
-    # Medie su tempo in movimento
+    # Medie su tempo in movimento (già filtrato in process_fit_data)
     avg_power = df['power'].mean() if 'power' in df.columns else 0
     avg_hr = df['heart_rate'].mean() if 'heart_rate' in df.columns else 0
     norm_power = calculate_normalized_power(df) if 'power' in df.columns else 0
     
     # Statistiche extra per Dashboard
+    # Nota: len(df) sono i secondi ATTIVI, quindi diviso 60 sono i minuti ATTIVI
     total_duration_min = math.ceil(len(df) / 60)
     
     dist = 0
     if 'distance' in df.columns:
         dist = (df['distance'].max() - df['distance'].min()) / 1000.0 # km
     elif 'speed_kmh' in df.columns:
-        # Stima distanza se manca colonna
         dist = (df['speed_kmh'].mean() * (total_duration_min/60))
         
     elev_gain = 0
     if 'altitude' in df.columns:
-        # Calcolo guadagno positivo
         deltas = df['altitude'].diff()
         elev_gain = deltas[deltas > 0].sum()
     
     work_kj = 0
     if 'power' in df.columns:
-        work_kj = (avg_power * (total_duration_min * 60)) / 1000
+        # Lavoro calcolato sul tempo attivo
+        work_kj = (avg_power * (len(df))) / 1000 
     
-    # Resampling per logica simulatore (1 min)
-    df_res = df.resample('1T').mean()
+    # --- FIX CRITICO: Resampling su MOVING TIME invece che su CLOCK TIME ---
+    # Invece di usare resample('1T') che reintroduce i buchi temporali (pause),
+    # raggruppiamo i record attivi (già filtrati) in blocchi da 60.
+    
+    # 1. Reset dell'indice temporale per lavorare sequenzialmente
+    df_active = df.reset_index(drop=True)
+    
+    # 2. Raggruppa ogni 60 righe (poiché i dati sono a 1s)
+    df_res = df_active.groupby(df_active.index // 60).mean()
+    
     series = []
-    target = 'power' if sport_type == SportType.CYCLING and 'power' in df.columns else 'heart_rate'
+    target = 'power' if sport_type == SportType.CYCLING and 'power' in df_res.columns else 'heart_rate'
+    
     if target in df_res.columns:
         series = [float(x) for x in df_res[target].fillna(0).tolist()]
     
@@ -313,6 +322,7 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
 
 
 
