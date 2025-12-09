@@ -462,3 +462,4 @@ def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_in
         
     return balance
 
+
