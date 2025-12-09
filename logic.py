@@ -109,43 +109,186 @@ def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: 
     final_rate_g_min = min(estimated_rate_gh / 60, mix_type.max_rate_gh / 60)
     return final_rate_g_min
 
-# --- 2. MOTORE TAPERING ---
+# --- 2. MOTORE TAPERING (LOGICA ORARIA AVANZATA) ---
 
-def calculate_tapering_trajectory(subject, days_data, start_state: GlycogenState = GlycogenState.NORMAL):
-    LIVER_DRAIN_24H = 4.0 * 24 
-    NEAT_CHO_24H = 1.0 * subject.weight_kg 
-    MAX_SYNTHESIS_RATE_G_KG = 10.0 
+def calculate_hourly_tapering(subject, days_data, start_state: GlycogenState = GlycogenState.NORMAL):
+    
+    # 1. Inizializzazione Serbatoi
     tank = calculate_tank(subject)
     MAX_MUSCLE = tank['max_capacity_g'] - 100 
     MAX_LIVER = 100.0
+    
+    # Start level
     start_factor = start_state.factor
-    current_muscle = min(MAX_MUSCLE * start_factor, MAX_MUSCLE)
-    current_liver = min(MAX_LIVER * start_factor, MAX_LIVER)
-    trajectory = []
-    for day in days_data:
-        cho_in = day['cho_in']
-        sleep_factor = day['sleep_factor']
-        duration = day['duration']
-        intensity = day.get('calculated_if', 0)
-        consumption = 0
-        if duration > 0: consumption = (duration/60) * 600 * intensity 
-        net = (cho_in * sleep_factor) - (LIVER_DRAIN_24H + NEAT_CHO_24H + (consumption/4))
-        if net > 0:
-            current_liver = min(MAX_LIVER, current_liver + (net * 0.3))
-            current_muscle = min(MAX_MUSCLE, current_muscle + (net * 0.7))
-        else:
-            current_liver = max(0, current_liver + (net * 0.5))
-            current_muscle = max(0, current_muscle + (net * 0.5))
-        trajectory.append({
-            "Giorno": day['label'], "Muscolare": int(current_muscle), "Epatico": int(current_liver),
-            "Totale": int(current_muscle + current_liver), "Pct": 0, "Input CHO": cho_in, "IF": intensity
-        })
+    curr_muscle = min(MAX_MUSCLE * start_factor, MAX_MUSCLE)
+    curr_liver = min(MAX_LIVER * start_factor, MAX_LIVER)
+    
+    hourly_log = []
+    
+    # Costanti Fisiologiche Orarie
+    LIVER_DRAIN_H = 4.0 # Consumo cervello/organi (g/h)
+    NEAT_DRAIN_H = (1.0 * subject.weight_kg) / 16.0 # NEAT spalmato sulle 16h di veglia (g/h)
+    
+    # Ciclo sui Giorni
+    for day_idx, day in enumerate(days_data):
+        date_label = day['date_obj'].strftime("%d/%m")
+        
+        # Parsing Orari
+        sleep_start = day['sleep_start'].hour + (day['sleep_start'].minute/60)
+        sleep_end = day['sleep_end'].hour + (day['sleep_end'].minute/60)
+        # Gestione notte (es. 23:00 -> 07:00). Se sleep_start > sleep_end, scavalca la mezzanotte
+        
+        work_start = day['workout_start'].hour + (day['workout_start'].minute/60)
+        work_dur_h = day['duration'] / 60.0
+        work_end = work_start + work_dur_h
+        
+        total_cho_input = day['cho_in']
+        
+        # Calcolo Ore di Veglia (Feeding Window) per distribuire il cibo
+        # Semplificazione: Assumiamo che si mangi uniformemente quando si è svegli e non ci si allena
+        waking_hours = 0
+        for h in range(24):
+            is_sleeping = False
+            if sleep_start > sleep_end: # Scavalca notte (es 23-07)
+                if h >= sleep_start or h < sleep_end: is_sleeping = True
+            else:
+                if sleep_start <= h < sleep_end: is_sleeping = True
+            
+            is_working = (work_start <= h < work_end)
+            if not is_sleeping and not is_working:
+                waking_hours += 1
+        
+        cho_rate_h = total_cho_input / waking_hours if waking_hours > 0 else 0
+        
+        # Ciclo sulle 24 ore del giorno
+        for h in range(24):
+            status = "REST"
+            is_sleeping = False
+            
+            # Check Sonno
+            if sleep_start > sleep_end:
+                if h >= sleep_start or h < sleep_end: is_sleeping = True
+            else:
+                if sleep_start <= h < sleep_end: is_sleeping = True
+            
+            if is_sleeping: status = "SLEEP"
+            
+            # Check Allenamento (Prioritario sul sonno se configurato male)
+            if work_start <= h < work_end:
+                status = "WORK"
+            
+            # --- BILANCIO ORARIO ---
+            hourly_in = 0
+            hourly_out_liver = LIVER_DRAIN_H # Sempre attivo (cervello)
+            hourly_out_muscle = 0
+            
+            if status == "SLEEP":
+                hourly_in = 0 # Non mangi mentre dormi
+                # Sintesi facilitata durante il sonno (se c'è surplus precedente, ma qui è real time)
+            
+            elif status == "WORK":
+                hourly_in = 0 # Assumiamo integrazione separata o nulla nel tapering
+                # Calcolo consumo lavoro
+                intensity = day.get('calculated_if', 0)
+                # Stima Kcal/h lavoro
+                kcal_work = (day.get('val', 0) * 60) / 4.184 / 0.22 if day.get('type') == 'Ciclismo' else 600 * intensity
+                # CHO usage durante lavoro (dipende da intensità, usiamo stima RER macro)
+                # IF 0.6 -> 20% CHO, IF 0.8 -> 60% CHO, IF 0.9 -> 80% CHO
+                cho_pct = max(0, (intensity - 0.5) * 2.5) 
+                cho_pct = min(1.0, cho_pct)
+                g_cho_work = (kcal_work * cho_pct) / 4.1
+                
+                # Split consumo lavoro (Muscolo vs Fegato)
+                # Più è intenso, più usa muscolo
+                liver_share = 0.15 # Il fegato contribuisce sempre un po' sotto sforzo
+                hourly_out_muscle = g_cho_work * (1 - liver_share)
+                hourly_out_liver += g_cho_work * liver_share
+                
+            elif status == "REST":
+                hourly_in = cho_rate_h
+                hourly_out_muscle = NEAT_DRAIN_H # Piccolo consumo per muoversi
+            
+            # --- CALCOLO NETTO ---
+            net_flow = hourly_in - (hourly_out_liver + hourly_out_muscle)
+            
+            # Applicazione ai serbatoi (Ripartizione)
+            if net_flow > 0:
+                # REFILLING (Priorità Muscolo 70/30)
+                # Se muscolo pieno, tutto a fegato (e viceversa)
+                
+                # Efficienza assorbimento (Sonno penalizza se fosse attivo, ma qui siamo svegli)
+                # Usiamo il fattore qualità del sonno del giorno PRECEDENTE/CORRENTE come efficienza metabolica generale
+                efficiency = day['sleep_factor'] 
+                real_storage = net_flow * efficiency
+                
+                to_muscle = real_storage * 0.7
+                to_liver = real_storage * 0.3
+                
+                # Overflow Logic
+                if curr_muscle + to_muscle > MAX_MUSCLE:
+                    overflow = (curr_muscle + to_muscle) - MAX_MUSCLE
+                    to_muscle -= overflow
+                    to_liver += overflow # Il fegato prova a prenderlo (lipogenesi dopo)
+                
+                curr_muscle = min(MAX_MUSCLE, curr_muscle + to_muscle)
+                curr_liver = min(MAX_LIVER, curr_liver + to_liver)
+                
+            else:
+                # DRAINING
+                # Se stiamo lavorando, abbiamo già diviso out_muscle e out_liver
+                # Se è deficit basale, lo dividiamo 50/50 o attingiamo al fegato
+                
+                abs_deficit = abs(net_flow)
+                
+                if status == "WORK":
+                    # Il consumo è già diviso in hourly_out_...
+                    # Ma hourly_in potrebbe coprire parte. Semplifichiamo:
+                    # Applichiamo i consumi diretti
+                    # L'input copre prima il fegato (sangue), poi risparmia muscolo
+                    
+                    # Ricalcolo flussi separati con intake
+                    # Intake supporta prima il fegato (glicemia)
+                    liver_balance = (hourly_in) - hourly_out_liver
+                    if liver_balance < 0:
+                        curr_liver += liver_balance # Scende
+                    else:
+                        # Surplus epatico momentaneo protegge muscolo? No, va a scorte o ossidazione
+                        curr_liver += liver_balance # Sale o pari
+                        
+                    curr_muscle -= hourly_out_muscle
+                    
+                else:
+                    # Deficit a riposo/sonno (Liver drain + NEAT)
+                    # Il fegato copre quasi tutto a riposo
+                    curr_liver -= (abs_deficit * 0.8)
+                    curr_muscle -= (abs_deficit * 0.2)
+
+            # Clamping (Non sotto zero)
+            curr_muscle = max(0, curr_muscle)
+            curr_liver = max(0, curr_liver)
+            
+            # Costruzione Timestamp per Grafico
+            # Usiamo un datetime fittizio o reale per l'asse X
+            ts = pd.Timestamp(day['date_obj']) + pd.Timedelta(hours=h)
+            
+            hourly_log.append({
+                "Timestamp": ts,
+                "Giorno": date_label,
+                "Ora": h,
+                "Status": status,
+                "Muscolare": curr_muscle,
+                "Epatico": curr_liver,
+                "Totale": curr_muscle + curr_liver,
+                "Zona": "Sicura" if curr_liver > 20 else "Rischio"
+            })
+
     final_tank = tank.copy()
-    final_tank['muscle_glycogen_g'] = current_muscle
-    final_tank['liver_glycogen_g'] = current_liver
-    final_tank['actual_available_g'] = current_muscle + current_liver
-    final_tank['fill_pct'] = (current_muscle + current_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
-    return pd.DataFrame(trajectory), final_tank
+    final_tank['muscle_glycogen_g'] = curr_muscle
+    final_tank['liver_glycogen_g'] = curr_liver
+    final_tank['actual_available_g'] = curr_muscle + curr_liver
+    final_tank['fill_pct'] = (curr_muscle + curr_liver) / (MAX_MUSCLE + MAX_LIVER) * 100
+    
+    return pd.DataFrame(hourly_log), final_tank
 
 # --- 3. MOTORE SIMULAZIONE ---
 
@@ -462,6 +605,7 @@ def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_in
         balance.append(current_w)
         
     return balance
+
 
 
 
