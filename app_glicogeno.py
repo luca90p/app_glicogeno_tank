@@ -796,7 +796,8 @@ with tab3:
                      tank, duration, subj, params, 
                      curve_to_use, # <--- Passiamo la curva corretta (o None)
                      mix_sel, intake_mode_enum, intake_cutoff,
-                     variability_index=vi_input # Manteniamo coerenza col VI
+                     variability_index=vi_input, 
+                     intensity_series=intensity_series # Manteniamo coerenza col VI
                  )
                  
              if opt_intake is not None:
@@ -820,7 +821,8 @@ with tab3:
                      mix_type_input=mix_sel, 
                      metabolic_curve=curve_to_use, # <--- Corretto
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
-                     variability_index=vi_input # <--- Corretto
+                     variability_index=vi_input,
+                     intensity_series=intensity_series # <--- Corretto
                  )
                  
                  # Scenario B: Il Salvataggio (opt_intake g/h)
@@ -829,7 +831,8 @@ with tab3:
                      mix_type_input=mix_sel, 
                      metabolic_curve=curve_to_use, # <--- Corretto
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
-                     variability_index=vi_input # <--- Corretto
+                     variability_index=vi_input,
+                     intensity_series=intensity_series # <--- Corretto
                  )
 
                  st.markdown("---")
@@ -990,6 +993,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
