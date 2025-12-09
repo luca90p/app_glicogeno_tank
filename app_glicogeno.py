@@ -939,6 +939,110 @@ with tab3:
                  2. **Aumenta il Tapering**: Cerca di partire con il serbatoio più pieno (Tab 2).
                  """)
 
+    # --- DIGITAL TWIN COCKPIT (REPLAY) ---
+    st.markdown("---")
+    st.subheader("🏎️ Digital Twin Cockpit (Replay Gara)")
+    st.caption("Muovi il cursore temporale per analizzare lo stato istante per istante.")
+
+    # 1. Preparazione Dati per il Replay
+    # Dobbiamo essere sicuri di avere tutti i dati sincronizzati
+    if 'df_sim' in locals() and intensity_series is not None:
+        
+        # Sincronizziamo la lunghezza (il simulatore potrebbe avere 1 min in più o in meno)
+        max_len = min(len(intensity_series), len(df_sim), len(w_bal_series) if 'w_bal_series' in locals() else 9999)
+        
+        # SLIDER TEMPORALE (Il "Telecomando")
+        t_cursor = st.slider("⏱️ Timeline Gara (minuto)", 0, max_len - 1, 0, key="replay_slider")
+        
+        # Recupero Dati Istantanei
+        # A. Dati Fisici
+        curr_watt = intensity_series[t_cursor]
+        curr_w_prime = w_bal_series[t_cursor] if 'w_bal_series' in locals() else 0
+        w_prime_max = st.session_state.get('w_prime_input', 20000)
+        
+        # B. Dati Metabolici (dal DataFrame simulato)
+        row_sim = df_sim.iloc[t_cursor]
+        curr_gly_musc = row_sim['Residuo Muscolare']
+        curr_gly_liv = row_sim['Residuo Epatico']
+        start_gly_tot = tank['max_capacity_g'] # O il valore di start effettivo
+        
+        curr_cons_tot = row_sim.get('Consumo Totale (g/h)', 0)
+        curr_fat = row_sim['Ossidazione Lipidica (g)']
+        curr_cho_exo = row_sim['Carboidrati Esogeni (g)']
+        
+        # --- IL CRUSCOTTO (METRICHE & BARRE) ---
+        
+        # RIGA 1: I "Giri Motore" (Output)
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("⏱️ Tempo", f"{t_cursor} min")
+        k2.metric("⚡ Potenza Istantanea", f"{int(curr_watt)} W")
+        
+        # Colore dinamico per W' (Verde -> Rosso)
+        w_pct = max(0, min(1.0, curr_w_prime / w_prime_max))
+        w_color = "🟢" if w_pct > 0.5 else "🟡" if w_pct > 0.2 else "🔴"
+        k3.metric(f"{w_color} W' (Batteria)", f"{int(curr_w_prime)} J", delta=f"{int(w_pct*100)}%")
+        
+        # Colore dinamico Glicogeno
+        gly_tot_curr = curr_gly_musc + curr_gly_liv
+        gly_pct = max(0, min(1.0, gly_tot_curr / start_total))
+        g_color = "🟢" if gly_pct > 0.4 else "🟡" if gly_pct > 0.2 else "🔴"
+        k4.metric(f"{g_color} Glicogeno (Benzina)", f"{int(gly_tot_curr)} g", delta=f"{int(gly_pct*100)}%")
+
+        # RIGA 2: BARRE VISIVE (Serbatoi)
+        c_bar1, c_bar2 = st.columns(2)
+        with c_bar1:
+            st.write("**🔋 Batteria Anaerobica (W')**")
+            st.progress(w_pct)
+        with c_bar2:
+            st.write("**⛽ Serbatoio Glicogeno Totale**")
+            st.progress(gly_pct)
+            
+        # RIGA 3: CONSUMI ISTANTANEI (Tachimetri)
+        st.markdown("##### 🔥 Consumo Istantaneo")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Totale Carboidrati", f"{int(curr_cons_tot - curr_fat)} g/h", help="Muscolare + Epatico + Esogeno")
+        m2.metric("Integrazione (Esogeno)", f"{int(curr_cho_exo)} g/h", help="Quanto stai assorbendo ora")
+        m3.metric("Grassi (Lipidi)", f"{int(curr_fat)} g/h", help="Risparmio di glicogeno")
+
+        # --- GRAFICO SINCRONIZZATO ---
+        # Creiamo un grafico unico con una linea verticale che segue lo slider
+        
+        # Prepara dati per grafico di sfondo
+        source = df_sim.copy()
+        source['W_Balance'] = w_bal_series[:len(source)] if 'w_bal_series' in locals() else 0
+        
+        # Base Chart (Glicogeno)
+        base = alt.Chart(source).encode(x='Time (min)')
+        
+        line_gly = base.mark_line(color='green').encode(
+            y=alt.Y('Residuo Totale', axis=alt.Axis(title='Glicogeno (g)', titleColor='green'))
+        )
+        
+        # Layer W' (Area viola)
+        area_w = base.mark_area(opacity=0.2, color='purple').encode(
+            y=alt.Y('W_Balance', axis=alt.Axis(title='W\' Balance (J)', titleColor='purple'))
+        )
+        
+        # LINEA CURSORE (Rossa Verticale)
+        rule = alt.Chart(pd.DataFrame({'x': [t_cursor]})).mark_rule(color='red', size=2).encode(x='x')
+        
+        # Testo sopra la linea
+        text = alt.Chart(pd.DataFrame({'x': [t_cursor], 'y': [max_y_scale], 'label': [f"T={t_cursor}"]})).mark_text(
+            align='left', dx=5, color='red'
+        ).encode(x='x', y='y', text='label')
+
+        combined_chart = alt.layer(area_w, line_gly, rule, text).resolve_scale(
+            y='independent'
+        ).properties(
+            height=300, 
+            title="Sincronizzazione Carico Esterno (W') vs Interno (Glicogeno)"
+        )
+        
+        st.altair_chart(combined_chart, use_container_width=True)
+        
+    else:
+        st.info("Per attivare il Cockpit, esegui prima la simulazione (Manuale o Minima) con dati di potenza caricati.")
+
 # --- SEZIONE DEBUG / DOWNLOAD LOG ---
     st.markdown("---")
     st.subheader("🔧 Strumenti di Verifica")
@@ -1012,6 +1116,7 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
 
 
 
