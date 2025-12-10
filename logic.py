@@ -296,7 +296,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
                         intensity_series=None, metabolic_curve=None, 
-                        intake_mode=IntakeMode.DISCRETE, intake_cutoff_min=0, variability_index=1.0):
+                        intake_mode=IntakeMode.DISCRETE, intake_cutoff_min=0, variability_index=1.0, use_mader=False):
     
     results = []
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -680,6 +680,7 @@ def simulate_mader_curve(subject: Subject):
     except: mlss = 0
     
     return df, mlss
+
 
 
 
