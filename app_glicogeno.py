@@ -1294,13 +1294,36 @@ with tab4:
         ax1.grid(True, alpha=0.3)
         st.pyplot(fig1)
 
-        st.subheader("2. Consumo Carburante")
-        fig2, ax2 = plt.subplots(figsize=(8, 4))
-        ax2.stackplot(df_mader['watts'], df_mader['g_fat_h'], df_mader['g_cho_h'], labels=['Grassi', 'Carboidrati'], colors=['green', 'orange'], alpha=0.6)
-        ax2.set_ylabel("Grammi / ora")
-        ax2.legend(loc='upper left')
-        ax2.grid(True, alpha=0.3)
-        st.pyplot(fig2)
+        st.subheader("2. Consumo Carburante (Doppia Scala)")
+fig2, ax1 = plt.subplots(figsize=(8, 4))
+
+# --- ASSE SINISTRO: CARBOIDRATI (Arancione) ---
+color_cho = 'tab:orange'
+ax1.set_xlabel('Potenza (Watt)')
+ax1.set_ylabel('Carboidrati (g/h)', color=color_cho, fontweight='bold')
+# Uso plot (linea) invece di stackplot per la doppia scala
+line1 = ax1.plot(df_mader['watts'], df_mader['g_cho_h'], color=color_cho, linewidth=2.5, label='Carboidrati')
+ax1.tick_params(axis='y', labelcolor=color_cho)
+ax1.grid(True, which='major', linestyle='--', alpha=0.3)
+
+# --- ASSE DESTRO: GRASSI (Verde) ---
+ax2 = ax1.twinx()  # Crea asse Y secondario
+color_fat = 'tab:green'
+ax2.set_ylabel('Grassi (g/h)', color=color_fat, fontweight='bold')
+line2 = ax2.plot(df_mader['watts'], df_mader['g_fat_h'], color=color_fat, linewidth=2.5, label='Grassi')
+ax2.tick_params(axis='y', labelcolor=color_fat)
+
+# Imposta i limiti minimi a 0 per pulizia
+ax1.set_ylim(bottom=0)
+ax2.set_ylim(bottom=0, top=df_mader['g_fat_h'].max() * 1.2) # Un po' di aria sopra per i grassi
+
+# --- LEGENDA UNIFICATA ---
+lines = line1 + line2
+labels = [l.get_label() for l in lines]
+ax1.legend(lines, labels, loc='upper left')
+
+st.pyplot(fig2)
+
 
 
 
