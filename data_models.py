@@ -118,6 +118,8 @@ class Subject:
     sex: Sex
     glycogen_conc_g_kg: float
     sport: SportType
+    vo2_max: float = 55.0      # Default
+    vlamax: float = 0.5        # Default
     liver_glycogen_g: float = 100.0
     filling_factor: float = 1.0 
     uses_creatine: bool = False
@@ -137,3 +139,4 @@ class Subject:
         if self.glycogen_conc_g_kg >= 22.0:
             base += 0.03
         return base
+
