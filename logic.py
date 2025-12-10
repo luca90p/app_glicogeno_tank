@@ -680,7 +680,7 @@ def calculate_mader_consumption(watts, subject: Subject):
 def simulate_mader_curve(subject: Subject):
     """
     Genera i dati per il Tab Laboratorio.
-    Restituisce DUE valori: il DataFrame dei dati e il valore MLSS (Watt).
+    Restituisce: (DataFrame, MLSS_Value)
     """
     watts_range = np.arange(0, 600, 10)
     results = []
@@ -709,12 +709,11 @@ def simulate_mader_curve(subject: Subject):
         
         net_balance = vla_prod - vla_comb
         
-        # 3. Ossigeno
+        # 3. Ossigeno (per Grafico 4)
         vo2_demand_l = vo2_demand_ml / 1000.0
         vo2_uptake_l = vo2_uptake / 1000.0
 
-        # 4. Carboidrati e Grassi
-        # (Usa la logica interna semplificata per velocità o richiama calculate_mader_consumption se preferisci)
+        # 4. Carboidrati e Grassi (per Grafico 2)
         base_rer = 0.70 + (0.18 * intensity)
         lactate_push = min(0.25, vla_prod * 0.15)
         final_rer = min(1.0, max(0.7, base_rer + lactate_push))
@@ -722,14 +721,18 @@ def simulate_mader_curve(subject: Subject):
         
         kcal_h = kcal_min * 60
         g_cho_h = ((kcal_min * cho_pct) / 4.0) * 60
+        
         # Aggiunta costo anaerobico sopra soglia
         if net_balance > 0:
             g_cho_h += (net_balance * subject.weight_kg * 0.40 * 0.09 * 60)
             
         g_fat_h = max(0, (kcal_h - (g_cho_h * 4)) / 9)
 
+        # 5. SALVATAGGIO RISULTATI (Qui mancava 'la_prod'!)
         results.append({
             "watts": w,
+            "la_prod": vla_prod,      # <--- FONDAMENTALE PER GRAFICO 1
+            "la_comb": vla_comb,      # <--- FONDAMENTALE PER GRAFICO 1
             "net_balance": net_balance,
             "g_cho_h": g_cho_h,
             "g_fat_h": g_fat_h,
@@ -739,12 +742,10 @@ def simulate_mader_curve(subject: Subject):
         
     df = pd.DataFrame(results)
     
-    # 5. Calcolo MLSS (Punto dove il balance da negativo diventa positivo o minimo assoluto)
+    # 6. Calcolo MLSS
     mlss = 0
     try:
-        # Filtriamo sopra i 50W per evitare rumore a riposo
         df_valid = df[df['watts'] > 50]
-        # Cerchiamo il valore più vicino allo zero assoluto
         idx_mlss = (df_valid['net_balance']).abs().idxmin()
         mlss = df.loc[idx_mlss, 'watts']
     except:
