@@ -1340,67 +1340,35 @@ else:
     st.pyplot(fig2)
     
 # GRAFICO 3____________________________________________________________________________________________________________________________
-st.subheader("3. Bilancio del Lattato (Valori Assoluti)")
-
-# --- CONTROLLO DI SICUREZZA ---
-# Verifichiamo se 'subject' è definito. Se non c'è, proviamo a cercarlo nella sessione o diamo un avviso.
-if 'subject' not in locals():
-    # Se usi Streamlit session state, prova a recuperarlo da lì
-    if 'subject' in st.session_state:
-        subject = st.session_state['subject']
-    else:
-        st.warning("⚠️ Oggetto 'subject' non trovato. Assicurati di aver compilato i dati dell'atleta prima di visualizzare questo grafico.")
-        st.stop() # Ferma l'esecuzione qui per evitare l'errore rosso
-
-# --- ESECUZIONE SIMULAZIONE ---
-# Ora siamo sicuri che subject esiste
-try:
-    df_mader, mlss = simulate_mader_curve(subject)
-except NameError:
-    st.error("Errore: La funzione 'simulate_mader_curve' non è definita. Assicurati di aver incollato la definizione della funzione nel codice.")
-    st.stop()
-
+st.subheader("3. Bilancio del Lattato (Mader)")
 fig3, ax3 = plt.subplots(figsize=(8, 4))
 
-# --- Preparazione Dati ---
-# Separiamo i dati in due serie: Deficit (invertito positivo) e Accumulo
-lack_series = np.where(df_mader['net_balance'] < 0, -df_mader['net_balance'], np.nan)
-accum_series = np.where(df_mader['net_balance'] >= 0, df_mader['net_balance'], np.nan)
+# --- Curva Unica: Bilancio Netto ---
+# Questa linea rappresenta la differenza tra produzione e combustione
+ax3.plot(df_mader['watts'], df_mader['net_balance'], color='black', linewidth=2, label='Net Balance')
 
-# --- Plot Curve ---
-# 1. Lack of Pyruvate (Verde, ora positiva)
-ax3.plot(df_mader['watts'], lack_series, color='green', linewidth=2, label='Lack of Pyruvate (Deficit)')
-ax3.fill_between(df_mader['watts'], lack_series, 0, color='green', alpha=0.2)
+# --- Aree Colorate (Lack vs Accumulation) ---
 
-# 2. Lactate Accumulation (Rossa)
-ax3.plot(df_mader['watts'], accum_series, color='red', linewidth=2, label='Lactate Accumulation')
-ax3.fill_between(df_mader['watts'], accum_series, 0, color='red', alpha=0.2)
+# Area Verde: Lack of Pyruvate (Deficit di Piruvato)
+# Indica che la capacità ossidativa supera la produzione glicolitica
+ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
+                 where=(df_mader['net_balance'] <= 0), 
+                 color='green', alpha=0.2, label='Lack of Pyruvate')
 
-# --- Evidenziare MLSS ---
-if mlss > 0:
-    # Linea Verticale
-    ax3.axvline(x=mlss, color='black', linestyle='--', alpha=0.6, linewidth=1)
-    
-    # Etichetta con Freccia
-    # Calcoliamo i massimi per posizionare l'etichetta evitando errori su array vuoti
-    max_lack = np.nanmax(lack_series) if not np.all(np.isnan(lack_series)) else 0
-    max_accum = np.nanmax(accum_series) if not np.all(np.isnan(accum_series)) else 0
-    y_max = max(max_lack, max_accum)
-    if y_max == 0: y_max = 1.0 # Default di sicurezza
+# Area Rossa: Lactate Accumulation (Accumulo di Lattato)
+# Indica che la produzione glicolitica supera la capacità ossidativa
+ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
+                 where=(df_mader['net_balance'] > 0), 
+                 color='red', alpha=0.2, label='Lactate Accumulation')
 
-    ax3.annotate(f'MLSS\n~{mlss} W', 
-                 xy=(mlss, 0),             
-                 xytext=(mlss, y_max * 0.3), 
-                 arrowprops=dict(facecolor='black', arrowstyle='->', lw=1.5),
-                 horizontalalignment='center',
-                 fontsize=10, fontweight='bold',
-                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.8))
+# Linea dello zero per riferimento
+ax3.axhline(0, color='gray', linewidth=1, linestyle='--')
 
-# --- Cosmesi ---
+# Etichette e Stile
 ax3.set_xlabel("Potenza (Watt)")
-ax3.set_ylabel("Magnitudo Metabolica (mmol/L/min)")
-ax3.set_title("Stato Metabolico (Deficit Assoluto vs Accumulo)")
-ax3.legend(loc='upper center', frameon=True, fancybox=True, framealpha=0.9)
+ax3.set_ylabel("Lattato (mmol/L/min)")
+ax3.set_title("Stato Metabolico: Deficit vs Accumulo")
+ax3.legend(loc='upper left')
 ax3.grid(True, alpha=0.3)
 
 st.pyplot(fig3)
@@ -1424,6 +1392,7 @@ ax4.legend(loc='upper left')
 ax4.grid(True, alpha=0.3)
 
 st.pyplot(fig4)
+
 
 
 
