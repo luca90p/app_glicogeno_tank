@@ -290,7 +290,7 @@ def calculate_hourly_tapering(subject, days_data, start_state: GlycogenState = G
     
     return pd.DataFrame(hourly_log), final_tank
 
-# --- 3. MOTORE SIMULAZIONE ---
+# funzione simulazione metabolica
 
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
@@ -305,7 +305,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     
     # PARAMETRI ATTIVITÀ
     avg_watts = activity_params.get('avg_watts', 200)
-    np_watts = activity_params.get('np_watts', avg_watts) # Default a avg se NP manca
+    np_watts = activity_params.get('np_watts', avg_watts)
     ftp_watts = activity_params.get('ftp_watts', 250)
     
     threshold_hr = activity_params.get('threshold_hr', 170)
@@ -316,20 +316,16 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     threshold_ref = ftp_watts if mode == 'cycling' else threshold_hr
     base_val = avg_watts if mode == 'cycling' else avg_hr
     
-    # CALCOLO IF CORRETTO (Basato su NP se ciclismo)
     if mode == 'cycling' and ftp_watts > 0:
-        # Se abbiamo una serie reale, usiamo NP per l'IF globale
         intensity_factor_reference = np_watts / ftp_watts
     elif threshold_ref > 0:
         intensity_factor_reference = base_val / threshold_ref
     else:
         intensity_factor_reference = 0.8
     
-    # Calcolo calorie base per minuto (usato per corsa o stima semplice)
     if mode == 'cycling':
         kcal_per_min_base = (avg_watts * 60) / 4184 / (gross_efficiency / 100.0)
     else:
-        # Running approximation
         kcal_per_min_base = (subject_obj.weight_kg * 0.2 * intensity_factor_reference * 3.5) / 5.0
         
     is_lab_data = True if metabolic_curve is not None else False 
@@ -366,7 +362,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             current_val = intensity_series[t]
             current_if_moment = current_val / threshold_ref if threshold_ref > 0 else 0.8
         elif variability_index > 1.0:
-             # Simulazione variabilità se non c'è file ma c'è VI
              current_if_moment *= variability_index
         
         # Calcolo Domanda Energetica Istantanea
@@ -377,7 +372,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             if t > 60: 
                 loss = (t - 60) * 0.02
                 current_eff = max(15.0, gross_efficiency - loss)
-            # KJ = KW * sec -> W * 60 / 1000 / 4.184 / eff
             current_kcal_demand = (instant_power * 60) / 4184 / (current_eff / 100.0)
         else: 
             drift_factor = 1.0
@@ -424,37 +418,58 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
         # --- CONSUMO SUBSTRATI ---
+        cho_ratio = 1.0
+        rer = 0.85
+        total_cho_demand = 0.0
+        g_fat = 0.0
+
         if is_lab_data:
-            cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve)
+            cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve) # Assicurati di avere questa funzione importata o nel file
             if t > 60:
                 drift = 1.0 + ((t - 60) * 0.0006)
                 cho_rate_gh *= drift
                 fat_rate_gh *= (1.0 - ((t - 60) * 0.0003))
             total_cho_demand = cho_rate_gh / 60.0
             g_fat = fat_rate_gh / 60.0
-            cho_ratio = 1.0 # Placeholder per grafici, non usato nel calcolo lab
             rer = 0.85 
         else:
-            standard_crossover = 75.0 
-            crossover_val = crossover_pct if crossover_pct else standard_crossover
-            if_shift = (standard_crossover - crossover_val) / 100.0
-            # Usa l'intensità MOMENTANEA per il RER
-            effective_if_for_rer = max(0.3, current_if_moment + if_shift)
-            
-            rer = calculate_rer_polynomial(effective_if_for_rer)
-            base_cho_ratio = (rer - 0.70) * 3.45
-            base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
-            
-            current_cho_ratio = base_cho_ratio
-            if current_if_moment < 0.85 and t > 60:
-                hours_past = (t - 60) / 60.0
-                metabolic_shift = 0.05 * (hours_past ** 1.2) 
-                current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
-            
-            cho_ratio = current_cho_ratio
-            kcal_cho_demand = current_kcal_demand * cho_ratio
-            total_cho_demand = kcal_cho_demand / 4.1
-            g_fat = (current_kcal_demand * (1.0-cho_ratio) / 9.0) if current_kcal_demand > 0 else 0
+            # --- INTEGRAZIONE MADER ---
+            if use_mader:
+                # Usa il valore corrente (Watt) per il modello bioenergetico
+                # Se è running e non abbiamo watt, questo modello potrebbe non essere preciso a meno che current_val non sia potenza
+                mader_cho_g_min = calculate_mader_consumption(current_val, subject_obj)
+                total_cho_demand = mader_cho_g_min
+                
+                # Calcola grassi per differenza calorica
+                kcal_cho = total_cho_demand * 4.0
+                kcal_fat = max(0, current_kcal_demand - kcal_cho)
+                g_fat = kcal_fat / 9.0
+                
+                # Stima parametri per output
+                if current_kcal_demand > 0:
+                    cho_ratio = kcal_cho / current_kcal_demand
+                rer = 0.7 + (0.3 * cho_ratio)
+            else:
+                # LOGICA STANDARD ESISTENTE
+                standard_crossover = 75.0 
+                crossover_val = crossover_pct if crossover_pct else standard_crossover
+                if_shift = (standard_crossover - crossover_val) / 100.0
+                effective_if_for_rer = max(0.3, current_if_moment + if_shift)
+                
+                rer = calculate_rer_polynomial(effective_if_for_rer)
+                base_cho_ratio = (rer - 0.70) * 3.45
+                base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
+                
+                current_cho_ratio = base_cho_ratio
+                if current_if_moment < 0.85 and t > 60:
+                    hours_past = (t - 60) / 60.0
+                    metabolic_shift = 0.05 * (hours_past ** 1.2) 
+                    current_cho_ratio = max(0.05, base_cho_ratio - metabolic_shift)
+                
+                cho_ratio = current_cho_ratio
+                kcal_cho_demand = current_kcal_demand * cho_ratio
+                total_cho_demand = kcal_cho_demand / 4.1
+                g_fat = (current_kcal_demand * (1.0-cho_ratio) / 9.0) if current_kcal_demand > 0 else 0
         
         total_cho_g_min = total_cho_demand
         
@@ -479,11 +494,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
             
-            if not is_lab_data:
-                total_fat_burned_g += (current_kcal_demand * (1.0-cho_ratio)) / 9.0
-            else:
-                total_fat_burned_g += g_fat
-            
+            total_fat_burned_g += g_fat
             total_muscle_used += muscle_usage_g_min
             total_liver_used += from_liver
             total_exo_used += from_exogenous
@@ -513,12 +524,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             "CHO %": cho_ratio * 100,
             "Intake Cumulativo (g)": total_intake_cumulative,
             "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative,
-            "Intensity Factor (IF)": current_if_moment # IF istantaneo per debug
+            "Intensity Factor (IF)": current_if_moment
         })
     
-    # Statistiche Finali: Kcal basate su Avg Power (Work), IF basato su NP
+    # Statistiche Finali
     total_kcal_final = (avg_watts * duration_min * 60) / 4184 / (gross_efficiency/100)
-    
     final_total_glycogen = current_muscle_glycogen + current_liver_glycogen
     
     stats = {
@@ -528,7 +538,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         "total_exo_used": total_exo_used,
         "fat_total_g": total_fat_burned_g,
         "kcal_total_h": total_kcal_final,
-        "intensity_factor": intensity_factor_reference, # Questo ora è corretto (NP/FTP)
+        "intensity_factor": intensity_factor_reference,
         "avg_rer": rer,
         "cho_pct": cho_ratio * 100
     }
@@ -680,6 +690,7 @@ def simulate_mader_curve(subject: Subject):
     except: mlss = 0
     
     return df, mlss
+
 
 
 
