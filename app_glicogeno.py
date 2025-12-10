@@ -56,6 +56,26 @@ def create_cutoff_line(cutoff_time):
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
+st.sidebar.markdown("### 🫀 Profilo Fisiologico")
+
+user_vo2 = st.sidebar.number_input(
+    "VO2max (ml/kg/min)", 
+    min_value=30, max_value=90, value=55, step=1,
+    help="Valore da Garmin, Apple Watch o Test."
+)
+
+st.sidebar.caption("Che tipo di motore hai?")
+vlamax_archetypes = {
+    "Diesel (Maratoneta/Ultra)": 0.30,
+    "Passista (Granfondo)": 0.45,
+    "Puncheur (Scattante)": 0.65,
+    "Turbo (Velocista/Pistard)": 0.85
+}
+selected_arch = st.sidebar.selectbox("Profilo Anaerobico", list(vlamax_archetypes.keys()), index=1)
+base_vla = vlamax_archetypes[selected_arch]
+
+user_vlamax = st.sidebar.slider("Fine-tuning VLaMax", 0.2, 1.0, base_vla, 0.05)
+
 # --- DEFINIZIONE TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["Dati & Upload", "Simulazione Gara", "Analisi Avanzata", "🧪 Lab Mader"])
 
@@ -1212,6 +1232,7 @@ with tab4:
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2)
+
 
 
 
