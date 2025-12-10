@@ -591,7 +591,7 @@ with tab3:
                              'avg_watts': val, 
                              'np_watts': fit_np, 
                              'ftp_watts': target_ftp, 
-                             'efficiency': 22.0
+                             'efficiency': 21.0
                          }
                     else:
                          k3.metric("Avg HR", f"{int(fit_avg_hr)} bpm")
@@ -763,7 +763,8 @@ with tab3:
             intake_mode=intake_mode_enum,
             intake_cutoff_min=intake_cutoff,
             variability_index=vi_input,
-            use_mader=use_mader_sim
+            use_mader=use_mader_sim,
+            running_method=sim_method
         )
         df_sim['Scenario'] = 'Strategia Integrata'
         df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -778,7 +779,8 @@ with tab3:
             intake_mode=intake_mode_enum,
             intake_cutoff_min=intake_cutoff,
             variability_index=vi_input,
-            use_mader=use_mader_sim
+            use_mader=use_mader_sim,
+            running_method=sim_method
         )
         df_no['Scenario'] = 'Riferimento (Digiuno)'
         df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
@@ -987,7 +989,8 @@ with tab3:
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
                      variability_index=vi_input,
                      intensity_series=intensity_series,
-                     use_mader=use_mader_sim # <--- Corretto
+                     use_mader=use_mader_sim,
+                     running_method=sim_method # <--- Corretto
                  )
                  
                  # Scenario B: Il Salvataggio (opt_intake g/h)
@@ -998,7 +1001,8 @@ with tab3:
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
                      variability_index=vi_input,
                      intensity_series=intensity_series,
-                     use_mader=use_mader_sim # <--- Corretto
+                     use_mader=use_mader_sim,
+                     running_method=sim_method # <--- Corretto
                  )
 
                  st.markdown("---")
@@ -1414,6 +1418,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
