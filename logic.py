@@ -716,7 +716,9 @@ def simulate_mader_curve(subject: Subject):
             "watts": w, 
             "la_prod": vla_prod, 
             "la_comb": vla_comb,
-            "net_balance": net_balance, 
+            "net_balance": net_balance,
+            "vo2_demand_l": vo2_demand / 1000.0, # <--- NUOVO: Salviamo in Litri per il grafico
+            "vo2_uptake_l": vo2_uptake / 1000.0,  # <--- NUOVO: Salviamo in Litri per il grafico
             "g_cho_h": g_cho_h, 
             "g_fat_h": g_fat_h
         })
@@ -737,6 +739,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
     
     return df, mlss
+
 
 
 
