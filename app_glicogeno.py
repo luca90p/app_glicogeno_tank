@@ -200,82 +200,50 @@ with tab1:
             active_lab = st.checkbox("Attiva Profilo Metabolico Personalizzato", value=st.session_state.get('use_lab_data', False))
             
             if active_lab:
-                met_method = st.radio("Metodo Inserimento:", ["Carica File (Completo)", "Manuale (3 Punti)"], horizontal=True)
+                # RIMOSSO: Radio button per scelta metodo
+                # RIMOSSO: Blocco "Inserimento Manuale (3 Punti)"
                 
-                if met_method == "Inserimento Manuale (3 Punti)":
-                    st.caption("Inserisci i dati per tre zone di intensità (Z2, Z3, Z4).")
-                    st.markdown("**1. Zona Z2 (Aerobica / FatMax)**")
-                    c1, c2, c3 = st.columns(3)
-                    z2_hr = c1.number_input("FC (bpm)", 0, 220, 130, key='z2_hr')
-                    z2_cho = c2.number_input("CHO (g/h)", 0, 500, 75, key='z2_cho')
-                    z2_fat = c3.number_input("FAT (g/h)", 0, 200, 40, key='z2_fat')
+                # LOGICA DIRETTA: Caricamento File
+                st.caption("Carica il file raw esportato dal metabolimetro (.csv, .xlsx, .txt).")
+                upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx', 'txt'])
+                
+                if upl_file:
+                    df_raw, avail_metrics, err = utils.parse_metabolic_report(upl_file)
                     
-                    st.markdown("**2. Zona Z3 (Medio / Tempo)**")
-                    c4, c5, c6 = st.columns(3)
-                    z3_hr = c4.number_input("FC (bpm)", 0, 220, 155, key='z3_hr')
-                    z3_cho = c5.number_input("CHO (g/h)", 0, 500, 140, key='z3_cho')
-                    z3_fat = c6.number_input("FAT (g/h)", 0, 200, 30, key='z3_fat')
-                    
-                    st.markdown("**3. Zona Z4 (Soglia / Vo2max)**")
-                    c7, c8, c9 = st.columns(3)
-                    z4_hr = c7.number_input("FC (bpm)", 0, 220, 175, key='z4_hr')
-                    z4_cho = c8.number_input("CHO (g/h)", 0, 600, 220, key='z4_cho')
-                    z4_fat = c9.number_input("FAT (g/h)", 0, 200, 5, key='z4_fat')
-                    
-                    metabolic_curve = {
-                        'z2': {'hr': z2_hr, 'cho': z2_cho, 'fat': z2_fat},
-                        'z3': {'hr': z3_hr, 'cho': z3_cho, 'fat': z3_fat},
-                        'z4': {'hr': z4_hr, 'cho': z4_cho, 'fat': z4_fat}
-                    }
-                    st.session_state['use_lab_data'] = True
-                    st.session_state['metabolic_curve'] = metabolic_curve
-                    
-                    curve_df = pd.DataFrame([
-                        {'Intensità': z2_hr, 'Consumo': z2_cho, 'Tipo': 'CHO'},
-                        {'Intensità': z3_hr, 'Consumo': z3_cho, 'Tipo': 'CHO'},
-                        {'Intensità': z4_hr, 'Consumo': z4_cho, 'Tipo': 'CHO'},
-                        {'Intensità': z2_hr, 'Consumo': z2_fat, 'Tipo': 'FAT'},
-                        {'Intensità': z3_hr, 'Consumo': z3_fat, 'Tipo': 'FAT'},
-                        {'Intensità': z4_hr, 'Consumo': z4_fat, 'Tipo': 'FAT'}
-                    ])
-                    c_chart = alt.Chart(curve_df).mark_line(point=True).encode(x='Intensità', y='Consumo', color='Tipo').properties(height=200)
-                    st.altair_chart(c_chart, use_container_width=True)
-
-                elif met_method == "Carica File (Completo)":
-                    upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx', 'txt'])
-                    
-                    if upl_file:
-                        df_raw, avail_metrics, err = utils.parse_metabolic_report(upl_file)
+                    if df_raw is not None:
+                        st.success("✅ File decodificato con successo!")
+                        sel_metric = avail_metrics[0]
                         
-                        if df_raw is not None:
-                            st.success("✅ File decodificato con successo!")
-                            sel_metric = avail_metrics[0]
-                            if len(avail_metrics) > 1:
-                                st.markdown("##### 📐 Seleziona il Riferimento (Asse X)")
-                                def_idx = avail_metrics.index('Watt') if 'Watt' in avail_metrics else 0
-                                sel_metric = st.radio("Scegli su cosa basare le curve:", avail_metrics, index=def_idx, horizontal=True)
-                            
-                            df_curve = df_raw.copy()
-                            df_curve['Intensity'] = df_curve[sel_metric]
-                            df_curve = df_curve[df_curve['Intensity'] > 0].sort_values('Intensity').reset_index(drop=True)
-                            
-                            c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
-                                x=alt.X('Intensity', title=f'Intensità ({sel_metric})'), 
-                                y='CHO', color=alt.value('blue'), tooltip=['Intensity', 'CHO', 'FAT']
-                            ) + alt.Chart(df_curve).mark_line(point=True).encode(
-                                x='Intensity', y='FAT', color=alt.value('orange')
-                            )
-                            st.altair_chart(c_chart, use_container_width=True)
-                            
-                            st.session_state['use_lab_data'] = True
-                            st.session_state['metabolic_curve'] = df_curve
-                            st.info(f"Curve salvate basate su: **{sel_metric}**")
-                        else:
-                            st.error(f"Errore: {err}")
+                        # Se ci sono più metriche possibili (es. Watt vs HR), chiedi quale usare
+                        if len(avail_metrics) > 1:
+                            st.markdown("##### 📐 Seleziona il Riferimento (Asse X)")
+                            def_idx = avail_metrics.index('Watt') if 'Watt' in avail_metrics else 0
+                            sel_metric = st.radio("Scegli su cosa basare le curve:", avail_metrics, index=def_idx, horizontal=True)
+                        
+                        # Preparazione DataFrame Curve
+                        df_curve = df_raw.copy()
+                        df_curve['Intensity'] = df_curve[sel_metric]
+                        df_curve = df_curve[df_curve['Intensity'] > 0].sort_values('Intensity').reset_index(drop=True)
+                        
+                        # Visualizzazione Grafico Anteprima
+                        c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
+                            x=alt.X('Intensity', title=f'Intensità ({sel_metric})'), 
+                            y='CHO', color=alt.value('blue'), tooltip=['Intensity', 'CHO', 'FAT']
+                        ) + alt.Chart(df_curve).mark_line(point=True).encode(
+                            x='Intensity', y='FAT', color=alt.value('orange')
+                        )
+                        st.altair_chart(c_chart, use_container_width=True)
+                        
+                        # Salvataggio in Session State
+                        st.session_state['use_lab_data'] = True
+                        st.session_state['metabolic_curve'] = df_curve
+                        st.info(f"Curve salvate basate su: **{sel_metric}**")
+                    else:
+                        st.error(f"Errore nel parsing del file: {err}")
             else:
+                # Reset se il checkbox viene deselezionato
                 st.session_state['use_lab_data'] = False
                 st.session_state['metabolic_curve'] = None
-
         # --- CREAZIONE OGGETTO SUBJECT (UNIFICATA) ---
         # Uniamo Biometria (Tab1) + Motore Fisiologico (Sidebar)
         
@@ -1430,6 +1398,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
