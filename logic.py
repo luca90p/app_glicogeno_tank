@@ -296,7 +296,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
                         intensity_series=None, metabolic_curve=None, 
-                        intake_mode=IntakeMode.DISCRETE, intake_cutoff_min=0, variability_index=1.0, use_mader=False):
+                        intake_mode=IntakeMode.DISCRETE, intake_cutoff_min=0, variability_index=1.0, 
+                        use_mader=False, running_method="PHYSIOLOGICAL"): # <--- NUOVO PARAMETRO
     
     results = []
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -323,9 +324,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     else:
         intensity_factor_reference = 0.8
     
+    # Calcolo base kcal/min
     if mode == 'cycling':
         kcal_per_min_base = (avg_watts * 60) / 4184 / (gross_efficiency / 100.0)
     else:
+        # Running: kcal stimato da peso e intensità relativa
         kcal_per_min_base = (subject_obj.weight_kg * 0.2 * intensity_factor_reference * 3.5) / 5.0
         
     is_lab_data = True if metabolic_curve is not None else False 
@@ -424,7 +427,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         g_fat = 0.0
 
         if is_lab_data:
-            cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve) # Assicurati di avere questa funzione importata o nel file
+            cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve)
             if t > 60:
                 drift = 1.0 + ((t - 60) * 0.0006)
                 cho_rate_gh *= drift
@@ -433,14 +436,34 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             g_fat = fat_rate_gh / 60.0
             rer = 0.85 
         else:
-            # --- INTEGRAZIONE MADER ---
+            # --- INTEGRAZIONE MADER (AVANZATA) ---
             if use_mader:
-                # Usa il valore corrente (Watt) per il modello bioenergetico
-                # Se è running e non abbiamo watt, questo modello potrebbe non essere preciso a meno che current_val non sia potenza
-                mader_cho_g_min = calculate_mader_consumption(current_val, subject_obj)
+                mader_watts_input = current_val # Default Ciclismo
+                
+                # Logica Specifica Corsa
+                if mode == 'running':
+                    # A. STRADA FISIOLOGICA (HR -> Kcal -> Watt Equivalenti)
+                    if running_method == "PHYSIOLOGICAL":
+                         # Invertiamo la formula delle Kcal per trovare i Watt equivalenti allo sforzo cardiaco
+                         # Kcal/min = (Watts * 0.01433) / 0.21
+                         mader_watts_input = (current_kcal_demand * 0.21) / 0.01433
+                    
+                    # B. STRADA MECCANICA (Speed -> Watt)
+                    else:
+                        if current_val > 50: # Input già in Watt (Stryd)
+                             mader_watts_input = current_val
+                        else:
+                             # Input in km/h -> Watt
+                             speed_ms = current_val / 3.6
+                             # Formula approx: Peso * Speed(m/s) * Costo(J/kg/m ~1.04)
+                             mader_watts_input = speed_ms * subject_obj.weight_kg * 1.04
+
+                # Calcolo Mader Puro con Watt (reali o stimati)
+                mader_cho_g_min = calculate_mader_consumption(mader_watts_input, subject_obj)
                 total_cho_demand = mader_cho_g_min
                 
                 # Calcola grassi per differenza calorica
+                # Usiamo le Kcal calcolate dal modello HR (current_kcal_demand) per coerenza col dispendio totale
                 kcal_cho = total_cho_demand * 4.0
                 kcal_fat = max(0, current_kcal_demand - kcal_cho)
                 g_fat = kcal_fat / 9.0
@@ -450,7 +473,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                     cho_ratio = kcal_cho / current_kcal_demand
                 rer = 0.7 + (0.3 * cho_ratio)
             else:
-                # LOGICA STANDARD ESISTENTE
+                # LOGICA STANDARD (CROSSOVER)
                 standard_crossover = 75.0 
                 crossover_val = crossover_pct if crossover_pct else standard_crossover
                 if_shift = (standard_crossover - crossover_val) / 100.0
@@ -786,6 +809,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
