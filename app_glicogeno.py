@@ -1342,12 +1342,23 @@ else:
 # GRAFICO 3____________________________________________________________________________________________________________________________
 st.subheader("3. Bilancio del Lattato (Valori Assoluti)")
 
-# --- FIX: RECUPERO DATI E MLSS ---
-# Assicurati di chiamare la funzione così:
-df_mader, mlss = simulate_mader_curve(subject) 
+# --- CONTROLLO DI SICUREZZA ---
+# Verifichiamo se 'subject' è definito. Se non c'è, proviamo a cercarlo nella sessione o diamo un avviso.
+if 'subject' not in locals():
+    # Se usi Streamlit session state, prova a recuperarlo da lì
+    if 'subject' in st.session_state:
+        subject = st.session_state['subject']
+    else:
+        st.warning("⚠️ Oggetto 'subject' non trovato. Assicurati di aver compilato i dati dell'atleta prima di visualizzare questo grafico.")
+        st.stop() # Ferma l'esecuzione qui per evitare l'errore rosso
 
-# Se avevi scritto solo 'df_mader = ...', Python non salvava 'mlss'.
-# Ora 'mlss' è disponibile per il grafico.
+# --- ESECUZIONE SIMULAZIONE ---
+# Ora siamo sicuri che subject esiste
+try:
+    df_mader, mlss = simulate_mader_curve(subject)
+except NameError:
+    st.error("Errore: La funzione 'simulate_mader_curve' non è definita. Assicurati di aver incollato la definizione della funzione nel codice.")
+    st.stop()
 
 fig3, ax3 = plt.subplots(figsize=(8, 4))
 
@@ -1371,14 +1382,11 @@ if mlss > 0:
     ax3.axvline(x=mlss, color='black', linestyle='--', alpha=0.6, linewidth=1)
     
     # Etichetta con Freccia
-    # Calcoliamo una posizione Y comoda per l'etichetta
-    # Gestiamo il caso in cui le serie siano tutte NaN (es. dati vuoti)
+    # Calcoliamo i massimi per posizionare l'etichetta evitando errori su array vuoti
     max_lack = np.nanmax(lack_series) if not np.all(np.isnan(lack_series)) else 0
     max_accum = np.nanmax(accum_series) if not np.all(np.isnan(accum_series)) else 0
     y_max = max(max_lack, max_accum)
-    
-    # Se y_max è 0 (es. inizio simulazione), mettiamo un default per evitare errori grafici
-    if y_max == 0: y_max = 1.0
+    if y_max == 0: y_max = 1.0 # Default di sicurezza
 
     ax3.annotate(f'MLSS\n~{mlss} W', 
                  xy=(mlss, 0),             
@@ -1416,6 +1424,7 @@ ax4.legend(loc='upper left')
 ax4.grid(True, alpha=0.3)
 
 st.pyplot(fig4)
+
 
 
 
