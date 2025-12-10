@@ -680,18 +680,31 @@ def calculate_mader_consumption(watts, subject: Subject):
 def simulate_mader_curve(subject: Subject):
     """
     Genera i dati per il Tab Laboratorio.
-    Restituisce: (DataFrame, MLSS_Value)
+    Supporta CICLISMO e CORSA con parametri fisiologici differenziati.
     """
     watts_range = np.arange(0, 600, 10)
     results = []
     
-    # Costanti Mader
-    VLA_SCALE = 0.07
-    K_COMB = 0.0225
+    # 1. SETUP PARAMETRI SPORT-SPECIFICI
+    if subject.sport == SportType.RUNNING:
+        # CORSA
+        # Efficienza minore (più dispendioso a parità di Watt meccanici)
+        # Nota: Se usi Stryd, l'efficienza metabolica è calibrata diversamente, ma usiamo 0.21 come standard
+        eff = 0.21 
+        # Massa muscolare attiva maggiore (diluizione lattato su più volume)
+        active_mass_pct = 0.45 
+        # Costante di smaltimento leggermente aumentata (miglior pompa muscolare/circolazione total body)
+        K_COMB = 0.024 
+    else:
+        # CICLISMO
+        eff = 0.23
+        active_mass_pct = 0.40
+        K_COMB = 0.0225
+
+    VLA_SCALE = 0.07 # Costante di scala produzione (fissa)
     
     for w in watts_range:
-        # 1. Parametri base
-        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
+        # A. Domanda Energetica
         kcal_min = (w * 0.01433) / eff
         vo2_demand_ml = (kcal_min / 4.85) * 1000
         vo2_max_abs = subject.vo2_max * subject.weight_kg
@@ -700,7 +713,7 @@ def simulate_mader_curve(subject: Subject):
         if vo2_max_abs > 0:
             intensity = vo2_demand_ml / vo2_max_abs
             
-        # 2. Lattato: Produzione vs Smaltimento
+        # B. Lattato: Produzione vs Smaltimento
         raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
         vla_prod = raw_prod * VLA_SCALE
         
@@ -709,11 +722,12 @@ def simulate_mader_curve(subject: Subject):
         
         net_balance = vla_prod - vla_comb
         
-        # 3. Ossigeno (per Grafico 4)
+        # C. Dati Ossigeno
         vo2_demand_l = vo2_demand_ml / 1000.0
         vo2_uptake_l = vo2_uptake / 1000.0
 
-        # 4. Carboidrati e Grassi (per Grafico 2)
+        # D. Carboidrati e Grassi
+        # RER di base varia leggermente con l'intensità
         base_rer = 0.70 + (0.18 * intensity)
         lactate_push = min(0.25, vla_prod * 0.15)
         final_rer = min(1.0, max(0.7, base_rer + lactate_push))
@@ -722,17 +736,37 @@ def simulate_mader_curve(subject: Subject):
         kcal_h = kcal_min * 60
         g_cho_h = ((kcal_min * cho_pct) / 4.0) * 60
         
-        # Aggiunta costo anaerobico sopra soglia
+        # Aggiunta costo anaerobico sopra soglia (Accumulo)
+        # Qui usiamo la massa attiva specifica dello sport
         if net_balance > 0:
-            g_cho_h += (net_balance * subject.weight_kg * 0.40 * 0.09 * 60)
+            g_cho_h += (net_balance * subject.weight_kg * active_mass_pct * 0.09 * 60)
             
         g_fat_h = max(0, (kcal_h - (g_cho_h * 4)) / 9)
 
-        # 5. SALVATAGGIO RISULTATI (Qui mancava 'la_prod'!)
+        # E. Stima Passo Corsa (Opzionale, solo per riferimento)
+        # Conversione approssimativa Watt (Stryd) -> Passo al km
+        # Formula empirica: 1.04 kcal/kg/km costo energetico
+        pace_label = ""
+        if subject.sport == SportType.RUNNING and w > 0:
+            # W/kg
+            wkg = w / subject.weight_kg
+            # Stima velocità km/h da W/kg (Stryd formula approx: Speed = W/kg / 1.04 * 3.6 ? No, più semplice)
+            # 1 Watt/kg ~ 210 m/min ? No.
+            # Usiamo formula inversa costo energetico:
+            # Speed (m/min) = VO2 (ml/min/kg) / 0.2
+            # VO2 = w * 0.01433 / eff / weight * 1000 / 4.85
+            speed_m_min = (vo2_demand_ml / subject.weight_kg) / 0.2
+            if speed_m_min > 0:
+                pace_min_km = 1000 / speed_m_min
+                mm = int(pace_min_km)
+                ss = int((pace_min_km - mm) * 60)
+                pace_label = f"{mm}:{ss:02d}"
+
         results.append({
             "watts": w,
-            "la_prod": vla_prod,      # <--- FONDAMENTALE PER GRAFICO 1
-            "la_comb": vla_comb,      # <--- FONDAMENTALE PER GRAFICO 1
+            "pace": pace_label, # Nuova colonna utile per la corsa
+            "la_prod": vla_prod,
+            "la_comb": vla_comb,
             "net_balance": net_balance,
             "g_cho_h": g_cho_h,
             "g_fat_h": g_fat_h,
@@ -752,6 +786,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
