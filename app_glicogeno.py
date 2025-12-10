@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import altair as alt
 import math
+import matplotlib.pyplot as plt
 
 import logic
 import utils
@@ -83,35 +84,23 @@ def create_cutoff_line(cutoff_time):
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
-# --- INIZIO BLOCCO SIDEBAR (Sostituisci la parte relativa al Subject) ---
+# --- INIZIO BLOCCO SIDEBAR (Configurazione Motore) ---
 
 with st.sidebar:
-    st.header("1. Profilo Atleta")
+    st.header("🫀 Motore Fisiologico")
+    st.info("Definisci qui la cilindrata (VO2max) e il profilo metabolico (VLaMax).")
     
-    # Dati Biometrici Base
-    col_bio1, col_bio2 = st.columns(2)
-    with col_bio1:
-        weight = st.number_input("Peso (kg)", 40.0, 120.0, 70.0, step=0.5)
-    with col_bio2:
-        height = st.number_input("Altezza (cm)", 140, 220, 175)
-        
-    sex_options = list(Sex)
-    sex_enum = st.selectbox("Sesso", sex_options, format_func=lambda x: x.value, index=0)
-    
-    body_fat = st.slider("Massa Grassa (%)", 3.0, 40.0, 12.0, 0.5)
-    
-    # --- NUOVA SEZIONE FISIOLOGICA (MADER) ---
-    st.markdown("### 🫀 Motore Fisiologico")
-    
-    # 1. VO2max (Obbligatorio)
+    # 1. VO2max (Motore Aerobico)
     user_vo2 = st.number_input(
         "VO2max (ml/kg/min)", 
         min_value=30, max_value=90, value=55, step=1,
-        help="Cilindrata aerobica. Da Garmin, Apple Watch o Test."
+        help="Cilindrata aerobica. Determina quanto ossigeno puoi usare."
     )
     
-    # 2. VLaMax (Archetipi Semplificati)
-    st.caption("Che tipo di atleta sei?")
+    # 2. VLaMax (Motore Anaerobico)
+    st.markdown("---")
+    st.write("**Profilo Anaerobico (VLaMax)**")
+    
     vlamax_archetypes = {
         "Diesel (Maratoneta/Ultra)": 0.30,
         "Passista (Granfondo)": 0.45,
@@ -119,43 +108,17 @@ with st.sidebar:
         "Turbo (Velocista/Pistard)": 0.85
     }
     selected_arch = st.selectbox(
-        "Profilo Anaerobico (VLaMax)", 
+        "Archetipo Atleta", 
         list(vlamax_archetypes.keys()), 
-        index=1,
-        help="Determina il consumo di zuccheri ad alta intensità."
+        index=1
     )
     base_vla = vlamax_archetypes[selected_arch]
     
-    # Slider per utenti esperti (nascosto di default o sotto expander)
-    with st.expander("Fine-tuning VLaMax"):
-        user_vlamax = st.slider("Valore VLaMax", 0.2, 1.0, base_vla, 0.05)
+    # Slider per fine-tuning
+    user_vlamax = st.slider("VLaMax (mmol/L/s)", 0.2, 1.0, base_vla, 0.05, help="Più è alto, più bruci carboidrati ad alta intensità.")
 
-    # Sport e Dieta
     st.markdown("---")
-    sport_options = list(SportType)
-    sport_enum = st.selectbox("Sport Principale", sport_options, format_func=lambda x: x.label, index=0)
-    
-    # Calcolo automatico concentrazione glicogeno (basato su VO2max)
-    calculated_glyco_conc = 13.0 + (user_vo2 - 30.0) * 0.24
-    calculated_glyco_conc = max(12.0, min(26.0, calculated_glyco_conc))
-    
-    # Creazione Oggetto Subject (Aggiornato con i nuovi campi)
-    subject = Subject(
-        weight_kg=weight,
-        height_cm=height,
-        body_fat_pct=body_fat,
-        sex=sex_enum,
-        glycogen_conc_g_kg=calculated_glyco_conc,
-        sport=sport_enum,
-        
-        # NUOVI CAMPI PASSATI AL MODELLO
-        vo2_max=user_vo2,
-        vlamax=user_vlamax,
-        
-        # Default o altri input
-        liver_glycogen_g=100.0,
-        filling_factor=1.0 # O aggiungi slider filling_factor se lo avevi
-    )
+    st.caption(f"⚙️ Configurazione Attiva:\nVO2max: {user_vo2} | VLaMax: {user_vlamax}")
 
 # --- FINE BLOCCO SIDEBAR ---
 
@@ -169,7 +132,8 @@ with tab1:
     col_in, col_res = st.columns([1, 2])
     
     with col_in:
-        st.subheader("Parametri Antropometrici")
+        st.subheader("1. Parametri Antropometrici")
+        # Input biometrici (rimangono qui per comodità di tuning)
         weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 74.0, 0.5)
         height = st.slider("Altezza (cm)", 150, 210, 187, 1)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 11.0, 0.5) / 100.0
@@ -177,39 +141,31 @@ with tab1:
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
-        use_smm = st.checkbox("Usa Massa Muscolare (SMM) misurata")
-        muscle_mass_input = None
-        if use_smm:
-            muscle_mass_input = st.number_input("SMM Misurata [kg]", 10.0, 60.0, 37.4, 0.1)
-        
-        st.markdown("---")
-        st.subheader("Capacità & Soglie")
-        
-        est_method = st.radio("Metodo Stima Densità:", ["Livello Atletico", "VO2max (Lab)"], horizontal=True)
-        calculated_conc = 0.0
-        vo2_derived = 0.0
-        
-        if est_method == "Livello Atletico":
-            status_map = {s.label: s for s in TrainingStatus}
-            s_status = status_map[st.selectbox("Livello", list(status_map.keys()), index=3)]
-            calculated_conc = s_status.val
-            vo2_derived = 30 + ((calculated_conc - 13.0) / 0.24)
-        else:
-            vo2_input = st.slider("VO2max (ml/kg/min)", 30, 85, 60, 1)
-            calculated_conc = logic.get_concentration_from_vo2max(vo2_input)
-            vo2_derived = vo2_input
-            
-        
-
         sport_map = {s.label: s for s in SportType}
         s_sport = sport_map[st.selectbox("Sport Target (Principale)", list(sport_map.keys()))]
         
-        # --- INPUT SOGLIE IBRIDE ---
+        # Opzioni Extra
+        with st.expander("Opzioni Avanzate"):
+            use_smm = st.checkbox("Usa Massa Muscolare (SMM) misurata")
+            muscle_mass_input = st.number_input("SMM [kg]", 10.0, 60.0, 37.4, 0.1) if use_smm else None
+            
+            use_creatine = st.checkbox("Usa Creatina")
+            s_menstrual = MenstrualPhase.NONE
+            if s_sex == Sex.FEMALE:
+                m_map = {m.label: m for m in MenstrualPhase}
+                s_menstrual = m_map[st.selectbox("Fase Ciclo", list(m_map.keys()))]
+
+        st.markdown("---")
+        st.subheader("2. Soglie Operative")
+        st.caption("Questi valori servono per scalare l'intensità (IF) e le Zone.")
+        
+        # Input Soglie (FTP/HR)
         c_ftp, c_hr = st.columns(2)
         ftp_watts = c_ftp.number_input("FTP Ciclismo (Watt)", 100, 600, 265, step=5)
-        thr_hr = c_hr.number_input("Soglia Anaerobica Corsa (BPM)", 100, 220, 170, step=1)
-        max_hr = st.number_input("Frequenza Cardiaca Max (BPM)", 100, 230, 185, step=1)
-            
+        thr_hr = c_hr.number_input("Soglia Anaerobica (BPM)", 100, 220, 170, step=1)
+        max_hr = st.number_input("FC Max (BPM)", 100, 230, 185, step=1)
+        
+        # Salva soglie in session state
         st.session_state.update({'ftp_watts_input': ftp_watts, 'thr_hr_input': thr_hr, 'max_hr_input': max_hr})
 
         # --- INPUT MORTON (CRITICAL POWER) ---
@@ -223,7 +179,7 @@ with tab1:
             st.session_state['cp_input'] = cp_input
             st.session_state['w_prime_input'] = w_prime_input
         
-        # --- NUOVA SEZIONE: PROFILO METABOLICO ---
+        # --- SEZIONE: PROFILO METABOLICO (LAB) ---
         st.markdown("---")
         with st.expander("🧬 Profilo Metabolico (Test Laboratorio)", expanded=False):
             st.info("Inserisci i dati dal test del gas (Metabolimetro) per personalizzare i consumi.")
@@ -275,29 +231,20 @@ with tab1:
                     upl_file = st.file_uploader("Carica Report Metabolimetro", type=['csv', 'xlsx', 'txt'])
                     
                     if upl_file:
-                        # Chiama il parser aggiornato
                         df_raw, avail_metrics, err = utils.parse_metabolic_report(upl_file)
                         
                         if df_raw is not None:
                             st.success("✅ File decodificato con successo!")
-                            
-                            # --- SELETTORE INTENSITÀ ---
-                            # Se ci sono più metriche (es. Watt e HR), fai scegliere all'utente
                             sel_metric = avail_metrics[0]
                             if len(avail_metrics) > 1:
                                 st.markdown("##### 📐 Seleziona il Riferimento (Asse X)")
-                                # Default: Watt se c'è, altrimenti il primo disponibile
                                 def_idx = avail_metrics.index('Watt') if 'Watt' in avail_metrics else 0
                                 sel_metric = st.radio("Scegli su cosa basare le curve:", avail_metrics, index=def_idx, horizontal=True)
                             
-                            # Costruisci il DataFrame finale 'Intensity'
                             df_curve = df_raw.copy()
                             df_curve['Intensity'] = df_curve[sel_metric]
-                            
-                            # Filtra valori nulli/zero e ordina
                             df_curve = df_curve[df_curve['Intensity'] > 0].sort_values('Intensity').reset_index(drop=True)
                             
-                            # Plot
                             c_chart = alt.Chart(df_curve).mark_line(point=True).encode(
                                 x=alt.X('Intensity', title=f'Intensità ({sel_metric})'), 
                                 y='CHO', color=alt.value('blue'), tooltip=['Intensity', 'CHO', 'FAT']
@@ -306,29 +253,35 @@ with tab1:
                             )
                             st.altair_chart(c_chart, use_container_width=True)
                             
-                            # Salvataggio Session State
                             st.session_state['use_lab_data'] = True
                             st.session_state['metabolic_curve'] = df_curve
                             st.info(f"Curve salvate basate su: **{sel_metric}**")
-                            
                         else:
                             st.error(f"Errore: {err}")
             else:
                 st.session_state['use_lab_data'] = False
                 st.session_state['metabolic_curve'] = None
 
-        with st.expander("Opzioni Fisiologiche Aggiuntive"):
-            use_creatine = st.checkbox("Usa Creatina")
-            s_menstrual = MenstrualPhase.NONE
-            if s_sex == Sex.FEMALE:
-                m_map = {m.label: m for m in MenstrualPhase}
-                s_menstrual = m_map[st.selectbox("Fase Ciclo", list(m_map.keys()))]
-
+        # --- CREAZIONE OGGETTO SUBJECT (UNIFICATA) ---
+        # Uniamo Biometria (Tab1) + Motore Fisiologico (Sidebar)
+        
+        calculated_conc = logic.get_concentration_from_vo2max(user_vo2)
+        
         subject = Subject(
-            weight_kg=weight, height_cm=height, body_fat_pct=bf, sex=s_sex,
-            glycogen_conc_g_kg=calculated_conc, sport=s_sport,
-            uses_creatine=use_creatine, menstrual_phase=s_menstrual,
-            vo2max_absolute_l_min=(vo2_derived*weight)/1000,
+            weight_kg=weight, 
+            height_cm=height, 
+            body_fat_pct=bf, 
+            sex=s_sex,
+            glycogen_conc_g_kg=calculated_conc, 
+            sport=s_sport,
+            uses_creatine=use_creatine, 
+            menstrual_phase=s_menstrual,
+            
+            # DATI DAL MOTORE FISIOLOGICO (SIDEBAR)
+            vo2_max=user_vo2,
+            vlamax=user_vlamax,
+            vo2max_absolute_l_min=(user_vo2 * weight) / 1000,
+            
             muscle_mass_kg=muscle_mass_input
         )
         
@@ -337,6 +290,15 @@ with tab1:
         st.session_state['base_tank_data'] = tank_data
 
     with col_res:
+        st.subheader("Riepilogo Profilo")
+        
+        # Visualizziamo i dati unificati per conferma
+        m1, m2, m3 = st.columns(3)
+        m1.metric("VO2max (Sidebar)", f"{user_vo2}")
+        m2.metric("VLaMax (Sidebar)", f"{user_vlamax}")
+        m3.metric("FTP (Tab 1)", f"{ftp_watts} W")
+        
+        st.divider()
         st.subheader("Analisi Tank")
         max_cap = tank_data['max_capacity_g']
         c1, c2, c3 = st.columns(3)
@@ -344,6 +306,7 @@ with tab1:
         c2.metric("Energia", f"{int(max_cap*4.1)} kcal")
         c3.metric("Massa Attiva", f"{tank_data['active_muscle_kg']:.1f} kg")
         st.progress(1.0)
+        
         st.markdown("### Zone di Allenamento")
         t_cyc, t_run = st.tabs(["Ciclismo (Power)", "Corsa (Heart Rate)"])
         with t_cyc:
@@ -1338,6 +1301,7 @@ with tab4:
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2)
+
 
 
 
