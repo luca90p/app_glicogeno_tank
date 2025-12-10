@@ -56,25 +56,81 @@ def create_cutoff_line(cutoff_time):
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
-st.sidebar.markdown("### 🫀 Profilo Fisiologico")
+# --- INIZIO BLOCCO SIDEBAR (Sostituisci la parte relativa al Subject) ---
 
-user_vo2 = st.sidebar.number_input(
-    "VO2max (ml/kg/min)", 
-    min_value=30, max_value=90, value=55, step=1,
-    help="Valore da Garmin, Apple Watch o Test."
-)
+with st.sidebar:
+    st.header("1. Profilo Atleta")
+    
+    # Dati Biometrici Base
+    col_bio1, col_bio2 = st.columns(2)
+    with col_bio1:
+        weight = st.number_input("Peso (kg)", 40.0, 120.0, 70.0, step=0.5)
+    with col_bio2:
+        height = st.number_input("Altezza (cm)", 140, 220, 175)
+        
+    sex_options = list(Sex)
+    sex_enum = st.selectbox("Sesso", sex_options, format_func=lambda x: x.value, index=0)
+    
+    body_fat = st.slider("Massa Grassa (%)", 3.0, 40.0, 12.0, 0.5)
+    
+    # --- NUOVA SEZIONE FISIOLOGICA (MADER) ---
+    st.markdown("### 🫀 Motore Fisiologico")
+    
+    # 1. VO2max (Obbligatorio)
+    user_vo2 = st.number_input(
+        "VO2max (ml/kg/min)", 
+        min_value=30, max_value=90, value=55, step=1,
+        help="Cilindrata aerobica. Da Garmin, Apple Watch o Test."
+    )
+    
+    # 2. VLaMax (Archetipi Semplificati)
+    st.caption("Che tipo di atleta sei?")
+    vlamax_archetypes = {
+        "Diesel (Maratoneta/Ultra)": 0.30,
+        "Passista (Granfondo)": 0.45,
+        "Puncheur (Scattante)": 0.65,
+        "Turbo (Velocista/Pistard)": 0.85
+    }
+    selected_arch = st.selectbox(
+        "Profilo Anaerobico (VLaMax)", 
+        list(vlamax_archetypes.keys()), 
+        index=1,
+        help="Determina il consumo di zuccheri ad alta intensità."
+    )
+    base_vla = vlamax_archetypes[selected_arch]
+    
+    # Slider per utenti esperti (nascosto di default o sotto expander)
+    with st.expander("Fine-tuning VLaMax"):
+        user_vlamax = st.slider("Valore VLaMax", 0.2, 1.0, base_vla, 0.05)
 
-st.sidebar.caption("Che tipo di motore hai?")
-vlamax_archetypes = {
-    "Diesel (Maratoneta/Ultra)": 0.30,
-    "Passista (Granfondo)": 0.45,
-    "Puncheur (Scattante)": 0.65,
-    "Turbo (Velocista/Pistard)": 0.85
-}
-selected_arch = st.sidebar.selectbox("Profilo Anaerobico", list(vlamax_archetypes.keys()), index=1)
-base_vla = vlamax_archetypes[selected_arch]
+    # Sport e Dieta
+    st.markdown("---")
+    sport_options = list(SportType)
+    sport_enum = st.selectbox("Sport Principale", sport_options, format_func=lambda x: x.label, index=0)
+    
+    # Calcolo automatico concentrazione glicogeno (basato su VO2max)
+    calculated_glyco_conc = 13.0 + (user_vo2 - 30.0) * 0.24
+    calculated_glyco_conc = max(12.0, min(26.0, calculated_glyco_conc))
+    
+    # Creazione Oggetto Subject (Aggiornato con i nuovi campi)
+    subject = Subject(
+        weight_kg=weight,
+        height_cm=height,
+        body_fat_pct=body_fat,
+        sex=sex_enum,
+        glycogen_conc_g_kg=calculated_glyco_conc,
+        sport=sport_enum,
+        
+        # NUOVI CAMPI PASSATI AL MODELLO
+        vo2_max=user_vo2,
+        vlamax=user_vlamax,
+        
+        # Default o altri input
+        liver_glycogen_g=100.0,
+        filling_factor=1.0 # O aggiungi slider filling_factor se lo avevi
+    )
 
-user_vlamax = st.sidebar.slider("Fine-tuning VLaMax", 0.2, 1.0, base_vla, 0.05)
+# --- FINE BLOCCO SIDEBAR ---
 
 # --- DEFINIZIONE TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["Dati & Upload", "Simulazione Gara", "Analisi Avanzata", "🧪 Lab Mader"])
@@ -1232,6 +1288,7 @@ with tab4:
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2)
+
 
 
 
