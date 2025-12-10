@@ -680,26 +680,44 @@ with tab3:
         st.markdown("### 3. Motore Metabolico")
         curve_data = st.session_state.get('metabolic_curve', None)
         use_lab_active = st.session_state.get('use_lab_data', False)
+        # Variabile flag per attivare Mader
+        use_mader_sim = False
         
         if use_lab_active and curve_data is not None:
-            st.success("✅ **Curva Metabolica Attiva**")
-            if intensity_series:
-                avg_int = sum(intensity_series)/len(intensity_series)
-                st.caption(f"Input Dinamico: {int(avg_int)}")
-            else:
-                if vi_input > 1.0: st.caption(f"Input: {val} W (NP {int(val*vi_input)})")
-                else: st.caption(f"Input Costante: {val}")
+            st.success("✅ **Curva Metabolica (Lab)**")
+            st.caption("Usa dati diretti da test del gas.")
             tau = 20
             risk_thresh = 30
+            crossover_val = 75 # Dummy value
         else:
-            st.info("ℹ️ **Modello Teorico**")
-            st.caption("Regola i parametri per stimare il profilo metabolico.")
-            crossover_val = st.slider("Crossover Point (% Soglia)", 50, 90, 75)
-            if subj.sport.name == 'CYCLING':
-                eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5)
-                params['efficiency'] = eff_mech
-            tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
-            risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
+            # SCELTA DEL MODELLO
+            model_mode = st.radio(
+                "Algoritmo Consumi:",
+                ["Modello Semplificato (Crossover)", "Modello Mader (VO2max/VLaMax)"],
+                help="Scegli come calcolare il mix energetico (Grassi vs Carboidrati)."
+            )
+            
+            if model_mode == "Modello Mader (VO2max/VLaMax)":
+                use_mader_sim = True
+                st.info(f"🧬 **Bioenergetica Attiva**")
+                st.caption(f"VO2max: **{subj.vo2_max}** | VLaMax: **{subj.vlamax}**")
+                st.markdown("Calcola i consumi basandosi sulla produzione e smaltimento del lattato. Vedi Tab 4 per i dettagli.")
+                
+                # Parametri gastri standard per Mader (o configurabili se vuoi)
+                tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
+                risk_thresh = 30
+                crossover_val = 75 # Non usato in Mader ma serve passarlo
+                
+            else:
+                # MODELLO CLASSICO
+                use_mader_sim = False
+                st.info("ℹ️ **Modello Teorico (Statistico)**")
+                crossover_val = st.slider("Crossover Point (% Soglia)", 50, 90, 75, help="Intensità dove i CHO superano i grassi.")
+                if subj.sport.name == 'CYCLING':
+                    eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5)
+                    params['efficiency'] = eff_mech
+                tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
+                risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
     # --- GRAFICO FIT ---
     if fit_df is not None:
@@ -767,7 +785,8 @@ with tab3:
             metabolic_curve=curve_data if use_lab_active else None,
             intake_mode=intake_mode_enum,
             intake_cutoff_min=intake_cutoff,
-            variability_index=vi_input 
+            variability_index=vi_input,
+            use_mader=use_mader_sim
         )
         df_sim['Scenario'] = 'Strategia Integrata'
         df_sim['Residuo Totale'] = df_sim['Residuo Muscolare'] + df_sim['Residuo Epatico']
@@ -781,7 +800,8 @@ with tab3:
             metabolic_curve=curve_data if use_lab_active else None,
             intake_mode=intake_mode_enum,
             intake_cutoff_min=intake_cutoff,
-            variability_index=vi_input
+            variability_index=vi_input,
+            use_mader=use_mader_sim
         )
         df_no['Scenario'] = 'Riferimento (Digiuno)'
         df_no['Residuo Totale'] = df_no['Residuo Muscolare'] + df_no['Residuo Epatico']
@@ -957,13 +977,14 @@ with tab3:
         curve_to_use = curve_data if use_lab_active else None
 
         if st.button("Calcola Fabbisogno Minimo"):
-             with st.spinner("Simulazione scenari multipli in corso..."):
+             with st.spinner(f"Ottimizzazione con modello {'Mader' if use_mader_sim else 'Standard'}..."):
                  opt_intake = logic.calculate_minimum_strategy(
                      tank, duration, subj, params, 
                      curve_to_use, # <--- Passiamo la curva corretta (o None)
                      mix_sel, intake_mode_enum, intake_cutoff,
                      variability_index=vi_input, 
-                     intensity_series=intensity_series # Manteniamo coerenza col VI
+                     intensity_series=intensity_series,
+                     use_mader=use_mader_sim # Manteniamo coerenza col VI
                  )
                  
              if opt_intake is not None:
@@ -988,7 +1009,8 @@ with tab3:
                      metabolic_curve=curve_to_use, # <--- Corretto
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
                      variability_index=vi_input,
-                     intensity_series=intensity_series # <--- Corretto
+                     intensity_series=intensity_series,
+                     use_mader=use_mader_sim # <--- Corretto
                  )
                  
                  # Scenario B: Il Salvataggio (opt_intake g/h)
@@ -998,7 +1020,8 @@ with tab3:
                      metabolic_curve=curve_to_use, # <--- Corretto
                      intake_mode=intake_mode_enum, intake_cutoff_min=intake_cutoff,
                      variability_index=vi_input,
-                     intensity_series=intensity_series # <--- Corretto
+                     intensity_series=intensity_series,
+                     use_mader=use_mader_sim # <--- Corretto
                  )
 
                  st.markdown("---")
@@ -1315,6 +1338,7 @@ with tab4:
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2)
+
 
 
 
