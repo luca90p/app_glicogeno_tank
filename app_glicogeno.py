@@ -155,8 +155,8 @@ with tab1:
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
-        sport_map = {s.label: s for s in SportType}
-        s_sport = sport_map[st.selectbox("Sport Target (Principale)", list(sport_map.keys()))]
+        #sport_map = {s.label: s for s in SportType}
+        #s_sport = sport_map[st.selectbox("Sport Target (Principale)", list(sport_map.keys()))]
         
         # Opzioni Extra
         with st.expander("Opzioni Avanzate"):
@@ -1430,6 +1430,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
