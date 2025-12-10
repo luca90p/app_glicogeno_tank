@@ -1,7 +1,7 @@
 import math
 import numpy as np
 import pandas as pd
-from data_models import Subject, Sex, ChoMixType, FatigueState, GlycogenState, IntakeMode
+from data_models import Subject, Sex, ChoMixType, FatigueState, GlycogenState, IntakeMode, SportType
 
 # --- 1. FUNZIONI HELPER ---
 
@@ -690,6 +690,7 @@ def simulate_mader_curve(subject: Subject):
     except: mlss = 0
     
     return df, mlss
+
 
 
 
