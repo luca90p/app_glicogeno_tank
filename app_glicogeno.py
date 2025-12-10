@@ -1267,13 +1267,20 @@ with tab3:
     )
 
 # --- TAB 4: LABORATORIO MADER ---
+# --- TAB 4: LABORATORIO MADER ---
 with tab4:
     st.header("Analisi Motore Atleta (Modello Mader)")
     st.info(f"Simulazione basata su: **VO2max {subject.vo2_max}** / **VLaMax {subject.vlamax}**")
     
     if st.button("Genera Curve Profilo"):
-        df_mader, mlss_val = logic.simulate_mader_curve(subject)
+        # Chiamata alla funzione (Assicurati che logic.simulate_mader_curve restituisca due valori!)
+        try:
+            df_mader, mlss_val = logic.simulate_mader_curve(subject)
+        except ValueError:
+            st.error("Errore: La funzione 'simulate_mader_curve' deve restituire due valori (df, mlss). Aggiorna la funzione nel file logic.py.")
+            st.stop()
         
+        # --- METRICHE ---
         c1, c2, c3 = st.columns(3)
         c1.metric("Soglia Anaerobica (MLSS)", f"{int(mlss_val)} W")
         c2.metric("W/kg alla Soglia", f"{(mlss_val/subject.weight_kg):.2f}")
@@ -1281,117 +1288,119 @@ with tab4:
         
         st.divider()
         import matplotlib.pyplot as plt
+        import numpy as np # Necessario per il grafico 3
 
-        st.subheader("1. Equilibrio Lattato")
+        # --- GRAFICO 1: PRODUZIONE VS SMALTIMENTO ---
+        st.subheader("1. Equilibrio Lattato (Prod vs Smaltimento)")
         fig1, ax1 = plt.subplots(figsize=(8, 4))
         ax1.plot(df_mader['watts'], df_mader['la_prod'], 'r-', label='Produzione (Glicolisi)', linewidth=2)
         ax1.plot(df_mader['watts'], df_mader['la_comb'], 'g--', label='Smaltimento (Ossidativo)', linewidth=2)
+        
+        # Pallino sulla soglia
         if mlss_val > 0:
-            y_mlss = df_mader.loc[df_mader['watts']==mlss_val, 'la_prod'].values[0] if not df_mader.loc[df_mader['watts']==mlss_val].empty else 4.0
-            ax1.scatter(mlss_val, y_mlss, color='black', zorder=5)
+            # Trova il valore Y corrispondente alla soglia
+            try:
+                # Interpolazione semplice per trovare il punto esatto
+                y_mlss = np.interp(mlss_val, df_mader['watts'], df_mader['la_prod'])
+                ax1.scatter(mlss_val, y_mlss, color='black', zorder=5, label='MLSS')
+            except: pass
+
         ax1.set_ylabel("mmol/L/min")
+        ax1.set_xlabel("Potenza (Watt)")
         ax1.legend()
         ax1.grid(True, alpha=0.3)
         st.pyplot(fig1)
 
-        # --- Blocco Grafico Consumo Carburante ---
-st.subheader("2. Consumo Carburante (Doppia Scala)")
+        # --- GRAFICO 2: CONSUMO CARBURANTE (DOPPIA SCALA) ---
+        st.subheader("2. Consumo Carburante")
+        fig2, ax1 = plt.subplots(figsize=(8, 4))
+        
+        color_cho = 'tab:orange'
+        color_fat = 'tab:green'
 
-# VERIFICA PRELIMINARE: Assicuriamoci che i dati esistano
-# Se nella tua app il dataframe si chiama 'df' o 'results', modificalo qui sotto
-if 'df_mader' not in locals():
-    st.error("Errore: I dati della simulazione (df_mader) non sono stati calcolati.")
-else:
-    # Creazione della figura e del PRIMO asse (ax1)
-    fig2, ax1 = plt.subplots(figsize=(8, 4))
-    
-    # Definizione Colori
-    color_cho = 'tab:orange'
-    color_fat = 'tab:green'
+        # Asse SX: Carboidrati
+        ax1.set_xlabel('Potenza (Watt)')
+        ax1.set_ylabel('Carboidrati (g/h)', color=color_cho, fontweight='bold')
+        line1 = ax1.plot(df_mader['watts'], df_mader['g_cho_h'], color=color_cho, linewidth=2.5, label='Carboidrati')
+        ax1.tick_params(axis='y', labelcolor=color_cho)
+        ax1.grid(True, which='major', linestyle='--', alpha=0.3)
+        ax1.set_ylim(bottom=0)
 
-    # --- ASSE SINISTRO: CARBOIDRATI (Arancione) ---
-    ax1.set_xlabel('Potenza (Watt)')
-    ax1.set_ylabel('Carboidrati (g/h)', color=color_cho, fontweight='bold')
-    
-    # Plot Carboidrati (Usa ax1)
-    # Nota: df_mader deve contenere le colonne 'watts' e 'g_cho_h'
-    line1 = ax1.plot(df_mader['watts'], df_mader['g_cho_h'], color=color_cho, linewidth=2.5, label='Carboidrati')
-    ax1.tick_params(axis='y', labelcolor=color_cho)
-    ax1.grid(True, which='major', linestyle='--', alpha=0.3)
+        # Asse DX: Grassi
+        ax2 = ax1.twinx()
+        ax2.set_ylabel('Grassi (g/h)', color=color_fat, fontweight='bold')
+        line2 = ax2.plot(df_mader['watts'], df_mader['g_fat_h'], color=color_fat, linewidth=2.5, label='Grassi')
+        ax2.tick_params(axis='y', labelcolor=color_fat)
+        ax2.set_ylim(bottom=0, top=df_mader['g_fat_h'].max() * 1.3 if not df_mader.empty else 100)
 
-    # --- ASSE DESTRO: GRASSI (Verde) ---
-    ax2 = ax1.twinx()  # Crea il secondo asse condiviso
-    ax2.set_ylabel('Grassi (g/h)', color=color_fat, fontweight='bold')
-    
-    # Plot Grassi (Usa ax2)
-    line2 = ax2.plot(df_mader['watts'], df_mader['g_fat_h'], color=color_fat, linewidth=2.5, label='Grassi')
-    ax2.tick_params(axis='y', labelcolor=color_fat)
+        # Legenda Unica
+        lines = line1 + line2
+        labels = [l.get_label() for l in lines]
+        ax1.legend(lines, labels, loc='upper left')
+        st.pyplot(fig2)
+        
+        # --- GRAFICO 3: BILANCIO LATTATO (V-SHAPE / VALORI ASSOLUTI) ---
+        st.subheader("3. Stato Metabolico (Deficit vs Accumulo)")
+        fig3, ax3 = plt.subplots(figsize=(8, 4))
 
-    # Impostazione Limiti (Opzionale, per pulizia)
-    ax1.set_ylim(bottom=0)
-    ax2.set_ylim(bottom=0, top=df_mader['g_fat_h'].max() * 1.2 if len(df_mader) > 0 else 100)
+        # Preparazione dati: Invertiamo i valori negativi per fare la "V"
+        lack_series = np.where(df_mader['net_balance'] < 0, -df_mader['net_balance'], np.nan)
+        accum_series = np.where(df_mader['net_balance'] >= 0, df_mader['net_balance'], np.nan)
 
-    # --- LEGENDA UNIFICATA ---
-    lines = line1 + line2
-    labels = [l.get_label() for l in lines]
-    ax1.legend(lines, labels, loc='upper left')
+        # Plot Lack (Verde)
+        ax3.plot(df_mader['watts'], lack_series, color='green', linewidth=2, label='Lack of Pyruvate (Deficit)')
+        ax3.fill_between(df_mader['watts'], lack_series, 0, color='green', alpha=0.2)
 
-    # Visualizzazione su Streamlit
-    st.pyplot(fig2)
-    
-# GRAFICO 3____________________________________________________________________________________________________________________________
-st.subheader("3. Bilancio del Lattato (Mader)")
-fig3, ax3 = plt.subplots(figsize=(8, 4))
+        # Plot Accumulation (Rosso)
+        ax3.plot(df_mader['watts'], accum_series, color='red', linewidth=2, label='Lactate Accumulation')
+        ax3.fill_between(df_mader['watts'], accum_series, 0, color='red', alpha=0.2)
 
-# --- Curva Unica: Bilancio Netto ---
-# Questa linea rappresenta la differenza tra produzione e combustione
-ax3.plot(df_mader['watts'], df_mader['net_balance'], color='black', linewidth=2, label='Net Balance')
+        # Etichetta MLSS
+        if mlss_val > 0:
+            ax3.axvline(x=mlss_val, color='black', linestyle='--', alpha=0.6, linewidth=1)
+            
+            # Calcolo altezza etichetta dinamico
+            max_y_plot = 0
+            try:
+                max_lack = np.nanmax(lack_series) if not np.all(np.isnan(lack_series)) else 0
+                max_accum = np.nanmax(accum_series) if not np.all(np.isnan(accum_series)) else 0
+                max_y_plot = max(max_lack, max_accum)
+            except: max_y_plot = 1.0
+            
+            if max_y_plot == 0: max_y_plot = 1.0
 
-# --- Aree Colorate (Lack vs Accumulation) ---
+            ax3.annotate(f'MLSS\n~{int(mlss_val)} W', 
+                         xy=(mlss_val, 0), 
+                         xytext=(mlss_val, max_y_plot * 0.3),
+                         arrowprops=dict(facecolor='black', arrowstyle='->', lw=1.5),
+                         horizontalalignment='center', fontweight='bold',
+                         bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="black", alpha=0.8))
 
-# Area Verde: Lack of Pyruvate (Deficit di Piruvato)
-# Indica che la capacità ossidativa supera la produzione glicolitica
-ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
-                 where=(df_mader['net_balance'] <= 0), 
-                 color='green', alpha=0.2, label='Lack of Pyruvate')
+        ax3.set_xlabel("Potenza (Watt)")
+        ax3.set_ylabel("Magnitudo Metabolica (mmol/L/min)")
+        ax3.legend(loc='upper center')
+        ax3.grid(True, alpha=0.3)
+        st.pyplot(fig3)
 
-# Area Rossa: Lactate Accumulation (Accumulo di Lattato)
-# Indica che la produzione glicolitica supera la capacità ossidativa
-ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
-                 where=(df_mader['net_balance'] > 0), 
-                 color='red', alpha=0.2, label='Lactate Accumulation')
+        # --- GRAFICO 4: OXYGEN DEMAND ---
+        st.subheader("4. Oxygen Demand vs Uptake")
+        fig4, ax4 = plt.subplots(figsize=(8, 4))
 
-# Linea dello zero per riferimento
-ax3.axhline(0, color='gray', linewidth=1, linestyle='--')
+        # Curve
+        ax4.plot(df_mader['watts'], df_mader['vo2_demand_l'], label='Oxygen Demand', color='blue', linestyle='--')
+        ax4.plot(df_mader['watts'], df_mader['vo2_uptake_l'], label='Oxygen Uptake (Reale)', color='orange', linewidth=2.5)
 
-# Etichette e Stile
-ax3.set_xlabel("Potenza (Watt)")
-ax3.set_ylabel("Lattato (mmol/L/min)")
-ax3.set_title("Stato Metabolico: Deficit vs Accumulo")
-ax3.legend(loc='upper left')
-ax3.grid(True, alpha=0.3)
+        # Area Deficit
+        ax4.fill_between(df_mader['watts'], df_mader['vo2_demand_l'], df_mader['vo2_uptake_l'], 
+                         where=(df_mader['vo2_demand_l'] > df_mader['vo2_uptake_l']), 
+                         color='gray', alpha=0.3, label='Deficit O2 (Anaerobico)')
 
-st.pyplot(fig3)
+        ax4.set_xlabel("Potenza (Watt)")
+        ax4.set_ylabel("Ossigeno (L/min)")
+        ax4.legend(loc='upper left')
+        ax4.grid(True, alpha=0.3)
+        st.pyplot(fig4)
 
-# GRAFICO4____________________________________________________________________________________________________________________________
-st.subheader("4. Oxygen Demand vs Uptake")
-fig4, ax4 = plt.subplots(figsize=(8, 4))
-
-# Curve
-ax4.plot(df_mader['watts'], df_mader['vo2_demand_l'], label='Oxygen Demand', color='blue', linestyle='--')
-ax4.plot(df_mader['watts'], df_mader['vo2_uptake_l'], label='Oxygen Uptake (Reale)', color='orange', linewidth=2.5)
-
-# Area di Deficit (Sopra VO2max)
-ax4.fill_between(df_mader['watts'], df_mader['vo2_demand_l'], df_mader['vo2_uptake_l'], 
-                 where=(df_mader['vo2_demand_l'] > df_mader['vo2_uptake_l']), 
-                 color='gray', alpha=0.3, label='Deficit O2 (Anaerobico)')
-
-ax4.set_xlabel("Potenza (Watt)")
-ax4.set_ylabel("Ossigeno (L/min)")
-ax4.legend(loc='upper left')
-ax4.grid(True, alpha=0.3)
-
-st.pyplot(fig4)
 
 
 
