@@ -85,40 +85,54 @@ if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
 # --- INIZIO BLOCCO SIDEBAR (Configurazione Motore) ---
-
 with st.sidebar:
-    st.header("🫀 Motore Fisiologico")
-    st.info("Definisci qui la cilindrata (VO2max) e il profilo metabolico (VLaMax).")
+    st.header("1. Profilo Atleta")
     
-    # 1. VO2max (Motore Aerobico)
+    # 1. SCELTA DISCIPLINA (Master Switch)
+    sport_mode = st.radio(
+        "Disciplina:", 
+        ["Ciclismo 🚴", "Corsa 🏃"], 
+        horizontal=True
+    )
+    
+    # Mapping della scelta all'Enum e Logica
+    if "Corsa" in sport_mode:
+        selected_sport = SportType.RUNNING
+        st.markdown("---")
+        st.markdown("**🧠 Logica Motore Corsa**")
+        run_logic_mode = st.radio(
+            "Input Intensità:",
+            ["Fisiologica (Heart Rate)", "Meccanica (Passo/Watt)"],
+            help="Fisiologica: Usa i battiti per stimare il consumo (utile per analisi post). Meccanica: Usa la velocità pura (utile per pianificazione).",
+        )
+        sim_method = "PHYSIOLOGICAL" if "Fisiologica" in run_logic_mode else "MECHANICAL"
+    else:
+        selected_sport = SportType.CYCLING
+        sim_method = "MECHANICAL" # Ciclismo è sempre meccanico (Watt)
+
+    st.divider()
+
+    st.header("2. Fisiologia (Mader)")
+    # 1. VO2max
     user_vo2 = st.number_input(
         "VO2max (ml/kg/min)", 
         min_value=30, max_value=90, value=55, step=1,
-        help="Cilindrata aerobica. Determina quanto ossigeno puoi usare."
+        help="Cilindrata aerobica."
     )
     
-    # 2. VLaMax (Motore Anaerobico)
-    st.markdown("---")
-    st.write("**Profilo Anaerobico (VLaMax)**")
-    
+    # 2. VLaMax
     vlamax_archetypes = {
         "Diesel (Maratoneta/Ultra)": 0.30,
         "Passista (Granfondo)": 0.45,
         "Puncheur (Scattante)": 0.65,
         "Turbo (Velocista/Pistard)": 0.85
     }
-    selected_arch = st.selectbox(
-        "Archetipo Atleta", 
-        list(vlamax_archetypes.keys()), 
-        index=1
-    )
+    selected_arch = st.selectbox("Archetipo", list(vlamax_archetypes.keys()), index=1)
     base_vla = vlamax_archetypes[selected_arch]
-    
-    # Slider per fine-tuning
-    user_vlamax = st.slider("VLaMax (mmol/L/s)", 0.2, 1.0, base_vla, 0.05, help="Più è alto, più bruci carboidrati ad alta intensità.")
+    user_vlamax = st.slider("VLaMax (mmol/L/s)", 0.2, 1.0, base_vla, 0.05)
 
     st.markdown("---")
-    st.caption(f"⚙️ Configurazione Attiva:\nVO2max: {user_vo2} | VLaMax: {user_vlamax}")
+    st.caption(f"⚙️ Configurazione: {selected_sport.name} | {sim_method}")
 
 # --- FINE BLOCCO SIDEBAR ---
 
@@ -1400,6 +1414,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
