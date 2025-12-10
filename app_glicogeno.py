@@ -44,6 +44,33 @@ def create_risk_zone_chart(df_data, title, max_y):
     
     return (background + area).properties(title=title, height=350)
 
+def render_running_dashboard(graphs_data):
+    """Visualizza i grafici tecnici della corsa (Passo, FC, Cadenza)"""
+    x_dist = graphs_data.get('x_dist', [])
+    pace = graphs_data.get('pace', [])
+    hr = graphs_data.get('hr', [])
+    elev = graphs_data.get('elevation', [])
+
+    if not x_dist: return
+
+    st.subheader("📊 Analisi Tecnica Corsa")
+    fig, axs = plt.subplots(3, 1, figsize=(10, 10), sharex=True)
+    
+    ax1 = axs[0]
+    if pace: 
+        ax1.plot(x_dist, pace, color='deepskyblue', label='Passo (min/km)')
+        ax1.invert_yaxis()
+        ax1.legend()
+    ax2 = axs[1]
+    if hr:
+        ax2.plot(x_dist, hr, color='crimson', label='FC')
+        ax2.legend()
+    ax3 = axs[2]
+    if elev:
+        ax3.fill_between(x_dist, elev, min(elev), color='green', alpha=0.3)
+        ax3.legend(['Altitudine'])
+    st.pyplot(fig)
+
 # Funzione Helper per Grafici Standardizzati
 def create_cutoff_line(cutoff_time):
     return alt.Chart(pd.DataFrame({'x': [cutoff_time]})).mark_rule(
@@ -1288,6 +1315,7 @@ with tab4:
         ax2.legend(loc='upper left')
         ax2.grid(True, alpha=0.3)
         st.pyplot(fig2)
+
 
 
 
