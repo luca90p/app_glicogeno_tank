@@ -56,11 +56,8 @@ def create_cutoff_line(cutoff_time):
 if 'use_lab_data' not in st.session_state:
     st.session_state.update({'use_lab_data': False, 'lab_cho_mean': 0, 'lab_fat_mean': 0})
 
-tab1, tab2, tab3 = st.tabs([
-    "1. Profilo Atleta & Metabolismo", 
-    "2. Diario Ibrido (Tapering)", 
-    "3. Simulazione Gara"
-])
+# --- DEFINIZIONE TABS ---
+tab1, tab2, tab3, tab4 = st.tabs(["Dati & Upload", "Simulazione Gara", "Analisi Avanzata", "🧪 Lab Mader"])
 
 # =============================================================================
 # TAB 1: PROFILO & METABOLISMO
@@ -1179,6 +1176,43 @@ with tab3:
         mime="text/plain",
         help="Scarica questo file e invialo per l'assistenza."
     )
+
+# --- TAB 4: LABORATORIO MADER ---
+with tab4:
+    st.header("Analisi Motore Atleta (Modello Mader)")
+    st.info(f"Simulazione basata su: **VO2max {subject.vo2_max}** / **VLaMax {subject.vlamax}**")
+    
+    if st.button("Genera Curve Profilo"):
+        df_mader, mlss_val = logic.simulate_mader_curve(subject)
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Soglia Anaerobica (MLSS)", f"{int(mlss_val)} W")
+        c2.metric("W/kg alla Soglia", f"{(mlss_val/subject.weight_kg):.2f}")
+        c3.metric("Grassi Max (FatMax)", f"{int(df_mader['g_fat_h'].max())} g/h")
+        
+        st.divider()
+        import matplotlib.pyplot as plt
+
+        st.subheader("1. Equilibrio Lattato")
+        fig1, ax1 = plt.subplots(figsize=(8, 4))
+        ax1.plot(df_mader['watts'], df_mader['la_prod'], 'r-', label='Produzione (Glicolisi)', linewidth=2)
+        ax1.plot(df_mader['watts'], df_mader['la_comb'], 'g--', label='Smaltimento (Ossidativo)', linewidth=2)
+        if mlss_val > 0:
+            y_mlss = df_mader.loc[df_mader['watts']==mlss_val, 'la_prod'].values[0] if not df_mader.loc[df_mader['watts']==mlss_val].empty else 4.0
+            ax1.scatter(mlss_val, y_mlss, color='black', zorder=5)
+        ax1.set_ylabel("mmol/L/min")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        st.pyplot(fig1)
+
+        st.subheader("2. Consumo Carburante")
+        fig2, ax2 = plt.subplots(figsize=(8, 4))
+        ax2.stackplot(df_mader['watts'], df_mader['g_fat_h'], df_mader['g_cho_h'], labels=['Grassi', 'Carboidrati'], colors=['green', 'orange'], alpha=0.6)
+        ax2.set_ylabel("Grammi / ora")
+        ax2.legend(loc='upper left')
+        ax2.grid(True, alpha=0.3)
+        st.pyplot(fig2)
+
 
 
 
