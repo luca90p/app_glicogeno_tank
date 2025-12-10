@@ -1342,23 +1342,32 @@ else:
 st.subheader("3. Bilancio del Lattato (Mader)")
 fig3, ax3 = plt.subplots(figsize=(8, 4))
 
-# Linee Componenti
-ax3.plot(df_mader['watts'], df_mader['la_prod'], label='Produzione (VLa)', color='red', linestyle='--', alpha=0.5)
-ax3.plot(df_mader['watts'], df_mader['la_comb'], label='Combustione (VLaOx)', color='green', linestyle='--', alpha=0.5)
+# --- Curva Unica: Bilancio Netto ---
+# Questa linea rappresenta la differenza tra produzione e combustione
+ax3.plot(df_mader['watts'], df_mader['net_balance'], color='black', linewidth=2, label='Net Balance')
 
-# Linea Principale: Bilancio Netto
-ax3.plot(df_mader['watts'], df_mader['net_balance'], label='Bilancio Netto', color='black', linewidth=2)
+# --- Aree Colorate (Lack vs Accumulation) ---
 
-# Aree Colorate (Lack vs Accumulation)
+# Area Verde: Lack of Pyruvate (Deficit di Piruvato)
+# Indica che la capacità ossidativa supera la produzione glicolitica
 ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
-                 where=(df_mader['net_balance'] <= 0), color='green', alpha=0.1, label='Lack of Lactate (Smaltimento)')
-ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
-                 where=(df_mader['net_balance'] > 0), color='red', alpha=0.1, label='Accumulation (Accumulo)')
+                 where=(df_mader['net_balance'] <= 0), 
+                 color='green', alpha=0.2, label='Lack of Pyruvate')
 
-ax3.axhline(0, color='gray', linewidth=0.8)
+# Area Rossa: Lactate Accumulation (Accumulo di Lattato)
+# Indica che la produzione glicolitica supera la capacità ossidativa
+ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
+                 where=(df_mader['net_balance'] > 0), 
+                 color='red', alpha=0.2, label='Lactate Accumulation')
+
+# Linea dello zero per riferimento
+ax3.axhline(0, color='gray', linewidth=1, linestyle='--')
+
+# Etichette e Stile
 ax3.set_xlabel("Potenza (Watt)")
 ax3.set_ylabel("Lattato (mmol/L/min)")
-ax3.legend(loc='upper left', fontsize='small')
+ax3.set_title("Stato Metabolico: Deficit vs Accumulo")
+ax3.legend(loc='upper left')
 ax3.grid(True, alpha=0.3)
 
 st.pyplot(fig3)
@@ -1381,6 +1390,7 @@ ax4.legend(loc='upper left')
 ax4.grid(True, alpha=0.3)
 
 st.pyplot(fig4)
+
 
 
 
