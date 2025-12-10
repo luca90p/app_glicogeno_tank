@@ -1339,6 +1339,50 @@ else:
     # Visualizzazione su Streamlit
     st.pyplot(fig2)
 
+st.subheader("3. Bilancio del Lattato (Mader)")
+fig3, ax3 = plt.subplots(figsize=(8, 4))
+
+# Linee Componenti
+ax3.plot(df_mader['watts'], df_mader['la_prod'], label='Produzione (VLa)', color='red', linestyle='--', alpha=0.5)
+ax3.plot(df_mader['watts'], df_mader['la_comb'], label='Combustione (VLaOx)', color='green', linestyle='--', alpha=0.5)
+
+# Linea Principale: Bilancio Netto
+ax3.plot(df_mader['watts'], df_mader['net_balance'], label='Bilancio Netto', color='black', linewidth=2)
+
+# Aree Colorate (Lack vs Accumulation)
+ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
+                 where=(df_mader['net_balance'] <= 0), color='green', alpha=0.1, label='Lack of Lactate (Smaltimento)')
+ax3.fill_between(df_mader['watts'], df_mader['net_balance'], 0, 
+                 where=(df_mader['net_balance'] > 0), color='red', alpha=0.1, label='Accumulation (Accumulo)')
+
+ax3.axhline(0, color='gray', linewidth=0.8)
+ax3.set_xlabel("Potenza (Watt)")
+ax3.set_ylabel("Lattato (mmol/L/min)")
+ax3.legend(loc='upper left', fontsize='small')
+ax3.grid(True, alpha=0.3)
+
+st.pyplot(fig3)
+
+st.subheader("4. Oxygen Demand vs Uptake")
+fig4, ax4 = plt.subplots(figsize=(8, 4))
+
+# Curve
+ax4.plot(df_mader['watts'], df_mader['vo2_demand_l'], label='Oxygen Demand', color='blue', linestyle='--')
+ax4.plot(df_mader['watts'], df_mader['vo2_uptake_l'], label='Oxygen Uptake (Reale)', color='orange', linewidth=2.5)
+
+# Area di Deficit (Sopra VO2max)
+ax4.fill_between(df_mader['watts'], df_mader['vo2_demand_l'], df_mader['vo2_uptake_l'], 
+                 where=(df_mader['vo2_demand_l'] > df_mader['vo2_uptake_l']), 
+                 color='gray', alpha=0.3, label='Deficit O2 (Anaerobico)')
+
+ax4.set_xlabel("Potenza (Watt)")
+ax4.set_ylabel("Ossigeno (L/min)")
+ax4.legend(loc='upper left')
+ax4.grid(True, alpha=0.3)
+
+st.pyplot(fig4)
+
+
 
 
 
