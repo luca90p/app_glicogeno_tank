@@ -529,96 +529,108 @@ with tab3:
     
     c_s1, c_s2, c_s3 = st.columns(3)
     
-    # --- 1. PROFILO SFORZO ---
+    # --- 1. PROFILO SFORZO (Ristrutturato) ---
     with c_s1:
         st.markdown("### 1. Profilo Sforzo")
-        # Upload e Parsing FIT (Nuova Logica)
-        uploaded_file = st.file_uploader("Carica File Attività (.fit, .zwo)", type=['zwo', 'fit', 'gpx', 'csv'])
         
+        # Variabili di default
+        uploaded_file = st.file_uploader("Carica File (.fit, .zwo)", type=['zwo', 'fit', 'gpx', 'csv'])
         intensity_series = None
-        fit_df = None 
+        fit_df = None
+        params = {}
+        vi_input = 1.0
         file_loaded = False
         
-        target_thresh_hr = st.session_state['thr_hr_input']
-        target_ftp = st.session_state['ftp_watts_input']
-        
-        # Inizializzo params vuoto
-        params = {}
+        # Recupero soglie dalla sessione
+        target_thresh_hr = st.session_state.get('thr_hr_input', 170)
+        target_ftp = st.session_state.get('ftp_watts_input', 250)
 
+        # SCENARIO A: FILE CARICATO
         if uploaded_file:
-            fname = uploaded_file.name.lower()
             file_loaded = True
+            fname = uploaded_file.name.lower()
             
+            # Parsing ZWO
             if fname.endswith('.zwo'):
                 series, dur_calc, w_calc, hr_calc = utils.parse_zwo_file(uploaded_file, target_ftp, target_thresh_hr, subj.sport)
                 if series:
-                    # FIX 1: Confronto Robusto
-                    if subj.sport.name == 'CYCLING': 
-                        intensity_series = [val * target_ftp for val in series]
-                    else: 
-                        intensity_series = [val * target_thresh_hr for val in series]
-                    
                     duration = dur_calc
-                    st.success(f"ZWO: {dur_calc} min")
+                    st.success(f"✅ ZWO: {dur_calc} min")
                     
+                    if subj.sport == SportType.CYCLING:
+                        intensity_series = [val * target_ftp for val in series]
+                        val = w_calc * target_ftp
+                        params = {'mode': 'cycling', 'avg_watts': val, 'np_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0}
+                    else:
+                        intensity_series = [val * target_thresh_hr for val in series]
+                        val = hr_calc * target_thresh_hr
+                        params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
+            
+            # Parsing FIT
             elif fname.endswith('.fit'):
                 fit_series, fit_dur, fit_avg_w, fit_avg_hr, fit_np, fit_dist, fit_elev, fit_work, fit_clean_df, graphs_data = utils.parse_fit_file_wrapper(uploaded_file, subj.sport)
                 
                 if fit_clean_df is not None:
                     intensity_series = fit_series
                     duration = fit_dur
-                    fit_df = fit_clean_df 
-                    
+                    fit_df = fit_clean_df
                     st.success("✅ File FIT elaborato")
+                    
+                    # Metriche FIT
                     k1, k2 = st.columns(2)
                     k1.metric("Durata", f"{fit_dur} min")
-                    k1.metric("Distanza", f"{fit_dist:.1f} km")
-                    k2.metric("Dislivello", f"{int(fit_elev)} m+")
-                    k2.metric("Lavoro", f"{int(fit_work)} kJ")
+                    k1.metric("Lavoro", f"{int(fit_work)} kJ")
                     
-                    st.markdown("---")
-                    k3, k4 = st.columns(2)
-                    
-                    # FIX 2: Confronto Robusto
-                    if subj.sport.name == 'CYCLING': 
-                         k3.metric("Avg Power", f"{int(fit_avg_w)} W")
-                         k4.metric("Norm. Power (NP)", f"{int(fit_np)} W", help="Potenza Normalizzata (stress fisiologico reale)")
-                         val = int(fit_avg_w) 
-                         vi_input = fit_np / fit_avg_w if fit_avg_w > 0 else 1.0
-                         
-                         params = {
-                             'mode': 'cycling', 
-                             'avg_watts': val, 
-                             'np_watts': fit_np, 
-                             'ftp_watts': target_ftp, 
-                             'efficiency': 21.0
-                         }
+                    if subj.sport == SportType.CYCLING:
+                        k2.metric("Avg Power", f"{int(fit_avg_w)} W")
+                        val = int(fit_avg_w)
+                        vi_input = fit_np / fit_avg_w if fit_avg_w > 0 else 1.0
+                        params = {'mode': 'cycling', 'avg_watts': val, 'np_watts': fit_np, 'ftp_watts': target_ftp, 'efficiency': 22.0}
                     else:
-                         k3.metric("Avg HR", f"{int(fit_avg_hr)} bpm")
-                         val = int(fit_avg_hr)
-                         vi_input = 1.0
-                         params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
-                else:
-                    st.error("Errore FIT.")
-                    duration = 120 
+                        k2.metric("Avg HR", f"{int(fit_avg_hr)} bpm")
+                        val = int(fit_avg_hr)
+                        # Se il file ha potenza (Stryd), usiamola se la modalità è MECCANICA
+                        if sim_method == "MECHANICAL" and fit_avg_w > 0:
+                             params = {'mode': 'running', 'avg_watts': fit_avg_w, 'ftp_watts': target_ftp} # Usiamo watt
+                        else:
+                             params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
 
+        # SCENARIO B: INPUT MANUALE (No File)
         if not file_loaded:
             duration = st.number_input("Durata (min)", 60, 900, 180, step=10)
-            vi_input = 1.0
             
-            # FIX 3: Confronto Robusto
-            if subj.sport.name == 'CYCLING':
-                val = st.number_input("Potenza Media (Watt)", 50, 600, 200, step=5)
-                params = {'mode': 'cycling', 'avg_watts': val, 'ftp_watts': target_ftp, 'efficiency': 22.0} 
-                params['avg_hr'] = val
+            if subj.sport == SportType.CYCLING:
+                # B1. MANUALE CICLISMO (WATT)
+                val = st.slider("Potenza Media (Watt)", 50, 600, 200, 5)
+                vi_input = st.slider("Variabilità (VI)", 1.0, 1.3, 1.0, 0.01)
+                np_val = val * vi_input
+                if vi_input > 1.0: st.caption(f"NP Stimata: **{int(np_val)} W**")
                 
-                st.caption("Gara Variabile?")
-                vi_input = st.slider("Indice Variabilità (VI)", 1.00, 1.30, 1.00, 0.01)
-                if vi_input > 1.0: 
-                    st.caption(f"NP Stimata: **{int(val * vi_input)} W**")
+                params = {'mode': 'cycling', 'avg_watts': val, 'np_watts': np_val, 'ftp_watts': target_ftp, 'efficiency': 22.0}
+                
             else:
-                val = st.number_input("FC Media (BPM)", 80, 220, 150, 1)
-                params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
+                # B2. MANUALE CORSA (DOPPIA LOGICA)
+                # Qui usiamo la variabile 'sim_method' settata nella Sidebar
+                if sim_method == "PHYSIOLOGICAL":
+                    st.info("🏃 **Input: Cardio (BPM)**")
+                    val = st.slider("FC Media (BPM)", 80, 210, 155, 1)
+                    params = {'mode': 'running', 'avg_hr': val, 'threshold_hr': target_thresh_hr}
+                else:
+                    st.info("🏃 **Input: Velocità / Passo**")
+                    speed_kmh = st.slider("Velocità (km/h)", 6.0, 22.0, 12.0, 0.1)
+                    
+                    # Calcoliamo il passo per feedback visivo
+                    pace_dec = 60 / speed_kmh
+                    pace_min = int(pace_dec)
+                    pace_sec = int((pace_dec - pace_min) * 60)
+                    st.metric("Passo Stimato", f"{pace_min}:{pace_sec:02d} /km")
+                    
+                    # Passiamo la velocità come 'avg_watts' fittizi o un parametro speciale che logic.py riconosce
+                    # Nel nostro logic.py modificato, se mode='running' e mechanical, userà current_val come velocità se < 50
+                    params = {'mode': 'running'} 
+                    # IMPORTANTE: Passiamo la velocità direttamente alla funzione di simulazione tramite il valore 'val'
+                    # che verrà letto come 'avg_watts' o 'current_val'
+                    params['avg_watts'] = speed_kmh # Hack: usiamo il campo watts per passare la velocità
             
     # --- 2. STRATEGIA NUTRIZIONALE ---
     with c_s2:
@@ -1418,6 +1430,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
