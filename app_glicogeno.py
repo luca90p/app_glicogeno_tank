@@ -1341,16 +1341,22 @@ else:
     
 # GRAFICO 3____________________________________________________________________________________________________________________________
 st.subheader("3. Bilancio del Lattato (Valori Assoluti)")
+
+# --- FIX: RECUPERO DATI E MLSS ---
+# Assicurati di chiamare la funzione così:
+df_mader, mlss = simulate_mader_curve(subject) 
+
+# Se avevi scritto solo 'df_mader = ...', Python non salvava 'mlss'.
+# Ora 'mlss' è disponibile per il grafico.
+
 fig3, ax3 = plt.subplots(figsize=(8, 4))
 
 # --- Preparazione Dati ---
 # Separiamo i dati in due serie: Deficit (invertito positivo) e Accumulo
-# Usiamo np.where per creare array con NaN dove la condizione non è soddisfatta (per non unire le linee)
 lack_series = np.where(df_mader['net_balance'] < 0, -df_mader['net_balance'], np.nan)
 accum_series = np.where(df_mader['net_balance'] >= 0, df_mader['net_balance'], np.nan)
 
 # --- Plot Curve ---
-
 # 1. Lack of Pyruvate (Verde, ora positiva)
 ax3.plot(df_mader['watts'], lack_series, color='green', linewidth=2, label='Lack of Pyruvate (Deficit)')
 ax3.fill_between(df_mader['watts'], lack_series, 0, color='green', alpha=0.2)
@@ -1360,18 +1366,23 @@ ax3.plot(df_mader['watts'], accum_series, color='red', linewidth=2, label='Lacta
 ax3.fill_between(df_mader['watts'], accum_series, 0, color='red', alpha=0.2)
 
 # --- Evidenziare MLSS ---
-# 'mlss' è la variabile calcolata dalla funzione simulate_mader_curve
 if mlss > 0:
     # Linea Verticale
     ax3.axvline(x=mlss, color='black', linestyle='--', alpha=0.6, linewidth=1)
     
     # Etichetta con Freccia
-    # Calcoliamo una posizione Y comoda per l'etichetta (es. 20% dell'altezza massima)
-    y_max = max(np.nanmax(lack_series), np.nanmax(accum_series))
+    # Calcoliamo una posizione Y comoda per l'etichetta
+    # Gestiamo il caso in cui le serie siano tutte NaN (es. dati vuoti)
+    max_lack = np.nanmax(lack_series) if not np.all(np.isnan(lack_series)) else 0
+    max_accum = np.nanmax(accum_series) if not np.all(np.isnan(accum_series)) else 0
+    y_max = max(max_lack, max_accum)
     
+    # Se y_max è 0 (es. inizio simulazione), mettiamo un default per evitare errori grafici
+    if y_max == 0: y_max = 1.0
+
     ax3.annotate(f'MLSS\n~{mlss} W', 
-                 xy=(mlss, 0),             # Punta allo zero sull'asse X (il punto di incrocio)
-                 xytext=(mlss, y_max * 0.3), # Testo un po' più in alto
+                 xy=(mlss, 0),             
+                 xytext=(mlss, y_max * 0.3), 
                  arrowprops=dict(facecolor='black', arrowstyle='->', lw=1.5),
                  horizontalalignment='center',
                  fontsize=10, fontweight='bold',
@@ -1383,9 +1394,6 @@ ax3.set_ylabel("Magnitudo Metabolica (mmol/L/min)")
 ax3.set_title("Stato Metabolico (Deficit Assoluto vs Accumulo)")
 ax3.legend(loc='upper center', frameon=True, fancybox=True, framealpha=0.9)
 ax3.grid(True, alpha=0.3)
-
-# Limite Y per evitare troppo spazio vuoto se i picchi sono altissimi
-# ax3.set_ylim(bottom=0) 
 
 st.pyplot(fig3)
 
@@ -1408,6 +1416,7 @@ ax4.legend(loc='upper left')
 ax4.grid(True, alpha=0.3)
 
 st.pyplot(fig4)
+
 
 
 
