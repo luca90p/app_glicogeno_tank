@@ -287,7 +287,7 @@ with tab1:
             body_fat_pct=bf, 
             sex=s_sex,
             glycogen_conc_g_kg=calculated_conc, 
-            sport=s_sport,
+            sport=selected_sport,
             uses_creatine=use_creatine, 
             menstrual_phase=s_menstrual,
             
@@ -1414,6 +1414,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
