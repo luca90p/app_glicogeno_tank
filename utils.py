@@ -163,93 +163,91 @@ import math
 
 def parse_fit_file_wrapper(uploaded_file, sport_type):
     """
-    Wrapper che estrae i dati per la simulazione E per i grafici.
-    OUTPUT:
-    - Restituisce 'simulation_series' come PRIMO elemento (per logic.py).
-    - Restituisce 'graphs_data' come ULTIMO elemento (per i grafici).
+    Estrae dati dal FIT file.
+    Ritorna:
+    1. simulation_series (lista valori per simulazione, es. 1 al secondo)
+    2. statistiche scalari (duration, avg, etc)
+    3. graphs_data (Dizionario con liste per grafici alta risoluzione)
     """
     df, error = process_fit_data(uploaded_file)
     if error or df is None or df.empty: 
-        return [], 0, 0, 0, 0, 0, 0, 0, None, {}
+        # Ritorna anche graphs_data vuoto alla fine
+        return [], 0, 0, 0, 0, 0, 0, 0, None, {} 
 
-    # --- 1. Calcoli Comuni ---
+    # --- 1. Statistiche Scalari ---
     avg_power = df['power'].mean() if 'power' in df.columns else 0
     avg_hr = df['heart_rate'].mean() if 'heart_rate' in df.columns else 0
     norm_power = calculate_normalized_power(df) if 'power' in df.columns else 0
     total_duration_min = math.ceil(len(df) / 60)
     
-    # Distanza
     dist = 0
     if 'distance' in df.columns:
         dist = (df['distance'].max() - df['distance'].min()) / 1000.0
     elif 'speed' in df.columns:
         dist = (df['speed'].mean() * 3.6 * (total_duration_min/60))
         
-    # Dislivello
     elev_gain = 0
-    alt_col = next((c for c in ['enhanced_altitude', 'altitude'] if c in df.columns), None)
-    if alt_col:
-        deltas = df[alt_col].diff()
+    col_alt = 'enhanced_altitude' if 'enhanced_altitude' in df.columns else 'altitude'
+    if col_alt in df.columns:
+        deltas = df[col_alt].diff()
         elev_gain = deltas[deltas > 0].sum()
     
-    # Lavoro (kJ)
     work_kj = (avg_power * len(df)) / 1000 if 'power' in df.columns else 0
 
-    # --- 2. Preparazione Serie per SIMULAZIONE (Logica Originale Ripristinata) ---
-    # La simulazione richiede dati aggregati per minuto (non raw)
+    # --- 2. Preparazione Dati Grafici (Sampling ogni 10s) ---
     df_active = df.reset_index(drop=True)
-    df_res_min = df_active.groupby(df_active.index // 60).mean() # Raggruppa per minuti
-    
-    simulation_series = []
-    # Logica di selezione target originale
-    is_cycling = str(sport_type).lower() == 'cycling' or sport_type == 'Cycling'
-    target = 'power' if is_cycling and 'power' in df_res_min.columns else 'heart_rate'
-    
-    if target in df_res_min.columns:
-        simulation_series = [float(x) for x in df_res_min[target].fillna(0).tolist()]
-
-    # --- 3. Preparazione Dati per GRAFICI (Alta Risoluzione) ---
-    # Per i grafici usiamo una risoluzione migliore (es. ogni 10s)
-    df_res_graph = df_active.groupby(df_active.index // 10).mean()
+    # Raggruppa ogni 10 secondi per non appesantire i grafici
+    df_res = df_active.groupby(df_active.index // 10).mean()
     
     graphs_data = {
-        'x_dist': [], 'pace': [], 'lap_pace': [], 
-        'hr': [], 'cadence': [], 'elevation': [], 'power': []
+        'x_dist': [], 'pace': [], 'lap_pace': [],
+        'hr': [], 'cadence': [], 'elevation': []
     }
-
-    # Popolamento dati grafici
-    if 'distance' in df_res_graph.columns:
-        graphs_data['x_dist'] = (df_res_graph['distance'] / 1000.0).round(2).tolist()
     
-    if alt_col:
-        graphs_data['elevation'] = df_res_graph[alt_col].round(1).fillna(0).tolist()
-    
-    if 'heart_rate' in df_res_graph.columns:
-        graphs_data['hr'] = df_res_graph['heart_rate'].round(0).fillna(0).tolist()
-
-    if is_cycling:
-        if 'power' in df_res_graph.columns:
-            graphs_data['power'] = df_res_graph['power'].round(0).fillna(0).tolist()
+    # Assi comuni
+    if 'distance' in df_res.columns:
+        graphs_data['x_dist'] = (df_res['distance'] / 1000.0).tolist()
     else:
-        # Logica specifica CORSA
-        if 'speed' in df_res_graph.columns:
-            # Passo istantaneo
-            s = df_res_graph['speed'].replace(0, np.nan)
-            pace = (1000 / s) / 60
-            graphs_data['pace'] = [round(x, 2) if (x and 2 < x < 20) else None for x in pace.tolist()]
-            
-            # Passo medio Lap (Split km automatico sui dati raw)
-            if 'distance' in df_active.columns:
-                df_active['split_km'] = (df_active['distance'] / 1000).astype(int)
-                avg_pace_map = ((1000 / df_active.groupby('split_km')['speed'].mean()) / 60).to_dict()
-                # Mappa sui dati resamplati
-                split_idx = (df_res_graph['distance'] / 1000).astype(int)
-                graphs_data['lap_pace'] = [round(avg_pace_map.get(k, 0), 2) for k in split_idx]
+        # Fallback temporale se manca distanza
+        graphs_data['x_dist'] = (df_res.index * 10 / 60).tolist() # asse X in minuti
 
-        if 'cadence' in df_res_graph.columns:
-            graphs_data['cadence'] = df_res_graph['cadence'].round(0).fillna(0).tolist()
+    # Dati specifici
+    if 'heart_rate' in df_res.columns:
+        graphs_data['hr'] = df_res['heart_rate'].fillna(0).tolist()
+        
+    if 'cadence' in df_res.columns:
+        graphs_data['cadence'] = df_res['cadence'].fillna(0).tolist()
+        
+    if col_alt in df_res.columns:
+        graphs_data['elevation'] = df_res[col_alt].fillna(0).tolist()
 
-    # RESTITUZIONE: simulation_series per primo (fix KeyError), graphs_data per ultimo
+    # Logica specifica Corsa (Passo min/km)
+    if sport_type == SportType.RUNNING and 'speed' in df_res.columns:
+         s = df_res['speed'].replace(0, np.nan) # Evita div zero
+         p = (1000 / s) / 60
+         # Filtra passi assurdi (es. camminata lenta > 20 min/km)
+         graphs_data['pace'] = [x if (x > 0 and x < 20) else None for x in p.tolist()]
+         
+         # Calcolo Lap Pace (Media su ogni Km)
+         if 'distance' in df_active.columns:
+             # Crea una colonna 'km_split' sui dati raw
+             df_active['split_km'] = (df_active['distance'] / 1000).astype(int)
+             # Calcola velocità media per quello split
+             split_speeds = df_active.groupby('split_km')['speed'].mean()
+             # Mappa sui dati resamplati
+             res_split_idx = (df_res['distance'] / 1000).astype(int)
+             lap_pace_dict = ((1000 / split_speeds) / 60).to_dict()
+             graphs_data['lap_pace'] = [lap_pace_dict.get(k, 0) for k in res_split_idx]
+
+    # --- 3. Serie per Simulazione (Sampling 1 min o 1 sec) ---
+    # Per la simulazione metabolica, preferiamo dati al secondo ma qui restituiamo la lista
+    # Se logic.simulate accetta liste lunghe, passiamo df['power'] o df['heart_rate'] raw.
+    target_col = 'power' if (sport_type == SportType.CYCLING and 'power' in df.columns) else 'heart_rate'
+    
+    simulation_series = []
+    if target_col in df.columns:
+        simulation_series = df[target_col].fillna(0).tolist()
+    
     return simulation_series, total_duration_min, avg_power, avg_hr, norm_power, dist, elev_gain, work_kj, df, graphs_data
 # ==============================================================================
 # PARSING METABOLICO (ESTRAZIONE MULTIPLA SMART)
@@ -371,6 +369,7 @@ def calculate_zones_cycling(ftp):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(ftp*p)} W"} for i, p in enumerate([0.55, 0.75, 0.90, 1.05, 1.20])]
 def calculate_zones_running_hr(thr):
     return [{"Zona": f"Z{i+1}", "Valore": f"{int(thr*p)} bpm"} for i, p in enumerate([0.85, 0.89, 0.94, 0.99, 1.02])]
+
 
 
 
