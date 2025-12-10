@@ -546,20 +546,27 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
 
 # --- 4. CALCOLO REVERSE STRATEGY ---
 
-def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0, intensity_series=None):
+def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0, intensity_series=None, use_mader=False):
+    """
+    Calcola la strategia nutrizionale minima necessaria.
+    AGGIORNAMENTO: Aggiunto parametro use_mader per usare il motore bioenergetico nel loop.
+    """
     optimal = None
+    # Iteriamo l'intake da 0 a 120 g/h
     for intake in range(0, 125, 5):
         df, stats = simulate_metabolism(
             tank, duration, intake, 25, 75, 20, subj, params, 
             mix_type_input=mix_type, metabolic_curve=curve_data,
             intake_mode=intake_mode, intake_cutoff_min=intake_cutoff_min,
             variability_index=variability_index,
-            intensity_series=intensity_series # <--- ORA LO PASSIAMO!
+            intensity_series=intensity_series,
+            use_mader=use_mader  # <--- PASSAGGIO FONDAMENTALE
         )
         
         min_liver = df['Residuo Epatico'].min()
         min_muscle = df['Residuo Muscolare'].min()
         
+        # Criterio di successo: Fegato > 5g e Muscolo > 20g
         if min_liver > 5 and min_muscle > 20:
             optimal = intake
             break
@@ -690,6 +697,7 @@ def simulate_mader_curve(subject: Subject):
     except: mlss = 0
     
     return df, mlss
+
 
 
 
