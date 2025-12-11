@@ -303,6 +303,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
     current_muscle_glycogen = initial_muscle_glycogen
     current_liver_glycogen = subject_data['liver_glycogen_g']
+    current_lactate = 1.0 # mmol/L (valore basale a riposo)
     
     # PARAMETRI ATTIVITÀ
     avg_watts = activity_params.get('avg_watts', 200)
@@ -362,8 +363,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     total_exo_oxidation_cumulative = 0.0
     
     units_per_hour = constant_carb_intake_g_h / cho_per_unit_g if cho_per_unit_g > 0 else 0
-    intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0 else duration_min + 1
-    is_input_zero = constant_carb_intake_g_h == 0
+    intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0
+    eff_input = activity_params.get('efficiency', 22.0)
     
     # Loop Temporale
     for t in range(int(duration_min) + 1):
@@ -471,7 +472,18 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                              mader_watts_input = speed_ms * subject_obj.weight_kg * 1.04
 
                 # Calcolo Mader Puro con Watt (reali o stimati)
-                mader_cho_g_min = calculate_mader_consumption(mader_watts_input, subject_obj)
+                # Calcolo CHO (usiamo calculate_mader_consumption aggiornata)
+                # Passiamo l'efficienza corretta (eff * 100 per convertirla in %)
+                # --- CHIAMATA AGGIORNATA A MADER ---
+                mader_cho_g_min, net_bal = calculate_mader_consumption(
+                    mader_watts_input, 
+                    subject_obj, 
+                    custom_efficiency=eff_input
+                )
+                
+                total_cho_demand = mader_cho_g_min
+                net_lactate_change = net_bal # Salviamo il cambiamento netto
+                g_cho_h = g_cho_min * 60
                 total_cho_demand = mader_cho_g_min
                 
                 # Calcola grassi per differenza calorica
@@ -490,6 +502,8 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 crossover_val = crossover_pct if crossover_pct else standard_crossover
                 if_shift = (standard_crossover - crossover_val) / 100.0
                 effective_if_for_rer = max(0.3, current_if_moment + if_shift)
+                g_fat = (current_kcal_demand * (1.0-cho_ratio) / 9.0) if current_kcal_demand > 0 else 0
+                net_lactate_change = 0.0 # Nessun calcolo lattato nel modello standard
                 
                 rer = calculate_rer_polynomial(effective_if_for_rer)
                 base_cho_ratio = (rer - 0.70) * 3.45
@@ -539,6 +553,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
         
         total_g_min = max(1.0, muscle_usage_g_min + from_liver + from_exogenous + g_fat)
+
+        # --- AGGIORNAMENTO DINAMICO LATTATO ---
+        if t > 0:
+            current_lactate += net_lactate_change
+            # Clamp fisiologici
+            if current_lactate < 0.8: current_lactate = 0.8 # Minimo basale
+            if current_lactate > 22.0: current_lactate = 22.0 # Max fisiologico (dolore puro)
         
         results.append({
             "Time (min)": t,
@@ -559,7 +580,9 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             "CHO %": cho_ratio * 100,
             "Intake Cumulativo (g)": total_intake_cumulative,
             "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative,
-            "Intensity Factor (IF)": current_if_moment
+            "Intensity Factor (IF)": current_if_moment,
+            "Lattato Stimato (mmol/L)": current_lactate, # <--- NUOVO
+            "Net Lactate Change": net_lactate_change
         })
     
     # Statistiche Finali
@@ -682,63 +705,50 @@ def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_in
 def calculate_mader_consumption(watts, subject: Subject, custom_efficiency=None):
     """
     Calcola il consumo di CHO (g/min) basato su VO2max e VLaMax.
-    Supporta efficienza personalizzata.
+    MODELLO CORRETTO v2.0 (Calibrato) con Efficienza Dinamica.
+    Returns: (cho_total_g_min, net_lactate_balance_mmol_l_min)
     """
     # 0. Costanti di Calibrazione
-    VLA_SCALE = 0.07
-    K_COMB = 0.0225
+    VLA_SCALE = 0.07  # Riduce la produzione teorica a quella sistemica reale
+    K_COMB = 0.0225   # Costante di smaltimento standard (Mader)
     
     # 1. Efficienza Meccanica (Dinamica)
     if custom_efficiency is not None:
-        eff = custom_efficiency / 100.0 # Convertiamo 22.0 in 0.22
+        eff = custom_efficiency / 100.0
     else:
-        # Fallback ai default se non specificato
         eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
-    
-    # 2. Domanda Energetica (VO2 Demand)
-    # Più bassa è l'efficienza, più alto è il VO2 richiesto per gli stessi Watt
-    kcal_min = (watts * 0.01433) / eff
-    vo2_demand_ml = (kcal_min / 4.85) * 1000
     
     # 2. Domanda Energetica
     kcal_min = (watts * 0.01433) / eff
     vo2_demand_ml = (kcal_min / 4.85) * 1000
     vo2_max_abs = subject.vo2_max * subject.weight_kg
     
-    if vo2_max_abs == 0: return 0
+    if vo2_max_abs == 0: return 0, 0 # Return tuple
     intensity = vo2_demand_ml / vo2_max_abs
     
     # 3. Produzione Lattato (Systemic Appearance)
-    # VLaMax * 60 * Intensity^3 * Scala
     raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
     vla_prod = raw_prod * VLA_SCALE
     
     # 4. Combustione Lattato (Clearance)
-    # La capacità di smaltimento dipende dal VO2 effettivo (mitocondri attivi)
     vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
     vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
     
     net_balance = vla_prod - vla_comb
     
     # 5. Consumo Aerobico (RER Dinamico)
-    # Base RER più conservativo per evitare sovrastima CHO a bassa intensità
     base_rer = 0.70 + (0.18 * intensity) 
-    
-    # Lactate Push: Il lattato spinge il metabolismo verso i CHO, ma ora è scalato
     lactate_push = min(0.25, vla_prod * 0.15)
-    
     final_rer = min(1.0, max(0.7, base_rer + lactate_push))
     
     cho_pct = (final_rer - 0.7) / 0.3
     cho_aerobic = (kcal_min * cho_pct) / 4.0
     
     # 6. Consumo Anaerobico (Solo Accumulo Netto)
-    # Aggiungiamo solo i carboidrati "persi" come lattato non ossidato (sopra soglia)
-    # Se net_balance < 0 (sotto soglia), il costo è zero (tutto ossidato e conteggiato in RER)
     vol_dist = subject.weight_kg * 0.40
     cho_anaerobic = max(0, net_balance) * vol_dist * 0.09
     
-    return cho_aerobic + cho_anaerobic
+    return (cho_aerobic + cho_anaerobic), net_balance
 
 def simulate_mader_curve(subject: Subject):
     """
@@ -960,6 +970,7 @@ def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known,
         found_vla = mid_vla
         
     return round(found_vla, 2)
+
 
 
 
