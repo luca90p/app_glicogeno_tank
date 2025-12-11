@@ -671,8 +671,13 @@ with tab3:
                 st.info("ℹ️ **Modello Teorico (Statistico)**")
                 crossover_val = st.slider("Crossover Point (% Soglia)", 50, 90, 75, help="Intensità dove i CHO superano i grassi.")
                 if subj.sport.name == 'CYCLING':
-                    eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5)
-                    params['efficiency'] = eff_mech
+            eff_mech = st.slider("Efficienza Meccanica (%)", 18.0, 25.0, 21.5, 0.5, 
+                               help="Standard: 21-22%. Pro: 23-24%. Principiante: 18-20%. Impatta molto su Mader.")
+            params['efficiency'] = eff_mech # Lo salviamo nei parametri
+        else:
+            # Per la corsa l'efficienza è gestita diversamente (Running Economy), 
+            # ma per Mader usiamo un default interno se non specificato
+            params['efficiency'] = 21.0
                 tau = st.slider("Costante Assorbimento (Tau)", 5, 60, 20)
                 risk_thresh = st.slider("Soglia Tolleranza GI (g)", 10, 100, 30)
 
@@ -1398,6 +1403,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
