@@ -459,7 +459,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                              mader_watts_input = speed_ms * subject_obj.weight_kg * 1.04
 
                 # Calcolo Mader Puro con Watt (reali o stimati)
-                mader_cho_g_min = calculate_mader_consumption(mader_watts_input, subject_obj)
+                mader_cho_g_min = calculate_mader_consumption(mader_watts_input, subject_obj, custom_efficiency=eff_input)
                 total_cho_demand = mader_cho_g_min
                 
                 # Calcola grassi per differenza calorica
@@ -818,6 +818,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
