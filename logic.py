@@ -581,28 +581,48 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
 
 # --- 4. CALCOLO REVERSE STRATEGY ---
 
-def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0, intensity_series=None, use_mader=False):
+# --- 4. CALCOLO REVERSE STRATEGY (AGGIORNATA) ---
+
+def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0, intensity_series=None, use_mader=False, running_method="PHYSIOLOGICAL"):
     """
     Calcola la strategia nutrizionale minima necessaria.
-    AGGIORNAMENTO: Aggiunto parametro use_mader per usare il motore bioenergetico nel loop.
+    Itera simulazioni aumentando l'intake finché i serbatoi non rimangono sopra la soglia di sicurezza.
     """
     optimal = None
-    # Iteriamo l'intake da 0 a 120 g/h
+    
+    # Definiamo i limiti di sicurezza
+    MIN_LIVER_SAFE = 5.0   # Grammi minimi fegato
+    MIN_MUSCLE_SAFE = 20.0 # Grammi minimi muscolo
+    
+    # Iteriamo l'intake da 0 a 120 g/h con step di 5g
     for intake in range(0, 125, 5):
+        
+        # Eseguiamo la simulazione passando TUTTI i parametri, incluso running_method
         df, stats = simulate_metabolism(
-            tank, duration, intake, 25, 75, 20, subj, params, 
-            mix_type_input=mix_type, metabolic_curve=curve_data,
-            intake_mode=intake_mode, intake_cutoff_min=intake_cutoff_min,
+            subject_data=tank, 
+            duration_min=duration, 
+            constant_carb_intake_g_h=intake, 
+            cho_per_unit_g=30, # Valore dummy per il calcolo continuo
+            crossover_pct=75,  # Valore dummy se usiamo Mader
+            tau_absorption=20, 
+            subject_obj=subj, 
+            activity_params=params, 
+            mix_type_input=mix_type, 
+            metabolic_curve=curve_data,
+            intake_mode=intake_mode, 
+            intake_cutoff_min=intake_cutoff_min,
             variability_index=variability_index,
             intensity_series=intensity_series,
-            use_mader=use_mader  # <--- PASSAGGIO FONDAMENTALE
+            use_mader=use_mader,          # <--- Fondamentale
+            running_method=running_method # <--- NUOVO: Fondamentale per la Corsa
         )
         
+        # Verifichiamo i minimi raggiunti durante la gara
         min_liver = df['Residuo Epatico'].min()
         min_muscle = df['Residuo Muscolare'].min()
         
-        # Criterio di successo: Fegato > 5g e Muscolo > 20g
-        if min_liver > 5 and min_muscle > 20:
+        # Criterio di successo: Non andiamo mai sotto i minimi
+        if min_liver > MIN_LIVER_SAFE and min_muscle > MIN_MUSCLE_SAFE:
             optimal = intake
             break
             
@@ -830,6 +850,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
