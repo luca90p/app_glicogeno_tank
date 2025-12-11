@@ -948,7 +948,8 @@ with tab3:
                      mix_sel, intake_mode_enum, intake_cutoff,
                      variability_index=vi_input, 
                      intensity_series=intensity_series,
-                     use_mader=use_mader_sim # Manteniamo coerenza col VI
+                     use_mader=use_mader_sim,
+                     running_method=sim_method # Manteniamo coerenza col VI
                  )
                  
              if opt_intake is not None:
@@ -1403,6 +1404,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
