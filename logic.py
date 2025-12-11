@@ -297,7 +297,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                         custom_max_exo_rate=None, mix_type_input=ChoMixType.GLUCOSE_ONLY, 
                         intensity_series=None, metabolic_curve=None, 
                         intake_mode=IntakeMode.DISCRETE, intake_cutoff_min=0, variability_index=1.0, 
-                        use_mader=False, running_method="PHYSIOLOGICAL"): # <--- NUOVO PARAMETRO
+                        use_mader=False, running_method="PHYSIOLOGICAL"):
     
     results = []
     initial_muscle_glycogen = subject_data['muscle_glycogen_g']
@@ -324,12 +324,23 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     else:
         intensity_factor_reference = 0.8
     
-    # Calcolo base kcal/min
+    # --- FIX RUNNING: CALCOLO KCAL BASE ---
     if mode == 'cycling':
+        # Ciclismo: Fisica pura (Watt -> Kcal)
         kcal_per_min_base = (avg_watts * 60) / 4184 / (gross_efficiency / 100.0)
     else:
-        # Running: kcal stimato da peso e intensità relativa
-        kcal_per_min_base = (subject_obj.weight_kg * 0.2 * intensity_factor_reference * 3.5) / 5.0
+        # Running: Stima basata su VO2max invece che formula generica
+        # Assumiamo che la Soglia (HR Threshold) sia al 90% del VO2max
+        vo2_threshold_pct = 0.90
+        
+        # VO2 stimato (ml/kg/min) in base all'intensità cardiaca rispetto alla soglia
+        vo2_estimated_relative = subject_obj.vo2_max * vo2_threshold_pct * intensity_factor_reference
+        
+        # VO2 assoluto (L/min)
+        vo2_estimated_absolute = (vo2_estimated_relative * subject_obj.weight_kg) / 1000.0
+        
+        # Kcal/min (1 L O2 ~ 4.85 Kcal a RER misto/alto)
+        kcal_per_min_base = vo2_estimated_absolute * 4.85
         
     is_lab_data = True if metabolic_curve is not None else False 
     
@@ -377,6 +388,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (instant_power * 60) / 4184 / (current_eff / 100.0)
         else: 
+            # Running: Drift cardiaco (aumento costo apparente)
             drift_factor = 1.0
             if t > 60: drift_factor += (t - 60) * 0.0005 
             demand_scaling = current_if_moment / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
@@ -445,7 +457,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                     # A. STRADA FISIOLOGICA (HR -> Kcal -> Watt Equivalenti)
                     if running_method == "PHYSIOLOGICAL":
                          # Invertiamo la formula delle Kcal per trovare i Watt equivalenti allo sforzo cardiaco
-                         # Kcal/min = (Watts * 0.01433) / 0.21
+                         # Kcal/min = (Watts * 0.01433) / 0.21 (Efficienza Corsa)
                          mader_watts_input = (current_kcal_demand * 0.21) / 0.01433
                     
                     # B. STRADA MECCANICA (Speed -> Watt)
@@ -459,7 +471,7 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                              mader_watts_input = speed_ms * subject_obj.weight_kg * 1.04
 
                 # Calcolo Mader Puro con Watt (reali o stimati)
-                mader_cho_g_min = calculate_mader_consumption(mader_watts_input, subject_obj, custom_efficiency=eff_input)
+                mader_cho_g_min = calculate_mader_consumption(mader_watts_input, subject_obj)
                 total_cho_demand = mader_cho_g_min
                 
                 # Calcola grassi per differenza calorica
@@ -818,6 +830,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
