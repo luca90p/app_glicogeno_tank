@@ -638,3 +638,38 @@ def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known,
         else: low = mid_vla 
         found_vla = mid_vla
     return round(found_vla, 2)
+
+# =============================================================================
+# MODULO MORTON / SKIBA (W' BALANCE) - MANCANTE
+# =============================================================================
+
+def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_interval_sec=60):
+    """
+    Calcola il bilancio di W' (W_prime) utilizzando il modello di Skiba (2012).
+    """
+    balance = []
+    current_w = w_prime_j
+    
+    for p in intensity_series:
+        if p > cp_watts:
+            # DEPLEZIONE: Lineare sopra CP
+            usage = (p - cp_watts) * sampling_interval_sec
+            current_w -= usage
+        else:
+            # RECUPERO: Esponenziale (Tau dinamico)
+            d_cp = cp_watts - p
+            if d_cp < 0: d_cp = 0 
+            
+            # Formula Skiba 2012 per Tau
+            tau = 546 * math.exp(-0.01 * d_cp) + 316
+            
+            current_w = w_prime_j - (w_prime_j - current_w) * math.exp(-sampling_interval_sec / tau)
+
+        # Limiti fisici
+        if current_w > w_prime_j: current_w = w_prime_j
+        if current_w < 0: current_w = 0 
+        
+        balance.append(current_w)
+        
+    return balance
+
