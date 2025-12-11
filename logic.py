@@ -857,41 +857,60 @@ def find_vo2max_from_ftp(ftp_target, weight, vlamax_guess, sport_type):
     Trova il VO2max necessario per avere una determinata FTP (MLSS)
     dato un certo profilo VLaMax.
     """
-    # Range di ricerca per il VO2max (es. da 30 a 90)
+    # Import locali per sicurezza se mancano in alto
+    from data_models import Sex, MenstrualPhase
+    
+    # Range di ricerca per il VO2max
     low = 30.0
     high = 90.0
-    tolerance = 0.5 # Precisione (ml/kg/min)
+    tolerance = 0.5 
     iterations = 0
     
-    # Creiamo un soggetto dummy per i calcoli
+    # Creiamo un soggetto "Dummy" (Fittizio) per i calcoli.
+    # Dobbiamo passare TUTTI i parametri richiesti dal costruttore Subject,
+    # anche se per il calcolo Mader useremo solo peso, vo2 e vlamax.
     dummy_subj = Subject(
-        weight_kg=weight, vo2_max=60, vlamax=vlamax_guess, ftp=ftp_target, sport_type=sport_type
+        weight_kg=weight,
+        vo2_max=60, # Valore iniziale provvisorio
+        vlamax=vlamax_guess,
+        sport=sport_type, # NOTA: Usa 'sport', non 'sport_type'
+        
+        # --- Parametri Dummy (Default) per evitare errori TypeError ---
+        height_cm=175,          # Default
+        body_fat_pct=0.15,      # Default
+        sex=Sex.MALE,           # Default
+        glycogen_conc_g_kg=15.0,# Default
+        uses_creatine=False,    # Default
+        menstrual_phase=MenstrualPhase.NONE, # Default
+        vo2max_absolute_l_min=(60 * weight) / 1000, # Coerente col VO2 provvisorio
+        muscle_mass_kg=None
     )
     
-    found_vo2 = None
+    found_vo2 = 55.0
     
     # Algoritmo di Bisezione
     while (high - low) > tolerance and iterations < 20:
         mid_vo2 = (low + high) / 2
-        dummy_subj.vo2_max = mid_vo2
         
-        # Calcoliamo la MLSS con questo VO2max
-        # Nota: usiamo una versione light di simulate_mader_curve per velocità
+        # Aggiorniamo il VO2max del soggetto dummy
+        dummy_subj.vo2_max = mid_vo2
+        dummy_subj.vo2max_absolute_l_min = (mid_vo2 * weight) / 1000
+        
+        # Simuliamo la curva con questo VO2max
         df_res, mlss_calc = simulate_mader_curve(dummy_subj)
         
+        # Verifichiamo se la MLSS calcolata corrisponde alla FTP target
         if mlss_calc < ftp_target:
-            # Se la MLSS è troppo bassa, serve più motore (VO2)
+            # Se la MLSS è troppo bassa, serve più motore (VO2) -> Alziamo il minimo
             low = mid_vo2
         else:
-            # Se la MLSS è troppo alta, abbiamo esagerato
+            # Se la MLSS è troppo alta -> Abbassiamo il massimo
             high = mid_vo2
             
         iterations += 1
         found_vo2 = mid_vo2
         
     return found_vo2
-
-
 
 
 
