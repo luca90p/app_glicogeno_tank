@@ -700,84 +700,55 @@ def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_in
         
     return balance
 
-# --- MOTORE FISIOLOGICO MADER ---
-
 def calculate_mader_consumption(watts, subject: Subject, custom_efficiency=None):
-    """
-    Calcola il consumo di CHO (g/min) basato su VO2max e VLaMax.
-    MODELLO CORRETTO v2.0 (Calibrato) con Efficienza Dinamica.
-    Returns: (cho_total_g_min, net_lactate_balance_mmol_l_min)
-    """
-    # 0. Costanti di Calibrazione
-    VLA_SCALE = 0.07  # Riduce la produzione teorica a quella sistemica reale
-    K_COMB = 0.0225   # Costante di smaltimento standard (Mader)
+    VLA_SCALE = 0.07
+    K_COMB = 0.0225
     
-    # 1. Efficienza Meccanica (Dinamica)
     if custom_efficiency is not None:
         eff = custom_efficiency / 100.0
     else:
         eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
     
-    # 2. Domanda Energetica
     kcal_min = (watts * 0.01433) / eff
     vo2_demand_ml = (kcal_min / 4.85) * 1000
     vo2_max_abs = subject.vo2_max * subject.weight_kg
     
-    if vo2_max_abs == 0: return 0, 0 # Return tuple
+    if vo2_max_abs == 0: return 0, 0
     intensity = vo2_demand_ml / vo2_max_abs
     
-    # 3. Produzione Lattato (Systemic Appearance)
     raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
     vla_prod = raw_prod * VLA_SCALE
     
-    # 4. Combustione Lattato (Clearance)
     vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
     vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
-    
     net_balance = vla_prod - vla_comb
     
-    # 5. Consumo Aerobico (RER Dinamico)
     base_rer = 0.70 + (0.18 * intensity) 
     lactate_push = min(0.25, vla_prod * 0.15)
     final_rer = min(1.0, max(0.7, base_rer + lactate_push))
-    
     cho_pct = (final_rer - 0.7) / 0.3
     cho_aerobic = (kcal_min * cho_pct) / 4.0
     
-    # 6. Consumo Anaerobico (Solo Accumulo Netto)
     vol_dist = subject.weight_kg * 0.40
     cho_anaerobic = max(0, net_balance) * vol_dist * 0.09
     
     return (cho_aerobic + cho_anaerobic), net_balance
 
 def simulate_mader_curve(subject: Subject):
-    """
-    Genera i dati per il Tab Laboratorio.
-    Supporta CICLISMO e CORSA con parametri fisiologici differenziati.
-    """
     watts_range = np.arange(0, 600, 10)
     results = []
     
-    # 1. SETUP PARAMETRI SPORT-SPECIFICI
     if subject.sport == SportType.RUNNING:
-        # CORSA
-        # Efficienza minore (più dispendioso a parità di Watt meccanici)
-        # Nota: Se usi Stryd, l'efficienza metabolica è calibrata diversamente, ma usiamo 0.21 come standard
-        eff = 0.21 
-        # Massa muscolare attiva maggiore (diluizione lattato su più volume)
         active_mass_pct = 0.45 
-        # Costante di smaltimento leggermente aumentata (miglior pompa muscolare/circolazione total body)
         K_COMB = 0.024 
     else:
-        # CICLISMO
-        eff = 0.23
         active_mass_pct = 0.40
         K_COMB = 0.0225
 
-    VLA_SCALE = 0.07 # Costante di scala produzione (fissa)
+    VLA_SCALE = 0.07
     
     for w in watts_range:
-        # A. Domanda Energetica
+        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
         kcal_min = (w * 0.01433) / eff
         vo2_demand_ml = (kcal_min / 4.85) * 1000
         vo2_max_abs = subject.vo2_max * subject.weight_kg
@@ -786,77 +757,34 @@ def simulate_mader_curve(subject: Subject):
         if vo2_max_abs > 0:
             intensity = vo2_demand_ml / vo2_max_abs
             
-        # B. Lattato: Produzione vs Smaltimento
         raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
         vla_prod = raw_prod * VLA_SCALE
-        
         vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
         vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
-        
         net_balance = vla_prod - vla_comb
-        
-        # C. Dati Ossigeno
         vo2_demand_l = vo2_demand_ml / 1000.0
         vo2_uptake_l = vo2_uptake / 1000.0
 
-        # D. Carboidrati e Grassi
-        # RER di base varia leggermente con l'intensità
-        base_rer = 0.70 + (0.18 * intensity)
-        lactate_push = min(0.25, vla_prod * 0.15)
-        final_rer = min(1.0, max(0.7, base_rer + lactate_push))
-        cho_pct = (final_rer - 0.7) / 0.3
+        g_cho_min, _ = calculate_mader_consumption(w, subject, custom_efficiency=eff*100)
+        g_cho_h = g_cho_min * 60
         
         kcal_h = kcal_min * 60
-        g_cho_h = ((kcal_min * cho_pct) / 4.0) * 60
-        
-        # Aggiunta costo anaerobico sopra soglia (Accumulo)
-        # Qui usiamo la massa attiva specifica dello sport
-        if net_balance > 0:
-            g_cho_h += (net_balance * subject.weight_kg * active_mass_pct * 0.09 * 60)
-            
         g_fat_h = max(0, (kcal_h - (g_cho_h * 4)) / 9)
 
-        # E. Stima Passo Corsa (Opzionale, solo per riferimento)
-        # Conversione approssimativa Watt (Stryd) -> Passo al km
-        # Formula empirica: 1.04 kcal/kg/km costo energetico
-        pace_label = ""
-        if subject.sport == SportType.RUNNING and w > 0:
-            # W/kg
-            wkg = w / subject.weight_kg
-            # Stima velocità km/h da W/kg (Stryd formula approx: Speed = W/kg / 1.04 * 3.6 ? No, più semplice)
-            # 1 Watt/kg ~ 210 m/min ? No.
-            # Usiamo formula inversa costo energetico:
-            # Speed (m/min) = VO2 (ml/min/kg) / 0.2
-            # VO2 = w * 0.01433 / eff / weight * 1000 / 4.85
-            speed_m_min = (vo2_demand_ml / subject.weight_kg) / 0.2
-            if speed_m_min > 0:
-                pace_min_km = 1000 / speed_m_min
-                mm = int(pace_min_km)
-                ss = int((pace_min_km - mm) * 60)
-                pace_label = f"{mm}:{ss:02d}"
-
         results.append({
-            "watts": w,
-            "pace": pace_label, # Nuova colonna utile per la corsa
-            "la_prod": vla_prod,
-            "la_comb": vla_comb,
-            "net_balance": net_balance,
-            "g_cho_h": g_cho_h,
-            "g_fat_h": g_fat_h,
-            "vo2_demand_l": vo2_demand_l,
-            "vo2_uptake_l": vo2_uptake_l
+            "watts": w, "la_prod": vla_prod, "la_comb": vla_comb,
+            "net_balance": net_balance, "g_cho_h": g_cho_h, "g_fat_h": g_fat_h,
+            "vo2_demand_l": vo2_demand_l, "vo2_uptake_l": vo2_uptake_l
         })
         
     df = pd.DataFrame(results)
     
-    # 6. Calcolo MLSS
     mlss = 0
     try:
         df_valid = df[df['watts'] > 50]
         idx_mlss = (df_valid['net_balance']).abs().idxmin()
         mlss = df.loc[idx_mlss, 'watts']
-    except:
-        mlss = 0
+    except: mlss = 0
         
     return df, mlss
 
@@ -970,6 +898,7 @@ def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known,
         found_vla = mid_vla
         
     return round(found_vla, 2)
+
 
 
 
