@@ -590,7 +590,7 @@ def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_typ
     """
     optimal = None
     
-    # Definiamo i limiti di sicurezza
+    # Definiamo i limiti di sicurezza (Stop prima di svuotare tutto)
     MIN_LIVER_SAFE = 5.0   # Grammi minimi fegato
     MIN_MUSCLE_SAFE = 20.0 # Grammi minimi muscolo
     
@@ -614,20 +614,19 @@ def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_typ
             variability_index=variability_index,
             intensity_series=intensity_series,
             use_mader=use_mader,          # <--- Fondamentale
-            running_method=running_method # <--- NUOVO: Fondamentale per la Corsa
+            running_method=running_method # <--- NUOVO: Passa la modalità Corsa
         )
         
         # Verifichiamo i minimi raggiunti durante la gara
         min_liver = df['Residuo Epatico'].min()
         min_muscle = df['Residuo Muscolare'].min()
         
-        # Criterio di successo: Non andiamo mai sotto i minimi
+        # Criterio di successo: Non andiamo mai sotto i minimi di sicurezza
         if min_liver > MIN_LIVER_SAFE and min_muscle > MIN_MUSCLE_SAFE:
             optimal = intake
             break
             
     return optimal
-
 # ==============================================================================
 # MODULO MORTON / SKIBA (W' BALANCE)
 # ==============================================================================
@@ -850,6 +849,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
