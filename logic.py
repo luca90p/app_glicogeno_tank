@@ -855,24 +855,26 @@ def simulate_mader_curve(subject: Subject):
 def find_vo2max_from_ftp(ftp_target, weight, vlamax_guess, sport_type):
     """
     Trova il VO2max per una data FTP.
-    Include un controllo di sicurezza (minimo fisiologico).
+    Include un 'pavimento' basato sul costo energetico minimo.
     """
-    # Import locali
     from data_models import Sex, MenstrualPhase
     
-    # CALCOLO PAVIMENTO (Minimo VO2max matematico per sostenere i Watt)
+    # 1. Calcolo Minimo Teorico (Floor)
+    # Non puoi avere un VO2max inferiore a quello che usi per pedalare alla FTP!
     eff = 0.23 if sport_type.name == 'CYCLING' else 0.21
-    min_o2_l_min = (ftp_target * 0.01433) / eff / 5.0 # Assumendo RER=1.0 (inefficiente)
-    min_vo2_abs = min_o2_l_min * 1000 / weight
+    kcal_min_ftp = (ftp_target * 0.01433) / eff
+    min_liters = kcal_min_ftp / 5.0 # ipotizzando efficienza metabolica max
+    min_vo2_abs = (min_liters * 1000 / weight) * 1.02 # +2% margine
     
-    # Il VO2max deve essere ALMENO pari alla richiesta della FTP (anzi, di più, perché FTP < VO2max)
-    # Impostiamo il range di ricerca partendo da lì
-    low = min_vo2_abs * 1.05 # Minimo + 5%
+    # Range Ricerca
+    low = min_vo2_abs
     high = 90.0
     tolerance = 0.2
     
+    # Dummy Subject per simulazione
     dummy_subj = Subject(
         weight_kg=weight, vo2_max=60, vlamax=vlamax_guess, sport=sport_type,
+        # Parametri default obbligatori per evitare errori
         height_cm=175, body_fat_pct=0.15, sex=Sex.MALE, glycogen_conc_g_kg=15.0, 
         uses_creatine=False, menstrual_phase=MenstrualPhase.NONE, 
         vo2max_absolute_l_min=(60 * weight) / 1000, muscle_mass_kg=None
@@ -880,6 +882,7 @@ def find_vo2max_from_ftp(ftp_target, weight, vlamax_guess, sport_type):
     
     found_vo2 = low
     
+    # Bisezione
     iterations = 0
     while (high - low) > tolerance and iterations < 20:
         mid_vo2 = (low + high) / 2
@@ -889,97 +892,75 @@ def find_vo2max_from_ftp(ftp_target, weight, vlamax_guess, sport_type):
         _, mlss_calc = simulate_mader_curve(dummy_subj)
         
         if mlss_calc < ftp_target:
-            low = mid_vo2
+            low = mid_vo2 # Serve più motore
         else:
-            high = mid_vo2
+            high = mid_vo2 # Motore troppo grosso
+            
         iterations += 1
         found_vo2 = mid_vo2
         
-    return found_vo2
+    return round(found_vo2, 1)
 
 def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known, sport_type):
     """
-    Trova la VLaMax calcolando l'accumulo totale di lattato alla fine del test.
-    Target: Alla fine del test massimale, l'atleta deve aver accumulato il MAX tollerabile (~18-22 mmol).
+    Trova la VLaMax basandosi su una prestazione massimale breve.
+    Include limiti di sicurezza per evitare valori non fisiologici.
     """
-    from data_models import Sex, MenstrualPhase
+    # Limiti fisiologici
+    VLA_MIN_LIMIT = 0.25
+    VLA_MAX_LIMIT = 1.0
+    MAX_LACTATE_TOLERANCE = 18.0 # mmol/L accumulabili max
     
-    # Parametri costanti
-    MAX_LACTATE_TOLERANCE = 19.5 # mmol/L (Valore tipico di esaurimento per amatori evoluti)
-    
-    # Efficienza (Cruciale per calcolare il costo O2 dei Watt)
     eff = 0.23 if sport_type.name == 'CYCLING' else 0.21
     
-    # 1. Calcolo Domanda Energetica Totale del Test
-    # Kcal/min richieste per tenere 'short_power'
+    # 1. Calcolo Energetico
     kcal_demand_min = (short_power * 0.01433) / eff
     
-    # 2. Calcolo Contributo Aerobico (VO2)
-    # Assumiamo che su un test di 3-5 min, il VO2 medio sia ~90-95% del VO2max (cinetica O2)
-    avg_vo2_pct = 0.92 if duration_min <= 4 else 0.95
-    vo2_avg_l_min = (vo2max_known * weight / 1000.0) * avg_vo2_pct
+    # Contributo Aerobico (VO2 medio nel test ~95% del max)
+    avg_vo2_l_min = (vo2max_known * weight / 1000.0) * 0.95
+    kcal_aerobic_min = avg_vo2_l_min * 5.0 # kcal/L ossigeno
     
-    # Kcal coperte dall'aerobico (1 L O2 ~ 5.0 kcal a RER alto)
-    kcal_aerobic_min = vo2_avg_l_min * 5.0
+    # Gap Anaerobico
+    kcal_gap_total = (kcal_demand_min - kcal_aerobic_min) * duration_min
     
-    # 3. Gap Anaerobico (Kcal che devono venire dal lattato)
-    kcal_anaerobic_total = (kcal_demand_min - kcal_aerobic_min) * duration_min
-    
-    if kcal_anaerobic_total < 0:
-        # Se il VO2 copre tutto (es. test troppo facile), ritorniamo una VLaMax minima
-        return 0.2
+    # Se il gap è negativo o nullo, significa che il VO2max basta e avanza.
+    # In questo caso l'atleta è "Tutto Motore", ma la VLaMax non può essere 0.
+    # Ritorniamo il minimo fisiologico.
+    if kcal_gap_total <= 0:
+        return VLA_MIN_LIMIT
         
-    # 4. Conversione Kcal Anaerobiche -> Lattato Prodotto
-    # 1 mmol di lattato prodotto (e accumulato) fornisce circa 15-18 cal/kg? 
-    # Mader: 1 mmol/L accumulato ≈ 3 ml O2 equivalenti/kg ≈ 15 cal/kg.
-    # Formula inversa: Lattato_Accumulato = Energia_Anaerobica / (Peso * Fattore_Energetico)
-    # Usiamo il fattore energetico standard del glicogeno -> lattato
-    
-    # Approccio inverso più stabile: Usiamo la formula di produzione Mader
-    # Prod_rate = VLaMax * (1.0)^3 (assumendo sforzo massimale = attivazione massima)
-    # Ma l'attivazione non è 1.0 se i watt sono bassi.
-    
-    # ITERAZIONE BISEZIONE SULLA VLaMAX
-    low = 0.2
-    high = 1.2
+    # 2. Iterazione Bisezione
+    low = VLA_MIN_LIMIT
+    high = VLA_MAX_LIMIT
     found_vla = 0.5
     
     for _ in range(15):
         mid_vla = (low + high) / 2
         
-        # Simuliamo quanto lattato accumula questo atleta con questa VLaMax a questi Watt
-        # in 'duration_min'.
-        
-        # A. Produzione Lorda (Mader)
-        # Intensità relativa al VO2max
-        vo2_demand_l = (kcal_demand_min / 4.85) # L/min teorici
+        # Stimiamo accumulo con questa VLaMax
+        # Intensità relativa
+        vo2_demand_l = kcal_demand_min / 4.85
         intensity = vo2_demand_l / (vo2max_known * weight / 1000.0)
         
-        # Mader Prod (mmol/L/min)
-        # Nota: Clampiamo intensity a min 1.0 per test massimali brevi (attivazione glicolitica alta)
-        calc_intensity = max(1.05, intensity) # Forziamo un po' l'attivazione per test brevi
+        # Mader Production (Force intensity >= 1.05 for short max effort simulation)
+        calc_intensity = max(1.05, intensity)
         raw_prod = (mid_vla * 60) * (calc_intensity ** 3)
-        vla_prod_rate = raw_prod * 0.07 # Scala sistemica
+        vla_prod_rate = raw_prod * 0.07
         
-        # B. Combustione (Smaltimento durante il test)
-        # Durante un fuori giri, smaltisci al massimo del tuo VO2max
-        vla_comb_rate = 0.0225 * vo2max_known 
+        # Clearance (Max capacity during effort)
+        vla_comb_rate = 0.0225 * vo2max_known
         
-        # C. Bilancio Netto
-        net_accumulation_rate = vla_prod_rate - vla_comb_rate
-        total_acc = net_accumulation_rate * duration_min
+        net_accumulation = (vla_prod_rate - vla_comb_rate) * duration_min
         
-        # D. Confronto con la realtà (Max Tolerance)
-        if total_acc > MAX_LACTATE_TOLERANCE:
-            # Accumula troppo -> VLaMax troppo alta per questi Watt
-            high = mid_vla
+        if net_accumulation > MAX_LACTATE_TOLERANCE:
+            high = mid_vla # Troppo accumulo -> Riduci VLa
         else:
-            # Accumula poco -> VLaMax troppo bassa (poteva spingere di più)
-            low = mid_vla
+            low = mid_vla  # Poco accumulo -> Alza VLa
             
         found_vla = mid_vla
         
     return round(found_vla, 2)
+
 
 
 
