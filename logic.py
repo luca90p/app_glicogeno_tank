@@ -1,9 +1,11 @@
 import math
 import numpy as np
 import pandas as pd
-from data_models import Subject, Sex, ChoMixType, FatigueState, GlycogenState, IntakeMode, SportType
+from data_models import Subject, Sex, ChoMixType, FatigueState, GlycogenState, IntakeMode, SportType, MenstrualPhase
 
-# --- 1. FUNZIONI HELPER ---
+# =============================================================================
+# 1. FUNZIONI HELPER & COSTANTI
+# =============================================================================
 
 def get_concentration_from_vo2max(vo2_max):
     conc = 13.0 + (vo2_max - 30.0) * 0.24
@@ -109,177 +111,107 @@ def estimate_max_exogenous_oxidation(height_cm, weight_kg, ftp_watts, mix_type: 
     final_rate_g_min = min(estimated_rate_gh / 60, mix_type.max_rate_gh / 60)
     return final_rate_g_min
 
-# --- 2. MOTORE TAPERING (LOGICA ORARIA AVANZATA) ---
+# =============================================================================
+# 2. MOTORE TAPERING (LOGICA ORARIA)
+# =============================================================================
 
 def calculate_hourly_tapering(subject, days_data, start_state: GlycogenState = GlycogenState.NORMAL):
-    
-    # 1. Inizializzazione Serbatoi
     tank = calculate_tank(subject)
     MAX_MUSCLE = tank['max_capacity_g'] - 100 
     MAX_LIVER = 100.0
     
-    # Start level
     start_factor = start_state.factor
     curr_muscle = min(MAX_MUSCLE * start_factor, MAX_MUSCLE)
     curr_liver = min(MAX_LIVER * start_factor, MAX_LIVER)
     
     hourly_log = []
+    LIVER_DRAIN_H = 4.0 
+    NEAT_DRAIN_H = (1.0 * subject.weight_kg) / 16.0 
     
-    # Costanti Fisiologiche Orarie
-    LIVER_DRAIN_H = 4.0 # Consumo cervello/organi (g/h)
-    NEAT_DRAIN_H = (1.0 * subject.weight_kg) / 16.0 # NEAT spalmato sulle 16h di veglia (g/h)
-    
-    # Ciclo sui Giorni
     for day_idx, day in enumerate(days_data):
         date_label = day['date_obj'].strftime("%d/%m")
-        
-        # Parsing Orari
         sleep_start = day['sleep_start'].hour + (day['sleep_start'].minute/60)
         sleep_end = day['sleep_end'].hour + (day['sleep_end'].minute/60)
-        # Gestione notte (es. 23:00 -> 07:00). Se sleep_start > sleep_end, scavalca la mezzanotte
-        
         work_start = day['workout_start'].hour + (day['workout_start'].minute/60)
         work_dur_h = day['duration'] / 60.0
         work_end = work_start + work_dur_h
-        
         total_cho_input = day['cho_in']
         
-        # Calcolo Ore di Veglia (Feeding Window) per distribuire il cibo
-        # Semplificazione: Assumiamo che si mangi uniformemente quando si è svegli e non ci si allena
         waking_hours = 0
         for h in range(24):
             is_sleeping = False
-            if sleep_start > sleep_end: # Scavalca notte (es 23-07)
+            if sleep_start > sleep_end:
                 if h >= sleep_start or h < sleep_end: is_sleeping = True
             else:
                 if sleep_start <= h < sleep_end: is_sleeping = True
-            
             is_working = (work_start <= h < work_end)
             if not is_sleeping and not is_working:
                 waking_hours += 1
         
         cho_rate_h = total_cho_input / waking_hours if waking_hours > 0 else 0
         
-        # Ciclo sulle 24 ore del giorno
         for h in range(24):
             status = "REST"
             is_sleeping = False
-            
-            # Check Sonno
             if sleep_start > sleep_end:
                 if h >= sleep_start or h < sleep_end: is_sleeping = True
             else:
                 if sleep_start <= h < sleep_end: is_sleeping = True
-            
             if is_sleeping: status = "SLEEP"
+            if work_start <= h < work_end: status = "WORK"
             
-            # Check Allenamento (Prioritario sul sonno se configurato male)
-            if work_start <= h < work_end:
-                status = "WORK"
-            
-            # --- BILANCIO ORARIO ---
             hourly_in = 0
-            hourly_out_liver = LIVER_DRAIN_H # Sempre attivo (cervello)
+            hourly_out_liver = LIVER_DRAIN_H 
             hourly_out_muscle = 0
             
             if status == "SLEEP":
-                hourly_in = 0 # Non mangi mentre dormi
-                # Sintesi facilitata durante il sonno (se c'è surplus precedente, ma qui è real time)
-            
+                hourly_in = 0 
             elif status == "WORK":
-                hourly_in = 0 # Assumiamo integrazione separata o nulla nel tapering
-                # Calcolo consumo lavoro
+                hourly_in = 0 
                 intensity = day.get('calculated_if', 0)
-                # Stima Kcal/h lavoro
                 kcal_work = (day.get('val', 0) * 60) / 4.184 / 0.22 if day.get('type') == 'Ciclismo' else 600 * intensity
-                # CHO usage durante lavoro (dipende da intensità, usiamo stima RER macro)
-                # IF 0.6 -> 20% CHO, IF 0.8 -> 60% CHO, IF 0.9 -> 80% CHO
                 cho_pct = max(0, (intensity - 0.5) * 2.5) 
                 cho_pct = min(1.0, cho_pct)
                 g_cho_work = (kcal_work * cho_pct) / 4.1
-                
-                # Split consumo lavoro (Muscolo vs Fegato)
-                # Più è intenso, più usa muscolo
-                liver_share = 0.15 # Il fegato contribuisce sempre un po' sotto sforzo
+                liver_share = 0.15 
                 hourly_out_muscle = g_cho_work * (1 - liver_share)
                 hourly_out_liver += g_cho_work * liver_share
-                
             elif status == "REST":
                 hourly_in = cho_rate_h
-                hourly_out_muscle = NEAT_DRAIN_H # Piccolo consumo per muoversi
+                hourly_out_muscle = NEAT_DRAIN_H 
             
-            # --- CALCOLO NETTO ---
             net_flow = hourly_in - (hourly_out_liver + hourly_out_muscle)
             
-            # Applicazione ai serbatoi (Ripartizione)
             if net_flow > 0:
-                # REFILLING (Priorità Muscolo 70/30)
-                # Se muscolo pieno, tutto a fegato (e viceversa)
-                
-                # Efficienza assorbimento (Sonno penalizza se fosse attivo, ma qui siamo svegli)
-                # Usiamo il fattore qualità del sonno del giorno PRECEDENTE/CORRENTE come efficienza metabolica generale
                 efficiency = day['sleep_factor'] 
                 real_storage = net_flow * efficiency
-                
                 to_muscle = real_storage * 0.7
                 to_liver = real_storage * 0.3
-                
-                # Overflow Logic
                 if curr_muscle + to_muscle > MAX_MUSCLE:
                     overflow = (curr_muscle + to_muscle) - MAX_MUSCLE
                     to_muscle -= overflow
-                    to_liver += overflow # Il fegato prova a prenderlo (lipogenesi dopo)
-                
+                    to_liver += overflow
                 curr_muscle = min(MAX_MUSCLE, curr_muscle + to_muscle)
                 curr_liver = min(MAX_LIVER, curr_liver + to_liver)
-                
             else:
-                # DRAINING
-                # Se stiamo lavorando, abbiamo già diviso out_muscle e out_liver
-                # Se è deficit basale, lo dividiamo 50/50 o attingiamo al fegato
-                
                 abs_deficit = abs(net_flow)
-                
                 if status == "WORK":
-                    # Il consumo è già diviso in hourly_out_...
-                    # Ma hourly_in potrebbe coprire parte. Semplifichiamo:
-                    # Applichiamo i consumi diretti
-                    # L'input copre prima il fegato (sangue), poi risparmia muscolo
-                    
-                    # Ricalcolo flussi separati con intake
-                    # Intake supporta prima il fegato (glicemia)
                     liver_balance = (hourly_in) - hourly_out_liver
-                    if liver_balance < 0:
-                        curr_liver += liver_balance # Scende
-                    else:
-                        # Surplus epatico momentaneo protegge muscolo? No, va a scorte o ossidazione
-                        curr_liver += liver_balance # Sale o pari
-                        
+                    curr_liver += liver_balance
                     curr_muscle -= hourly_out_muscle
-                    
                 else:
-                    # Deficit a riposo/sonno (Liver drain + NEAT)
-                    # Il fegato copre quasi tutto a riposo
                     curr_liver -= (abs_deficit * 0.8)
                     curr_muscle -= (abs_deficit * 0.2)
 
-            # Clamping (Non sotto zero)
             curr_muscle = max(0, curr_muscle)
             curr_liver = max(0, curr_liver)
             
-            # Costruzione Timestamp per Grafico
-            # Usiamo un datetime fittizio o reale per l'asse X
             ts = pd.Timestamp(day['date_obj']) + pd.Timedelta(hours=h)
             
             hourly_log.append({
-                "Timestamp": ts,
-                "Giorno": date_label,
-                "Ora": h,
-                "Status": status,
-                "Muscolare": curr_muscle,
-                "Epatico": curr_liver,
-                "Totale": curr_muscle + curr_liver,
-                "Zona": "Sicura" if curr_liver > 20 else "Rischio"
+                "Timestamp": ts, "Giorno": date_label, "Ora": h,
+                "Status": status, "Muscolare": curr_muscle, "Epatico": curr_liver,
+                "Totale": curr_muscle + curr_liver, "Zona": "Sicura" if curr_liver > 20 else "Rischio"
             })
 
     final_tank = tank.copy()
@@ -290,7 +222,101 @@ def calculate_hourly_tapering(subject, days_data, start_state: GlycogenState = G
     
     return pd.DataFrame(hourly_log), final_tank
 
-# funzione simulazione metabolica
+# =============================================================================
+# 3. MOTORE FISIOLOGICO MADER (CORE)
+# =============================================================================
+
+def calculate_mader_consumption(watts, subject: Subject, custom_efficiency=None):
+    VLA_SCALE = 0.07
+    K_COMB = 0.0225
+    
+    if custom_efficiency is not None:
+        eff = custom_efficiency / 100.0
+    else:
+        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
+    
+    kcal_min = (watts * 0.01433) / eff
+    vo2_demand_ml = (kcal_min / 4.85) * 1000
+    vo2_max_abs = subject.vo2_max * subject.weight_kg
+    
+    if vo2_max_abs == 0: return 0, 0
+    intensity = vo2_demand_ml / vo2_max_abs
+    
+    raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
+    vla_prod = raw_prod * VLA_SCALE
+    
+    vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
+    vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
+    net_balance = vla_prod - vla_comb
+    
+    base_rer = 0.70 + (0.18 * intensity) 
+    lactate_push = min(0.25, vla_prod * 0.15)
+    final_rer = min(1.0, max(0.7, base_rer + lactate_push))
+    cho_pct = (final_rer - 0.7) / 0.3
+    cho_aerobic = (kcal_min * cho_pct) / 4.0
+    
+    vol_dist = subject.weight_kg * 0.40
+    cho_anaerobic = max(0, net_balance) * vol_dist * 0.09
+    
+    return (cho_aerobic + cho_anaerobic), net_balance
+
+def simulate_mader_curve(subject: Subject):
+    watts_range = np.arange(0, 600, 10)
+    results = []
+    
+    if subject.sport == SportType.RUNNING:
+        active_mass_pct = 0.45 
+        K_COMB = 0.024 
+    else:
+        active_mass_pct = 0.40
+        K_COMB = 0.0225
+
+    VLA_SCALE = 0.07
+    
+    for w in watts_range:
+        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
+        kcal_min = (w * 0.01433) / eff
+        vo2_demand_ml = (kcal_min / 4.85) * 1000
+        vo2_max_abs = subject.vo2_max * subject.weight_kg
+        
+        intensity = 0
+        if vo2_max_abs > 0:
+            intensity = vo2_demand_ml / vo2_max_abs
+            
+        raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
+        vla_prod = raw_prod * VLA_SCALE
+        vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
+        vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
+        net_balance = vla_prod - vla_comb
+        vo2_demand_l = vo2_demand_ml / 1000.0
+        vo2_uptake_l = vo2_uptake / 1000.0
+
+        g_cho_min, _ = calculate_mader_consumption(w, subject, custom_efficiency=eff*100)
+        g_cho_h = g_cho_min * 60
+        
+        kcal_h = kcal_min * 60
+        g_fat_h = max(0, (kcal_h - (g_cho_h * 4)) / 9)
+
+        results.append({
+            "watts": w, "la_prod": vla_prod, "la_comb": vla_comb,
+            "net_balance": net_balance, "g_cho_h": g_cho_h, "g_fat_h": g_fat_h,
+            "vo2_demand_l": vo2_demand_l, "vo2_uptake_l": vo2_uptake_l
+        })
+        
+    df = pd.DataFrame(results)
+    
+    mlss = 0
+    try:
+        df_valid = df[df['watts'] > 50]
+        idx_mlss = (df_valid['net_balance']).abs().idxmin()
+        mlss = df.loc[idx_mlss, 'watts']
+    except: mlss = 0
+        
+    return df, mlss
+
+# =============================================================================
+# 4. SIMULATORE GARA (TIME SERIES)
+# =============================================================================
 
 def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, cho_per_unit_g, crossover_pct, 
                         tau_absorption, subject_obj, activity_params, oxidation_efficiency_input=0.80, 
@@ -304,7 +330,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     current_liver_glycogen = subject_data['liver_glycogen_g']
     initial_muscle_glycogen = current_muscle_glycogen
     
-    # Stato Lattato Iniziale
     current_lactate = 1.0 
     
     avg_watts = activity_params.get('avg_watts', 200)
@@ -472,6 +497,9 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 total_cho_demand = kcal_cho_demand / 4.1
                 g_fat = (current_kcal_demand * (1.0-cho_ratio) / 9.0) if current_kcal_demand > 0 else 0
         
+        # FIX DEFINITIVO VARIABILE
+        total_cho_g_min = total_cho_demand 
+
         if t > 0:
             current_lactate += net_lactate_change
             if current_lactate < 0.8: current_lactate = 0.8 
@@ -537,322 +565,76 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         "cho_pct": cho_ratio * 100
     }
     return pd.DataFrame(results), stats
-# --- 4. CALCOLO REVERSE STRATEGY ---
 
-# --- 4. CALCOLO REVERSE STRATEGY (AGGIORNATA) ---
-
-def calculate_minimum_strategy(tank, duration, subj, params, curve_data, mix_type, intake_mode, intake_cutoff_min=0, variability_index=1.0, intensity_series=None, use_mader=False, running_method="PHYSIOLOGICAL"):
-    """
-    Calcola la strategia nutrizionale minima necessaria.
-    Itera simulazioni aumentando l'intake finché i serbatoi non rimangono sopra la soglia di sicurezza.
-    """
-    optimal = None
-    
-    # Definiamo i limiti di sicurezza (Stop prima di svuotare tutto)
-    MIN_LIVER_SAFE = 5.0   # Grammi minimi fegato
-    MIN_MUSCLE_SAFE = 20.0 # Grammi minimi muscolo
-    
-    # Iteriamo l'intake da 0 a 120 g/h con step di 5g
-    for intake in range(0, 125, 5):
-        
-        # Eseguiamo la simulazione passando TUTTI i parametri, incluso running_method
-        df, stats = simulate_metabolism(
-            subject_data=tank, 
-            duration_min=duration, 
-            constant_carb_intake_g_h=intake, 
-            cho_per_unit_g=30, # Valore dummy per il calcolo continuo
-            crossover_pct=75,  # Valore dummy se usiamo Mader
-            tau_absorption=20, 
-            subject_obj=subj, 
-            activity_params=params, 
-            mix_type_input=mix_type, 
-            metabolic_curve=curve_data,
-            intake_mode=intake_mode, 
-            intake_cutoff_min=intake_cutoff_min,
-            variability_index=variability_index,
-            intensity_series=intensity_series,
-            use_mader=use_mader,          # <--- Fondamentale
-            running_method=running_method # <--- NUOVO: Passa la modalità Corsa
-        )
-        
-        # Verifichiamo i minimi raggiunti durante la gara
-        min_liver = df['Residuo Epatico'].min()
-        min_muscle = df['Residuo Muscolare'].min()
-        
-        # Criterio di successo: Non andiamo mai sotto i minimi di sicurezza
-        if min_liver > MIN_LIVER_SAFE and min_muscle > MIN_MUSCLE_SAFE:
-            optimal = intake
-            break
-            
-    return optimal
-# ==============================================================================
-# MODULO MORTON / SKIBA (W' BALANCE)
-# ==============================================================================
-
-def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_interval_sec=60):
-    """
-    Calcola il bilancio di W' (W_prime) utilizzando il modello di Skiba (2012)
-    per il recupero esponenziale variabile.
-    
-    Args:
-        intensity_series: Lista di valori di potenza (Watt).
-        cp_watts: Critical Power dell'atleta.
-        w_prime_j: Capacità di lavoro anaerobico (Joule).
-        sampling_interval_sec: Durata di ogni step (default 60s per la logica dell'app).
-    
-    Returns:
-        Lista con i valori residui di W' (Joule) per ogni istante.
-    """
-    balance = []
-    current_w = w_prime_j
-    
-    for p in intensity_series:
-        if p > cp_watts:
-            # --- DEPLEZIONE (Lineare) ---
-            # W' si consuma linearmente in base a quanto sei sopra la CP
-            usage = (p - cp_watts) * sampling_interval_sec
-            current_w -= usage
-        else:
-            # --- RECUPERO (Esponenziale Skiba) ---
-            # La velocità di recupero dipende da quanto vai PIANO rispetto alla CP.
-            # Più sei sotto soglia, più veloce ricarichi.
-            d_cp = cp_watts - p
-            if d_cp < 0: d_cp = 0 # Safety check
-            
-            # Costante di tempo Tau dinamica (Skiba 2012)
-            # Tau = 546 * e^(-0.01 * D_CP) + 316
-            tau = 546 * math.exp(-0.01 * d_cp) + 316
-            
-            # Formula di ricostituzione asintotica verso W'_max
-            # W_new = W_max - (W_max - W_prev) * e^(-dt/tau)
-            current_w = w_prime_j - (w_prime_j - current_w) * math.exp(-sampling_interval_sec / tau)
-
-        # Clamp ai limiti fisici (0 = Esaurimento, W'_max = Pieno)
-        if current_w > w_prime_j: current_w = w_prime_j
-        if current_w < 0: current_w = 0 
-        
-        balance.append(current_w)
-        
-    return balance
-
-def calculate_mader_consumption(watts, subject: Subject, custom_efficiency=None):
-    VLA_SCALE = 0.07
-    K_COMB = 0.0225
-    
-    if custom_efficiency is not None:
-        eff = custom_efficiency / 100.0
-    else:
-        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
-    
-    kcal_min = (watts * 0.01433) / eff
-    vo2_demand_ml = (kcal_min / 4.85) * 1000
-    vo2_max_abs = subject.vo2_max * subject.weight_kg
-    
-    if vo2_max_abs == 0: return 0, 0
-    intensity = vo2_demand_ml / vo2_max_abs
-    
-    raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
-    vla_prod = raw_prod * VLA_SCALE
-    
-    vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
-    vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
-    net_balance = vla_prod - vla_comb
-    
-    base_rer = 0.70 + (0.18 * intensity) 
-    lactate_push = min(0.25, vla_prod * 0.15)
-    final_rer = min(1.0, max(0.7, base_rer + lactate_push))
-    cho_pct = (final_rer - 0.7) / 0.3
-    cho_aerobic = (kcal_min * cho_pct) / 4.0
-    
-    vol_dist = subject.weight_kg * 0.40
-    cho_anaerobic = max(0, net_balance) * vol_dist * 0.09
-    
-    return (cho_aerobic + cho_anaerobic), net_balance
-
-def simulate_mader_curve(subject: Subject):
-    watts_range = np.arange(0, 600, 10)
-    results = []
-    
-    if subject.sport == SportType.RUNNING:
-        active_mass_pct = 0.45 
-        K_COMB = 0.024 
-    else:
-        active_mass_pct = 0.40
-        K_COMB = 0.0225
-
-    VLA_SCALE = 0.07
-    
-    for w in watts_range:
-        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
-        kcal_min = (w * 0.01433) / eff
-        vo2_demand_ml = (kcal_min / 4.85) * 1000
-        vo2_max_abs = subject.vo2_max * subject.weight_kg
-        
-        intensity = 0
-        if vo2_max_abs > 0:
-            intensity = vo2_demand_ml / vo2_max_abs
-            
-        raw_prod = (subject.vlamax * 60) * (max(0, intensity) ** 3)
-        vla_prod = raw_prod * VLA_SCALE
-        vo2_uptake = min(vo2_demand_ml, vo2_max_abs)
-        vla_comb = K_COMB * (vo2_uptake / subject.weight_kg)
-        net_balance = vla_prod - vla_comb
-        vo2_demand_l = vo2_demand_ml / 1000.0
-        vo2_uptake_l = vo2_uptake / 1000.0
-
-        g_cho_min, _ = calculate_mader_consumption(w, subject, custom_efficiency=eff*100)
-        g_cho_h = g_cho_min * 60
-        
-        kcal_h = kcal_min * 60
-        g_fat_h = max(0, (kcal_h - (g_cho_h * 4)) / 9)
-
-        results.append({
-            "watts": w, "la_prod": vla_prod, "la_comb": vla_comb,
-            "net_balance": net_balance, "g_cho_h": g_cho_h, "g_fat_h": g_fat_h,
-            "vo2_demand_l": vo2_demand_l, "vo2_uptake_l": vo2_uptake_l
-        })
-        
-    df = pd.DataFrame(results)
-    
-    mlss = 0
-    try:
-        df_valid = df[df['watts'] > 50]
-        idx_mlss = (df_valid['net_balance']).abs().idxmin()
-        mlss = df.loc[idx_mlss, 'watts']
-    except: mlss = 0
-        
-    return df, mlss
-
-# --- 7. SOLVER INVERSO (CALIBRAZIONE) ---
+# =============================================================================
+# 5. SOLVERS E CALIBRATORI
+# =============================================================================
 
 def find_vo2max_from_ftp(ftp_target, weight, vlamax_guess, sport_type):
-    """
-    Trova il VO2max per una data FTP.
-    Include un 'pavimento' basato sul costo energetico minimo.
-    """
     from data_models import Sex, MenstrualPhase
     
-    # 1. Calcolo Minimo Teorico (Floor)
-    # Non puoi avere un VO2max inferiore a quello che usi per pedalare alla FTP!
     eff = 0.23 if sport_type.name == 'CYCLING' else 0.21
     kcal_min_ftp = (ftp_target * 0.01433) / eff
-    min_liters = kcal_min_ftp / 5.0 # ipotizzando efficienza metabolica max
-    min_vo2_abs = (min_liters * 1000 / weight) * 1.02 # +2% margine
+    min_liters = kcal_min_ftp / 5.0 
+    min_vo2_abs = (min_liters * 1000 / weight) * 1.02 
     
-    # Range Ricerca
     low = min_vo2_abs
     high = 90.0
     tolerance = 0.2
     
-    # Dummy Subject per simulazione
     dummy_subj = Subject(
         weight_kg=weight, vo2_max=60, vlamax=vlamax_guess, sport=sport_type,
-        # Parametri default obbligatori per evitare errori
         height_cm=175, body_fat_pct=0.15, sex=Sex.MALE, glycogen_conc_g_kg=15.0, 
         uses_creatine=False, menstrual_phase=MenstrualPhase.NONE, 
         vo2max_absolute_l_min=(60 * weight) / 1000, muscle_mass_kg=None
     )
     
     found_vo2 = low
-    
-    # Bisezione
     iterations = 0
     while (high - low) > tolerance and iterations < 20:
         mid_vo2 = (low + high) / 2
         dummy_subj.vo2_max = mid_vo2
         dummy_subj.vo2max_absolute_l_min = (mid_vo2 * weight) / 1000
-        
         _, mlss_calc = simulate_mader_curve(dummy_subj)
-        
-        if mlss_calc < ftp_target:
-            low = mid_vo2 # Serve più motore
-        else:
-            high = mid_vo2 # Motore troppo grosso
-            
+        if mlss_calc < ftp_target: low = mid_vo2 
+        else: high = mid_vo2 
         iterations += 1
         found_vo2 = mid_vo2
-        
     return round(found_vo2, 1)
 
 def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known, sport_type):
-    """
-    Trova la VLaMax basandosi su una prestazione massimale breve.
-    Include limiti di sicurezza per evitare valori non fisiologici.
-    """
-    # Limiti fisiologici
     VLA_MIN_LIMIT = 0.25
-    VLA_MAX_LIMIT = 1.0
-    MAX_LACTATE_TOLERANCE = 18.0 # mmol/L accumulabili max
+    VLA_MAX_LIMIT = 0.90 
+    MAX_LACTATE_TOLERANCE = 20.0 
     
     eff = 0.23 if sport_type.name == 'CYCLING' else 0.21
-    
-    # 1. Calcolo Energetico
     kcal_demand_min = (short_power * 0.01433) / eff
     
-    # Contributo Aerobico (VO2 medio nel test ~95% del max)
-    avg_vo2_l_min = (vo2max_known * weight / 1000.0) * 0.95
-    kcal_aerobic_min = avg_vo2_l_min * 5.0 # kcal/L ossigeno
+    if duration_min <= 3.5: kinetic_factor = 0.90 
+    else: kinetic_factor = 0.95
+    avg_vo2_l_min = (vo2max_known * weight / 1000.0) * kinetic_factor
+    kcal_aerobic_min = avg_vo2_l_min * 5.0 
     
-    # Gap Anaerobico
     kcal_gap_total = (kcal_demand_min - kcal_aerobic_min) * duration_min
+    if kcal_gap_total <= 0: return VLA_MIN_LIMIT
     
-    # Se il gap è negativo o nullo, significa che il VO2max basta e avanza.
-    # In questo caso l'atleta è "Tutto Motore", ma la VLaMax non può essere 0.
-    # Ritorniamo il minimo fisiologico.
-    if kcal_gap_total <= 0:
-        return VLA_MIN_LIMIT
-        
-    # 2. Iterazione Bisezione
     low = VLA_MIN_LIMIT
     high = VLA_MAX_LIMIT
     found_vla = 0.5
     
     for _ in range(15):
         mid_vla = (low + high) / 2
+        p_vo2max = (vo2max_known * weight / 1000.0 * 5.0 / 0.01433) * eff 
+        intensity = short_power / p_vo2max
+        calc_intensity = min(1.5, max(1.0, intensity)) 
         
-        # Stimiamo accumulo con questa VLaMax
-        # Intensità relativa
-        vo2_demand_l = kcal_demand_min / 4.85
-        intensity = vo2_demand_l / (vo2max_known * weight / 1000.0)
-        
-        # Mader Production (Force intensity >= 1.05 for short max effort simulation)
-        calc_intensity = max(1.05, intensity)
         raw_prod = (mid_vla * 60) * (calc_intensity ** 3)
-        vla_prod_rate = raw_prod * 0.07
-        
-        # Clearance (Max capacity during effort)
-        vla_comb_rate = 0.0225 * vo2max_known
+        vla_prod_rate = raw_prod * 0.07 
+        vla_comb_rate = 0.0225 * vo2max_known 
         
         net_accumulation = (vla_prod_rate - vla_comb_rate) * duration_min
         
-        if net_accumulation > MAX_LACTATE_TOLERANCE:
-            high = mid_vla # Troppo accumulo -> Riduci VLa
-        else:
-            low = mid_vla  # Poco accumulo -> Alza VLa
-            
+        if net_accumulation > MAX_LACTATE_TOLERANCE: high = mid_vla 
+        else: low = mid_vla 
         found_vla = mid_vla
-        
     return round(found_vla, 2)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
