@@ -300,18 +300,20 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                         use_mader=False, running_method="PHYSIOLOGICAL"):
     
     results = []
-    initial_muscle_glycogen = subject_data['muscle_glycogen_g']
-    current_muscle_glycogen = initial_muscle_glycogen
+    current_muscle_glycogen = subject_data['muscle_glycogen_g']
     current_liver_glycogen = subject_data['liver_glycogen_g']
-    current_lactate = 1.0 # mmol/L (valore basale a riposo)
+    initial_muscle_glycogen = current_muscle_glycogen
     
-    # PARAMETRI ATTIVITÀ
+    # Stato Lattato Iniziale
+    current_lactate = 1.0 
+    
     avg_watts = activity_params.get('avg_watts', 200)
     np_watts = activity_params.get('np_watts', avg_watts)
     ftp_watts = activity_params.get('ftp_watts', 250)
-    
     threshold_hr = activity_params.get('threshold_hr', 170)
     gross_efficiency = activity_params.get('efficiency', 22.0)
+    eff_input = activity_params.get('efficiency', 22.0)
+    
     mode = activity_params.get('mode', 'cycling')
     avg_hr = activity_params.get('avg_hr', 150)
     
@@ -325,22 +327,13 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     else:
         intensity_factor_reference = 0.8
     
-    # --- FIX RUNNING: CALCOLO KCAL BASE ---
+    # CALCOLO CONSUMO CALORICO BASE
     if mode == 'cycling':
-        # Ciclismo: Fisica pura (Watt -> Kcal)
         kcal_per_min_base = (avg_watts * 60) / 4184 / (gross_efficiency / 100.0)
     else:
-        # Running: Stima basata su VO2max invece che formula generica
-        # Assumiamo che la Soglia (HR Threshold) sia al 90% del VO2max
         vo2_threshold_pct = 0.90
-        
-        # VO2 stimato (ml/kg/min) in base all'intensità cardiaca rispetto alla soglia
         vo2_estimated_relative = subject_obj.vo2_max * vo2_threshold_pct * intensity_factor_reference
-        
-        # VO2 assoluto (L/min)
         vo2_estimated_absolute = (vo2_estimated_relative * subject_obj.weight_kg) / 1000.0
-        
-        # Kcal/min (1 L O2 ~ 4.85 Kcal a RER misto/alto)
         kcal_per_min_base = vo2_estimated_absolute * 4.85
         
     is_lab_data = True if metabolic_curve is not None else False 
@@ -363,13 +356,10 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
     total_exo_oxidation_cumulative = 0.0
     
     units_per_hour = constant_carb_intake_g_h / cho_per_unit_g if cho_per_unit_g > 0 else 0
-    intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0
-    eff_input = activity_params.get('efficiency', 22.0)
+    intake_interval_min = round(60 / units_per_hour) if units_per_hour > 0 else duration_min + 1
+    is_input_zero = constant_carb_intake_g_h == 0
     
-    # Loop Temporale
     for t in range(int(duration_min) + 1):
-        
-        # Determine Current Intensity
         current_val = base_val
         current_if_moment = intensity_factor_reference
 
@@ -379,7 +369,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         elif variability_index > 1.0:
              current_if_moment *= variability_index
         
-        # Calcolo Domanda Energetica Istantanea
         current_kcal_demand = 0.0
         if mode == 'cycling':
             instant_power = current_val
@@ -389,13 +378,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 current_eff = max(15.0, gross_efficiency - loss)
             current_kcal_demand = (instant_power * 60) / 4184 / (current_eff / 100.0)
         else: 
-            # Running: Drift cardiaco (aumento costo apparente)
             drift_factor = 1.0
             if t > 60: drift_factor += (t - 60) * 0.0005 
             demand_scaling = current_if_moment / intensity_factor_reference if intensity_factor_reference > 0 else 1.0
             current_kcal_demand = kcal_per_min_base * drift_factor * demand_scaling
         
-        # --- INTAKE ---
         instantaneous_input_g_min = 0.0 
         in_feeding_window = t <= (duration_min - intake_cutoff_min)
         
@@ -411,7 +398,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             else:
                 instantaneous_input_g_min = constant_carb_intake_g_h / 60.0
         
-        # Exogenous Oxidation Logic
         user_intake_rate = constant_carb_intake_g_h / 60.0 
         effective_target = min(user_intake_rate, max_exo_rate_g_min) * oxidation_efficiency_input
         if is_input_zero: effective_target = 0.0
@@ -421,23 +407,20 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 current_exo_oxidation_g_min *= (1 - alpha) 
             else:
                 current_exo_oxidation_g_min += alpha * (effective_target - current_exo_oxidation_g_min)
-            
             current_exo_oxidation_g_min = max(0.0, current_exo_oxidation_g_min)
-            
             gut_accumulation_total += (instantaneous_input_g_min * oxidation_efficiency_input)
             real_oxidation = min(current_exo_oxidation_g_min, gut_accumulation_total)
             current_exo_oxidation_g_min = real_oxidation
             gut_accumulation_total -= real_oxidation
             if gut_accumulation_total < 0: gut_accumulation_total = 0 
-            
             total_intake_cumulative += instantaneous_input_g_min 
             total_exo_oxidation_cumulative += current_exo_oxidation_g_min
         
-        # --- CONSUMO SUBSTRATI ---
         cho_ratio = 1.0
         rer = 0.85
         total_cho_demand = 0.0
         g_fat = 0.0
+        net_lactate_change = 0.0
 
         if is_lab_data:
             cho_rate_gh, fat_rate_gh = interpolate_consumption(current_val, metabolic_curve)
@@ -449,66 +432,35 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
             g_fat = fat_rate_gh / 60.0
             rer = 0.85 
         else:
-            # --- INTEGRAZIONE MADER (AVANZATA) ---
             if use_mader:
-                mader_watts_input = current_val # Default Ciclismo
-                
-                # Logica Specifica Corsa
+                mader_watts_input = current_val 
                 if mode == 'running':
-                    # A. STRADA FISIOLOGICA (HR -> Kcal -> Watt Equivalenti)
                     if running_method == "PHYSIOLOGICAL":
-                         # Invertiamo la formula delle Kcal per trovare i Watt equivalenti allo sforzo cardiaco
-                         # Kcal/min = (Watts * 0.01433) / 0.21 (Efficienza Corsa)
                          mader_watts_input = (current_kcal_demand * 0.21) / 0.01433
-                    
-                    # B. STRADA MECCANICA (Speed -> Watt)
                     else:
-                        if current_val > 50: # Input già in Watt (Stryd)
-                             mader_watts_input = current_val
-                        else:
-                             # Input in km/h -> Watt
-                             speed_ms = current_val / 3.6
-                             # Formula approx: Peso * Speed(m/s) * Costo(J/kg/m ~1.04)
-                             mader_watts_input = speed_ms * subject_obj.weight_kg * 1.04
+                        if current_val > 50: mader_watts_input = current_val
+                        else: mader_watts_input = (current_val / 3.6) * subject_obj.weight_kg * 1.04
 
-                # Calcolo Mader Puro con Watt (reali o stimati)
-                # Calcolo CHO (usiamo calculate_mader_consumption aggiornata)
-                # Passiamo l'efficienza corretta (eff * 100 per convertirla in %)
-                # --- CHIAMATA AGGIORNATA A MADER ---
                 mader_cho_g_min, net_bal = calculate_mader_consumption(
-                    mader_watts_input, 
-                    subject_obj, 
-                    custom_efficiency=eff_input
+                    mader_watts_input, subject_obj, custom_efficiency=eff_input
                 )
                 
                 total_cho_demand = mader_cho_g_min
-                net_lactate_change = net_bal # Salviamo il cambiamento netto
-                g_cho_h = g_cho_min * 60
-                total_cho_demand = mader_cho_g_min
+                net_lactate_change = net_bal 
                 
-                # Calcola grassi per differenza calorica
-                # Usiamo le Kcal calcolate dal modello HR (current_kcal_demand) per coerenza col dispendio totale
                 kcal_cho = total_cho_demand * 4.0
                 kcal_fat = max(0, current_kcal_demand - kcal_cho)
                 g_fat = kcal_fat / 9.0
                 
-                # Stima parametri per output
-                if current_kcal_demand > 0:
-                    cho_ratio = kcal_cho / current_kcal_demand
+                if current_kcal_demand > 0: cho_ratio = kcal_cho / current_kcal_demand
                 rer = 0.7 + (0.3 * cho_ratio)
             else:
-                # LOGICA STANDARD (CROSSOVER)
                 standard_crossover = 75.0 
                 crossover_val = crossover_pct if crossover_pct else standard_crossover
                 if_shift = (standard_crossover - crossover_val) / 100.0
                 effective_if_for_rer = max(0.3, current_if_moment + if_shift)
-                g_fat = (current_kcal_demand * (1.0-cho_ratio) / 9.0) if current_kcal_demand > 0 else 0
-                net_lactate_change = 0.0 # Nessun calcolo lattato nel modello standard
-                
                 rer = calculate_rer_polynomial(effective_if_for_rer)
-                base_cho_ratio = (rer - 0.70) * 3.45
-                base_cho_ratio = max(0.0, min(1.0, base_cho_ratio))
-                
+                base_cho_ratio = max(0.0, min(1.0, (rer - 0.70) * 3.45))
                 current_cho_ratio = base_cho_ratio
                 if current_if_moment < 0.85 and t > 60:
                     hours_past = (t - 60) / 60.0
@@ -520,9 +472,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
                 total_cho_demand = kcal_cho_demand / 4.1
                 g_fat = (current_kcal_demand * (1.0-cho_ratio) / 9.0) if current_kcal_demand > 0 else 0
         
-        total_cho_g_min = total_cho_demand
-        
-        # --- RIPARTIZIONE GLICOGENO ---
+        if t > 0:
+            current_lactate += net_lactate_change
+            if current_lactate < 0.8: current_lactate = 0.8 
+            if current_lactate > 22.0: current_lactate = 22.0 
+
         muscle_fill_state = current_muscle_glycogen / initial_muscle_glycogen if initial_muscle_glycogen > 0 else 0
         muscle_contribution_factor = math.pow(muscle_fill_state, 0.6) 
         muscle_usage_g_min = total_cho_g_min * muscle_contribution_factor
@@ -535,14 +489,11 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         from_liver = min(remaining_blood_demand, max_liver_output)
         if current_liver_glycogen <= 0: from_liver = 0
         
-        # Update Riserve
         if t > 0:
             current_muscle_glycogen -= muscle_usage_g_min
             current_liver_glycogen -= from_liver
-            
             if current_muscle_glycogen < 0: current_muscle_glycogen = 0
             if current_liver_glycogen < 0: current_liver_glycogen = 0
-            
             total_fat_burned_g += g_fat
             total_muscle_used += muscle_usage_g_min
             total_liver_used += from_liver
@@ -553,39 +504,24 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         elif current_muscle_glycogen < 100: status_label = "Warning (Gambe Vuote)"
         
         total_g_min = max(1.0, muscle_usage_g_min + from_liver + from_exogenous + g_fat)
-
-        # --- AGGIORNAMENTO DINAMICO LATTATO ---
-        if t > 0:
-            current_lactate += net_lactate_change
-            # Clamp fisiologici
-            if current_lactate < 0.8: current_lactate = 0.8 # Minimo basale
-            if current_lactate > 22.0: current_lactate = 22.0 # Max fisiologico (dolore puro)
         
         results.append({
             "Time (min)": t,
-            "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
-            "Glicogeno Epatico (g)": from_liver * 60,
-            "Carboidrati Esogeni (g)": from_exogenous * 60, 
-            "Ossidazione Lipidica (g)": g_fat * 60,
-            "Pct_Muscle": f"{(muscle_usage_g_min / total_g_min * 100):.1f}%",
-            "Pct_Liver": f"{(from_liver / total_g_min * 100):.1f}%",
-            "Pct_Exo": f"{(from_exogenous / total_g_min * 100):.1f}%",
-            "Pct_Fat": f"{(g_fat / total_g_min * 100):.1f}%",
             "Residuo Muscolare": current_muscle_glycogen,
             "Residuo Epatico": current_liver_glycogen,
             "Residuo Totale": current_muscle_glycogen + current_liver_glycogen,
             "Target Intake (g/h)": constant_carb_intake_g_h,
             "Gut Load": gut_accumulation_total,
             "Stato": status_label,
-            "CHO %": cho_ratio * 100,
-            "Intake Cumulativo (g)": total_intake_cumulative,
-            "Ossidazione Cumulativa (g)": total_exo_oxidation_cumulative,
+            "Glicogeno Muscolare (g)": muscle_usage_g_min * 60, 
+            "Glicogeno Epatico (g)": from_liver * 60,
+            "Carboidrati Esogeni (g)": from_exogenous * 60, 
+            "Ossidazione Lipidica (g)": g_fat * 60,
             "Intensity Factor (IF)": current_if_moment,
-            "Lattato Stimato (mmol/L)": current_lactate, # <--- NUOVO
+            "Lattato Stimato (mmol/L)": current_lactate,
             "Net Lactate Change": net_lactate_change
         })
     
-    # Statistiche Finali
     total_kcal_final = (avg_watts * duration_min * 60) / 4184 / (gross_efficiency/100)
     final_total_glycogen = current_muscle_glycogen + current_liver_glycogen
     
@@ -601,7 +537,6 @@ def simulate_metabolism(subject_data, duration_min, constant_carb_intake_g_h, ch
         "cho_pct": cho_ratio * 100
     }
     return pd.DataFrame(results), stats
-
 # --- 4. CALCOLO REVERSE STRATEGY ---
 
 # --- 4. CALCOLO REVERSE STRATEGY (AGGIORNATA) ---
@@ -898,6 +833,7 @@ def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known,
         found_vla = mid_vla
         
     return round(found_vla, 2)
+
 
 
 
