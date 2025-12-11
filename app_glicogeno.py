@@ -169,14 +169,30 @@ with st.sidebar:
                 
                 # 2. Secondo passaggio: Troviamo la VLaMax reale usando quel VO2 e il test breve
                 c_vla = logic.find_vlamax_from_short_test(val_short, dur_short, weight, c_vo2, selected_sport)
+
+                # --- INTELLIGENZA DI CONTROLLO ---
+                if c_vla >= 0.9:
+                    st.warning("⚠️ **Risultato Anomalo Rilevato**")
+                    st.markdown(f"""
+                    Il modello ha calcolato una **VLaMax estrema ({c_vla:.2f})**. 
+                    Questo accade solitamente se il **Test Breve non è stato massimale**.
+                    
+                    Il sistema crede che tu ti sia "riempito di lattato" a soli {val_short}W. 
+                    Se avevi ancora margine, il calcolo è falsato.
+                    
+                    👉 **Consiglio:** Usa la modalità "1 Punto (Solo FTP)" finché non fai un test massimale reale.
+                    """)
+                else:
+                    # Se è verosimile, aggiorna lo stato
+                    # 3. Raffinamento (Opzionale): Ricalcoliamo VO2 con la nuova VLaMax
+                    # (Per convergere meglio, si potrebbe iterare 2-3 volte, ma una basta per stima solida)
+                    c_vo2_final = logic.find_vo2max_from_ftp(val_ftp, weight, c_vla, selected_sport)
+                    st.session_state['calculated_vo2'] = c_vo2_final
+                    st.session_state['calculated_vla'] = c_vla
+                    #st.balloons()
                 
-                # 3. Raffinamento (Opzionale): Ricalcoliamo VO2 con la nuova VLaMax
-                # (Per convergere meglio, si potrebbe iterare 2-3 volte, ma una basta per stima solida)
-                c_vo2_final = logic.find_vo2max_from_ftp(val_ftp, weight, c_vla, selected_sport)
                 
-                st.session_state['calculated_vo2'] = c_vo2_final
-                st.session_state['calculated_vla'] = c_vla
-                st.balloons()
+                
                 
         user_vo2 = st.session_state.get('calculated_vo2', 55.0)
         user_vlamax = st.session_state.get('calculated_vla', 0.5)
@@ -1456,6 +1472,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
