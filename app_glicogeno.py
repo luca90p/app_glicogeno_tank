@@ -110,6 +110,11 @@ with st.sidebar:
         selected_sport = SportType.CYCLING
         sim_method = "MECHANICAL" # Ciclismo è sempre meccanico (Watt)
 
+    st.markdown("---")
+    
+    # 2. PESO (Spostato qui per renderlo globale)
+    weight = st.number_input("Peso Corporeo (kg)", 40.0, 120.0, 70.0, step=0.5)
+
     st.divider()
 
     st.header("2. Fisiologia (Calibrazione)")
@@ -118,7 +123,6 @@ with st.sidebar:
     input_mode = st.radio("Metodo Configurazione:", ["Manuale (Esperto)", "Calcola da FTP (Consigliato)"], index=1)
     
     # 2. VLaMax (Profilo Atleta)
-    # La VLaMax è difficile da calcolare senza test specifici, meglio lasciarla come scelta qualitativa
     vlamax_archetypes = {
         "Diesel (Maratoneta/Ultra)": 0.30,
         "Passista (Granfondo)": 0.45,
@@ -126,7 +130,6 @@ with st.sidebar:
         "Turbo (Velocista/Pistard)": 0.85
     }
     st.write("**Profilo Anaerobico (VLaMax)**")
-    st.caption("Che tipo di atleta sei? Quanto sei esplosivo?")
     selected_arch = st.selectbox("Archetipo", list(vlamax_archetypes.keys()), index=1, label_visibility="collapsed")
     base_vla = vlamax_archetypes[selected_arch]
     
@@ -145,16 +148,21 @@ with st.sidebar:
             ref_val = st.number_input("Critical Power / FTP (Watt)", 100, 600, 280, help="Se usi Stryd metti i Watt, altrimenti stima: Peso x 4 circa")
             
         if st.button("🔄 Calcola VO2max da FTP"):
+            # Ora 'weight' è definito qui sopra, quindi non darà errore!
             with st.spinner("Inversione del modello Mader..."):
-                calc_vo2 = logic.find_vo2max_from_ftp(ref_val, weight, user_vlamax, selected_sport)
-                st.session_state['calculated_vo2'] = calc_vo2
-                st.success(f"VO2max Stimato: {calc_vo2:.1f}")
+                try:
+                    calc_vo2 = logic.find_vo2max_from_ftp(ref_val, weight, user_vlamax, selected_sport)
+                    st.session_state['calculated_vo2'] = calc_vo2
+                    st.success(f"VO2max Stimato: {calc_vo2:.1f}")
+                except AttributeError:
+                    st.error("Errore: Assicurati di aver aggiunto la funzione 'find_vo2max_from_ftp' nel file logic.py")
         
         # Recupera il valore calcolato o usa un default
         user_vo2 = st.session_state.get('calculated_vo2', 55.0)
         st.metric("VO2max Attivo", f"{user_vo2:.1f}", help="Calcolato per far coincidere la MLSS del modello con il tuo FTP.")
 
     st.markdown("---")
+    st.caption(f"⚙️ Configurazione: {selected_sport.name} | {sim_method}")
 
 # --- FINE BLOCCO SIDEBAR ---
 
@@ -170,7 +178,7 @@ with tab1:
     with col_in:
         st.subheader("1. Parametri Antropometrici")
         # Input biometrici (rimangono qui per comodità di tuning)
-        weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 74.0, 0.5)
+        #weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 74.0, 0.5)
         height = st.slider("Altezza (cm)", 150, 210, 187, 1)
         bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 11.0, 0.5) / 100.0
         
@@ -1426,6 +1434,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
