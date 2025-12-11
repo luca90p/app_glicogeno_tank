@@ -112,27 +112,49 @@ with st.sidebar:
 
     st.divider()
 
-    st.header("2. Fisiologia (Mader)")
-    # 1. VO2max
-    user_vo2 = st.number_input(
-        "VO2max (ml/kg/min)", 
-        min_value=30, max_value=90, value=55, step=1,
-        help="Cilindrata aerobica."
-    )
+    st.header("2. Fisiologia (Calibrazione)")
     
-    # 2. VLaMax
+    # MODALITÀ DI INPUT
+    input_mode = st.radio("Metodo Configurazione:", ["Manuale (Esperto)", "Calcola da FTP (Consigliato)"], index=1)
+    
+    # 2. VLaMax (Profilo Atleta)
+    # La VLaMax è difficile da calcolare senza test specifici, meglio lasciarla come scelta qualitativa
     vlamax_archetypes = {
         "Diesel (Maratoneta/Ultra)": 0.30,
         "Passista (Granfondo)": 0.45,
         "Puncheur (Scattante)": 0.65,
         "Turbo (Velocista/Pistard)": 0.85
     }
-    selected_arch = st.selectbox("Archetipo", list(vlamax_archetypes.keys()), index=1)
+    st.write("**Profilo Anaerobico (VLaMax)**")
+    st.caption("Che tipo di atleta sei? Quanto sei esplosivo?")
+    selected_arch = st.selectbox("Archetipo", list(vlamax_archetypes.keys()), index=1, label_visibility="collapsed")
     base_vla = vlamax_archetypes[selected_arch]
-    user_vlamax = st.slider("VLaMax (mmol/L/s)", 0.2, 1.0, base_vla, 0.05)
+    
+    # Slider VLaMax (sempre visibile per fine tuning)
+    user_vlamax = st.slider("VLaMax Stimata", 0.2, 1.0, base_vla, 0.05)
+
+    # 1. VO2max (Il Motore)
+    if input_mode == "Manuale (Esperto)":
+        user_vo2 = st.number_input("VO2max (ml/kg/min)", 30, 90, 55, 1)
+    else:
+        # CALCOLO AUTOMATICO
+        if selected_sport == SportType.CYCLING:
+            ref_val = st.number_input("Il tuo FTP attuale (Watt)", 100, 500, 250)
+        else:
+            # Per la corsa usiamo un FTP stimato o CP
+            ref_val = st.number_input("Critical Power / FTP (Watt)", 100, 600, 280, help="Se usi Stryd metti i Watt, altrimenti stima: Peso x 4 circa")
+            
+        if st.button("🔄 Calcola VO2max da FTP"):
+            with st.spinner("Inversione del modello Mader..."):
+                calc_vo2 = logic.find_vo2max_from_ftp(ref_val, weight, user_vlamax, selected_sport)
+                st.session_state['calculated_vo2'] = calc_vo2
+                st.success(f"VO2max Stimato: {calc_vo2:.1f}")
+        
+        # Recupera il valore calcolato o usa un default
+        user_vo2 = st.session_state.get('calculated_vo2', 55.0)
+        st.metric("VO2max Attivo", f"{user_vo2:.1f}", help="Calcolato per far coincidere la MLSS del modello con il tuo FTP.")
 
     st.markdown("---")
-    st.caption(f"⚙️ Configurazione: {selected_sport.name} | {sim_method}")
 
 # --- FINE BLOCCO SIDEBAR ---
 
@@ -1404,6 +1426,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
