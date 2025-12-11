@@ -648,17 +648,26 @@ def calculate_w_prime_balance(intensity_series, cp_watts, w_prime_j, sampling_in
 
 # --- MOTORE FISIOLOGICO MADER ---
 
-def calculate_mader_consumption(watts, subject: Subject):
+def calculate_mader_consumption(watts, subject: Subject, custom_efficiency=None):
     """
     Calcola il consumo di CHO (g/min) basato su VO2max e VLaMax.
-    MODELLO CORRETTO v2.0 (Calibrato)
+    Supporta efficienza personalizzata.
     """
     # 0. Costanti di Calibrazione
-    VLA_SCALE = 0.07  # Riduce la produzione teorica a quella sistemica reale (Appearance Rate)
-    K_COMB = 0.0225   # Costante di smaltimento standard (Mader)
+    VLA_SCALE = 0.07
+    K_COMB = 0.0225
     
-    # 1. Efficienza Meccanica
-    eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
+    # 1. Efficienza Meccanica (Dinamica)
+    if custom_efficiency is not None:
+        eff = custom_efficiency / 100.0 # Convertiamo 22.0 in 0.22
+    else:
+        # Fallback ai default se non specificato
+        eff = 0.23 if subject.sport == SportType.CYCLING else 0.21
+    
+    # 2. Domanda Energetica (VO2 Demand)
+    # Più bassa è l'efficienza, più alto è il VO2 richiesto per gli stessi Watt
+    kcal_min = (watts * 0.01433) / eff
+    vo2_demand_ml = (kcal_min / 4.85) * 1000
     
     # 2. Domanda Energetica
     kcal_min = (watts * 0.01433) / eff
@@ -809,6 +818,7 @@ def simulate_mader_curve(subject: Subject):
         mlss = 0
         
     return df, mlss
+
 
 
 
