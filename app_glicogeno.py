@@ -306,7 +306,7 @@ with tab1:
         
         # Visualizziamo i dati unificati per conferma
         m1, m2, m3 = st.columns(3)
-        m1.metric("VO2max (Sidebar)", f"{user_vo2}")
+        m1.metric("VO2max (Sidebar)", f"{user_vo2:.1f}")
         m2.metric("VLaMax (Sidebar)", f"{user_vlamax}")
         m3.metric("FTP (Tab 1)", f"{ftp_watts} W")
         
@@ -1434,6 +1434,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
