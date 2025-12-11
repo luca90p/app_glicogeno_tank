@@ -912,6 +912,110 @@ def find_vo2max_from_ftp(ftp_target, weight, vlamax_guess, sport_type):
         
     return found_vo2
 
+def find_vlamax_from_short_test(short_power, duration_min, weight, vo2max_known, sport_type):
+    """
+    Trova la VLaMax basandosi su una prestazione massimale breve (es. 4, 5 o 6 minuti).
+    Usa il VO2max già noto/calcolato.
+    """
+    # Import locali
+    from data_models import Sex, MenstrualPhase
+    
+    # Range di ricerca per VLaMax (0.2 - 1.2 mmol/l/s)
+    low = 0.1
+    high = 1.5
+    tolerance = 0.01
+    iterations = 0
+    
+    # Creiamo il soggetto con il VO2max fisso (già calcolato)
+    dummy_subj = Subject(
+        weight_kg=weight,
+        vo2_max=vo2max_known,
+        vlamax=0.5, # Valore dummy iniziale
+        sport=sport_type,
+        # Default per evitare errori
+        height_cm=175, body_fat_pct=0.10, sex=Sex.MALE,
+        glycogen_conc_g_kg=15.0, uses_creatine=False, menstrual_phase=MenstrualPhase.NONE,
+        vo2max_absolute_l_min=(vo2max_known * weight) / 1000, muscle_mass_kg=None
+    )
+    
+    found_vla = 0.5
+    
+    # Algoritmo di Bisezione
+    while (high - low) > tolerance and iterations < 30:
+        mid_vla = (low + high) / 2
+        dummy_subj.vlamax = mid_vla
+        
+        # --- SIMULAZIONE POTENZA MASSIMA ---
+        # Dobbiamo capire quanti Watt produce questo atleta con questa VLaMax per 'duration_min'.
+        # Approccio inverso: Stimiamo la potenza sostenibile (Power Duration) con questo profilo.
+        # Per Mader, la potenza su 4-6 min è vicina al VO2max power ma influenzata dal lattato.
+        
+        # Semplificazione robusta: Usiamo il modello metabolico per vedere se a 'short_power' 
+        # l'atleta esaurisce la W' o accumula lattato infinito troppo presto?
+        # No, usiamo la definizione bioenergetica:
+        # Power = (VO2_max_utilizzabile + VLa_production_rate * Energy_VLa) / Efficiency
+        
+        # Calcoliamo il contributo glicolitico MASSIMO medio su questa durata
+        # VLa_rate (mmol/L/min) medio = (Accumulo Max / Durata) + Smaltimento
+        # Accumulo Max tollerabile ~ 18-20 mmol/L
+        max_accumulable = 18.0
+        accumulation_rate = max_accumulable / duration_min # mmol/L/min che possiamo permetterci di accumulare
+        
+        # Ora cerchiamo a che Wattaggio il (Net Balance) è uguale a accumulation_rate
+        # Cerchiamo i Watt che generano esattamente questo accumulo netto
+        # Funzione interna per trovare i Watt dato il Balance target
+        w_low = 100
+        w_high = 1000
+        target_watts = 0
+        
+        for _ in range(10): # Piccolo loop interno per trovare i Watt
+            w_mid = (w_low + w_high) / 2
+            # Usiamo calculate_mader_consumption che ora restituisce (cho, net_balance)
+            # Nota: dobbiamo renderla accessibile o duplicare la logica minima qui
+            # Per evitare problemi di import circolare/scope, usiamo simulate_mader_curve
+            # che è lenta ma sicura, oppure copiamo la logica 'raw'.
+            
+            # Usiamo una logica rapida qui per performance:
+            # 1. Demand
+            eff = 0.23 if sport_type.name == 'CYCLING' else 0.21
+            kcal_min = (w_mid * 0.01433) / eff
+            vo2_demand = (kcal_min / 4.85) * 1000
+            intensity = vo2_demand / (vo2max_known * weight)
+            
+            # 2. Prod & Comb
+            raw_prod = (mid_vla * 60) * (max(0, intensity) ** 3)
+            vla_prod = raw_prod * 0.07 # VLA_SCALE
+            
+            vo2_uptake = min(vo2_demand, vo2max_known * weight) # Al max usa tutto il VO2
+            vla_comb = 0.0225 * (vo2_uptake / weight) # K_COMB
+            
+            net_bal = vla_prod - vla_comb
+            
+            if net_bal > accumulation_rate:
+                w_high = w_mid # Produciamo troppo, calare Watt
+            else:
+                w_low = w_mid # Possiamo spingere di più
+                
+        simulated_max_power = (w_low + w_high) / 2
+        
+        # --- CONFRONTO ---
+        # Se la potenza simulata con questa VLaMax è maggiore di quella reale dell'atleta,
+        # significa che la VLaMax ipotizzata è troppo "potente" (o troppo efficiente).
+        # Aspetta: Alta VLaMax = Alta potenza anaerobica.
+        # Quindi se Simulated > Real, significa che abbiamo sovrastimato la VLaMax?
+        # SÌ.
+        
+        if simulated_max_power > short_power:
+            high = mid_vla # VLaMax è più bassa
+        else:
+            low = mid_vla # VLaMax è più alta
+            
+        iterations += 1
+        found_vla = mid_vla
+        
+    return found_vla
+
+
 
 
 
