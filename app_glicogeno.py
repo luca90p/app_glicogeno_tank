@@ -117,54 +117,76 @@ with st.sidebar:
 
     st.divider()
 
-    st.header("2. Fisiologia (Calibrazione)")
+    st.header("2. Fisiologia (PPD Decoder)")
     
     # MODALITÀ DI INPUT
-    input_mode = st.radio("Metodo Configurazione:", ["Manuale (Esperto)", "Calcola da FTP (Consigliato)"], index=1)
+    input_mode = st.radio("Metodo Configurazione:", 
+                          ["Manuale (Esperto)", "1 Punto (Solo FTP)", "2 Punti (FTP + 4min)"], 
+                          index=1,
+                          help="1 Punto: stima VO2 dall'FTP (serve VLaMax ipotetica). 2 Punti: Calcola TUTTO (VO2 e VLaMax) dai tuoi test.")
     
-    # 2. VLaMax (Profilo Atleta)
-    vlamax_archetypes = {
-        "Diesel (Maratoneta/Ultra)": 0.30,
-        "Passista (Granfondo)": 0.45,
-        "Puncheur (Scattante)": 0.65,
-        "Turbo (Velocista/Pistard)": 0.85
-    }
-    st.write("**Profilo Anaerobico (VLaMax)**")
-    selected_arch = st.selectbox("Archetipo", list(vlamax_archetypes.keys()), index=1, label_visibility="collapsed")
-    base_vla = vlamax_archetypes[selected_arch]
-    
-    # Slider VLaMax (sempre visibile per fine tuning)
-    user_vlamax = st.slider("VLaMax Stimata", 0.2, 1.0, base_vla, 0.05)
+    calc_vo2 = 55.0 # Default
+    calc_vla = 0.5  # Default
 
-    # 1. VO2max (Il Motore)
     if input_mode == "Manuale (Esperto)":
         user_vo2 = st.number_input("VO2max (ml/kg/min)", 30, 90, 55, 1)
-    else:
-        # CALCOLO AUTOMATICO
-        if selected_sport == SportType.CYCLING:
-            ref_val = st.number_input("Il tuo FTP attuale (Watt)", 100, 500, 250)
-        else:
-            # Per la corsa usiamo un FTP stimato o CP
-            ref_val = st.number_input("Critical Power / FTP (Watt)", 100, 600, 280, help="Se usi Stryd metti i Watt, altrimenti stima: Peso x 4 circa")
-            
-        if st.button("🔄 Calcola VO2max da FTP"):
-            # Ora 'weight' è definito qui sopra, quindi non darà errore!
-            with st.spinner("Inversione del modello Mader..."):
-                try:
-                    calc_vo2 = logic.find_vo2max_from_ftp(ref_val, weight, user_vlamax, selected_sport)
-                    st.session_state['calculated_vo2'] = calc_vo2
-                    st.success(f"VO2max Stimato: {calc_vo2:.1f}")
-                except AttributeError:
-                    st.error("Errore: Assicurati di aver aggiunto la funzione 'find_vo2max_from_ftp' nel file logic.py")
+        user_vlamax = st.slider("VLaMax (mmol/L/s)", 0.2, 1.0, 0.5, 0.05)
         
-        # Recupera il valore calcolato o usa un default
+    elif input_mode == "1 Punto (Solo FTP)":
+        st.caption("Stima il VO2max basandosi sul tuo FTP e un profilo atleta ipotizzato.")
+        
+        # Input FTP
+        val_ftp = st.number_input("FTP / CP20 (Watt)", 100, 600, 250)
+        
+        # Profilo VLaMax Ipotetico
+        vla_types = {"Diesel (0.3)": 0.3, "Passista (0.5)": 0.5, "Sprinter (0.7)": 0.7}
+        arch = st.selectbox("Archetipo Atleta", list(vla_types.keys()), index=1)
+        user_vlamax = st.slider("VLaMax Stimata", 0.2, 1.0, vla_types[arch], 0.05)
+        
+        if st.button("🔄 Calcola VO2max"):
+            with st.spinner("Calcolo..."):
+                try:
+                    c_vo2 = logic.find_vo2max_from_ftp(val_ftp, weight, user_vlamax, selected_sport)
+                    st.session_state['calculated_vo2'] = c_vo2
+                    st.success(f"VO2max: {c_vo2:.1f}")
+                except Exception as e: st.error(f"Errore: {e}")
+                
         user_vo2 = st.session_state.get('calculated_vo2', 55.0)
-        st.metric("VO2max Attivo", f"{user_vo2:.1f}", help="Calcolato per far coincidere la MLSS del modello con il tuo FTP.")
+
+    elif input_mode == "2 Punti (FTP + 4min)":
+        st.info("💎 **Gold Standard:** Calcola il profilo completo da due massimali.")
+        
+        col_p1, col_p2 = st.columns(2)
+        val_ftp = col_p1.number_input("FTP (20-60m)", 100, 600, 250, help="Potenza sostenibile a lungo (Soglia).")
+        val_short = col_p2.number_input("Max 4-5 min", 150, 900, 320, help="Potenza media massima su 4 o 5 minuti.")
+        dur_short = st.slider("Durata Test Breve (min)", 3, 8, 5)
+        
+        if st.button("🚀 Calcola Profilo Completo"):
+            with st.spinner("Decoding delle prestazioni..."):
+                # 1. Primo passaggio: Troviamo un VO2 preliminare ipotizzando VLaMax media
+                temp_vla = 0.5
+                c_vo2 = logic.find_vo2max_from_ftp(val_ftp, weight, temp_vla, selected_sport)
+                
+                # 2. Secondo passaggio: Troviamo la VLaMax reale usando quel VO2 e il test breve
+                c_vla = logic.find_vlamax_from_short_test(val_short, dur_short, weight, c_vo2, selected_sport)
+                
+                # 3. Raffinamento (Opzionale): Ricalcoliamo VO2 con la nuova VLaMax
+                # (Per convergere meglio, si potrebbe iterare 2-3 volte, ma una basta per stima solida)
+                c_vo2_final = logic.find_vo2max_from_ftp(val_ftp, weight, c_vla, selected_sport)
+                
+                st.session_state['calculated_vo2'] = c_vo2_final
+                st.session_state['calculated_vla'] = c_vla
+                st.balloons()
+                
+        user_vo2 = st.session_state.get('calculated_vo2', 55.0)
+        user_vlamax = st.session_state.get('calculated_vla', 0.5)
+        
+        # Mostra risultati
+        k1, k2 = st.columns(2)
+        k1.metric("VO2max Calc.", f"{user_vo2:.1f}")
+        k2.metric("VLaMax Calc.", f"{user_vlamax:.2f}")
 
     st.markdown("---")
-    st.caption(f"⚙️ Configurazione: {selected_sport.name} | {sim_method}")
-
-# --- FINE BLOCCO SIDEBAR ---
 
 # --- DEFINIZIONE TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["Dati & Upload", "Simulazione Gara", "Analisi Avanzata", "🧪 Lab Mader"])
@@ -1434,6 +1456,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
