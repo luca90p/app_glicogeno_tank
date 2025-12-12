@@ -910,59 +910,6 @@ with tab3:
             'End': [max_y * 1.10, max_y * 0.35, max_y * 0.15],
             'Color': ['#66BB6A', '#FFA726', '#EF5350'] 
         })
-
-        # --- NUOVO GRAFICO: DINAMICA LATTATO ---
-        if use_mader_sim:
-            st.markdown("---")
-            st.subheader("🩸 Dinamica Lattato (Simulazione)")
-            st.caption("Evoluzione stimata della concentrazione di lattato nel sangue. Utile per identificare picchi di acidosi e recuperi.")
-            
-            # 1. Grafico Principale (Curva Lattato)
-            base_lac = alt.Chart(df_sim).encode(x=alt.X('Time (min)', title='Tempo (min)'))
-            
-            line_lac = base_lac.mark_line(color='#D500F9', strokeWidth=3).encode(
-                y=alt.Y('Lattato Stimato (mmol/L)', title='Lattato (mmol/L)', scale=alt.Scale(domain=[0, 15], clamp=True)),
-                tooltip=['Time (min)', alt.Tooltip('Lattato Stimato (mmol/L)', format='.1f'), alt.Tooltip('Net Lactate Change', format='.2f')]
-            )
-            
-            # 2. Linea Soglia Anaerobica (OBLA)
-            # Creiamo un DF compatibile con le stesse colonne del principale per evitare conflitti
-            thresh_df = pd.DataFrame({'Lattato Stimato (mmol/L)': [4.0]})
-            thresh_rule = alt.Chart(thresh_df).mark_rule(color='red', strokeDash=[5,5], opacity=0.5).encode(
-                y='Lattato Stimato (mmol/L)'
-            )
-            
-            # 3. Etichetta Soglia
-            text_df = pd.DataFrame({
-                'Time (min)': [0], 
-                'Lattato Stimato (mmol/L)': [4.2], 
-                'Label': ['Soglia OBLA (~4mmol)']
-            })
-            text_rule = alt.Chart(text_df).mark_text(
-                align='left', color='red', size=10, dx=5
-            ).encode(
-                x='Time (min)', 
-                y='Lattato Stimato (mmol/L)', 
-                text='Label'
-            )
-            
-            # 4. Linea Cutoff (Stop Assunzione) - Ricreata localmente per compatibilità
-            cut_df = pd.DataFrame({'Time (min)': [duration - intake_cutoff]})
-            cut_rule = alt.Chart(cut_df).mark_rule(color='black', strokeDash=[5, 5], size=2).encode(
-                x='Time (min)',
-                tooltip=[alt.Tooltip('Time (min)', title='Stop Assunzione (min)')]
-            )
-            
-            # Composizione Grafico
-            st.altair_chart((line_lac + thresh_rule + text_rule + cut_rule).interactive(), use_container_width=True)
-            
-            # KPI Finali
-            max_lac = df_sim['Lattato Stimato (mmol/L)'].max()
-            end_lac = df_sim['Lattato Stimato (mmol/L)'].iloc[-1]
-            
-            k1, k2 = st.columns(2)
-            k1.metric("Picco Acidosi", f"{max_lac:.1f} mmol/L", delta="Critico" if max_lac > 8.0 else "Ok", delta_color="inverse")
-            k2.metric("Lattato Finale", f"{end_lac:.1f} mmol/L")
         
         def create_reserve_stacked_chart(df_data, title):
             bg = alt.Chart(zones_df).mark_rect(opacity=0.15).encode(
@@ -1525,8 +1472,6 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
-
-
 
 
 
