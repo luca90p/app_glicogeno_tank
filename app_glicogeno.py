@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 import logic
 import utils
+from db_manager import DBManager # Importiamo il nostro manager
 from data_models import (
     Sex, TrainingStatus, SportType, DietType, FatigueState, 
     SleepQuality, MenstrualPhase, ChoMixType, Subject, IntakeMode
@@ -1472,6 +1473,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
