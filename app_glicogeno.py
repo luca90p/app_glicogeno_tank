@@ -262,8 +262,8 @@ with tab1:
         #weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 74.0, 0.5)
         height = st.slider("Altezza (cm)", 150, 210, 187, 1)
         default_bf = float(st.session_state['user_profile']['fat'])
-        bf = st.slider("Massa Grassa (%)", 4.0, 30.0, default_bf, 0.5, key="body_fat_pct_input")
-        
+        bf_input = st.slider("Massa Grassa (%)", 4.0, 30.0, default_bf, 0.5, key="body_fat_pct_input")
+        bf = bf_input / 100.0
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
         
@@ -1516,6 +1516,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
