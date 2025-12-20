@@ -13,6 +13,14 @@ from data_models import (
     SleepQuality, MenstrualPhase, ChoMixType, Subject, IntakeMode
 )
 
+# --- 0. INIZIALIZZAZIONE DB E LOGIN SIMULATO ---
+if 'db' not in st.session_state:
+    st.session_state['db'] = DBManager()
+
+# In produzione questo arriverà dal login vero. 
+# Ora usiamo una mail fissa per testare il salvataggio.
+current_user_email = "atleta_test@example.com"
+
 st.set_page_config(page_title="Glycogen Simulator Pro", layout="wide")
 st.title("Glycogen Simulator Pro")
 st.markdown("""
@@ -1473,6 +1481,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
