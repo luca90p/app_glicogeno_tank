@@ -6,3 +6,4 @@ openpyxl
 matplotlib
 fitparse
 sqlalchemy
+psycopg2-binary
