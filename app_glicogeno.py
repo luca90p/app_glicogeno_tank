@@ -244,7 +244,8 @@ with st.sidebar:
             st.success("Profilo salvato! I dati saranno qui al prossimo riavvio.")
         else:
             st.error("Errore nel salvataggio.")
-st.markdown("---")
+            
+    st.markdown("---")
     st.markdown("### ⚠️ Zona Pericolo")
     if st.button("🧨 RESETTA DATABASE (Cancella Tutto)"):
         import os
@@ -1545,6 +1546,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
