@@ -106,9 +106,12 @@ with st.sidebar:
     st.header("1. Profilo Atleta")
     
     # 1. SCELTA DISCIPLINA (Master Switch)
+    saved_sport_idx = 0 if db_data['sport'] == "Cycling" else 1
+    
     sport_mode = st.radio(
         "Disciplina:", 
         ["Ciclismo 🚴", "Corsa 🏃"], 
+        index=saved_sport_idx, # <--- PRE-FILL DAL DB
         horizontal=True
     )
     
@@ -146,8 +149,8 @@ with st.sidebar:
     calc_vla = 0.5  # Default
 
     if input_mode == "Manuale (Esperto)":
-        user_vo2 = st.number_input("VO2max (ml/kg/min)", 30, 90, 55, 1)
-        user_vlamax = st.slider("VLaMax (mmol/L/s)", 0.2, 1.0, 0.5, 0.05)
+        user_vo2 = st.number_input("VO2max", 30.0, 90.0, float(db_data['vo2']), 1.0)
+        user_vlamax = st.slider("VLaMax", 0.2, 1.0, float(db_data['vla']), 0.05)
         
     elif input_mode == "1 Punto (Solo FTP)":
         st.caption("Stima il VO2max basandosi sul tuo FTP e un profilo atleta ipotizzato.")
@@ -220,6 +223,29 @@ with st.sidebar:
         k2.metric("VLaMax Calc.", f"{user_vlamax:.2f}")
 
     st.markdown("---")
+# --- BOTTONE DI SALVATAGGIO ---
+    # Fondamentale: Streamlit ricarica tutto ad ogni click. 
+    # Dobbiamo esplicitamente salvare lo stato attuale nel DB.
+    if st.button("💾 Salva Profilo nel Cloud"):
+        new_data = {
+            "weight": weight,
+            "vo2": user_vo2,
+            "vla": user_vlamax,
+            "sport": "Running" if "Corsa" in sport_mode else "Cycling",
+            # ... raccogli qui gli altri valori (ftp, grasso, ecc) ...
+            "ftp": st.session_state.get('ftp_watts_input', db_data['ftp']), 
+            "fat": st.session_state.get('body_fat_pct_input', db_data['fat']) 
+            # Nota: devi assicurarti che anche nel Tab1 usi key='body_fat_pct_input' 
+            # o recuperi il valore variabile locale
+        }
+        
+        if st.session_state['db'].update_profile(db_data['id'], new_data):
+            st.session_state['user_profile'] = new_data # Aggiorna la cache locale
+            st.success("Profilo salvato! I dati saranno qui al prossimo riavvio.")
+        else:
+            st.error("Errore nel salvataggio.")
+
+
 
 # --- DEFINIZIONE TABS ---
 tab1, tab2, tab3, tab4 = st.tabs(["Dati & Upload", "Simulazione Gara", "Analisi Avanzata", "🧪 Lab Mader"])
@@ -235,7 +261,8 @@ with tab1:
         # Input biometrici (rimangono qui per comodità di tuning)
         #weight = st.slider("Peso Corporeo (kg)", 45.0, 100.0, 74.0, 0.5)
         height = st.slider("Altezza (cm)", 150, 210, 187, 1)
-        bf = st.slider("Massa Grassa (%)", 4.0, 30.0, 11.0, 0.5) / 100.0
+        default_bf = float(st.session_state['user_profile']['fat'])
+        bf = st.slider("Massa Grassa (%)", 4.0, 30.0, default_bf, 0.5, key="body_fat_pct_input")
         
         sex_map = {s.value: s for s in Sex}
         s_sex = sex_map[st.radio("Sesso", list(sex_map.keys()), horizontal=True)]
@@ -1489,6 +1516,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
