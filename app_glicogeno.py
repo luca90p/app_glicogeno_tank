@@ -244,6 +244,35 @@ with st.sidebar:
             st.success("Profilo salvato! I dati saranno qui al prossimo riavvio.")
         else:
             st.error("Errore nel salvataggio.")
+st.markdown("---")
+    st.markdown("### ⚠️ Zona Pericolo")
+    if st.button("🧨 RESETTA DATABASE (Cancella Tutto)"):
+        import os
+        # Percorso del file db
+        db_file = "glicogeno.db"
+        
+        # 1. Chiudiamo le connessioni esistenti (Reset del manager)
+        if 'db' in st.session_state:
+            del st.session_state['db']
+        
+        # 2. Cancelliamo fisicamente il file
+        if os.path.exists(db_file):
+            try:
+                os.remove(db_file)
+                st.success("Database cancellato con successo!")
+                
+                # 3. Puliamo la cache per forzare la ricreazione
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                
+                st.warning("L'app si riavvierà tra 2 secondi...")
+                import time
+                time.sleep(2)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Impossibile cancellare: {e}")
+        else:
+            st.info("Nessun database trovato da cancellare.")
 
 
 
@@ -1516,6 +1545,7 @@ with tab4:
         ax4.legend(loc='upper left')
         ax4.grid(True, alpha=0.3)
         st.pyplot(fig4)
+
 
 
 
